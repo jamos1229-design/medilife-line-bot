@@ -18,7 +18,7 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-const ZOOM_URL = process.env.ZOOM_BOOKING_URL || 'https://calendly.com/your-zoom-link';
+const ZOOM_URL = process.env.ZOOM_BOOKING_URL || process.env['ZOOM予約URL'] || 'https://calendly.com/your-zoom-link';
 
 const SYSTEM_PROMPT = `あなたはFP（ファイナンシャルプランナー）日下幸晴のアシスタントです。
 LINEに問い合わせてきた方に、以下の流れで丁寧にヒアリングを進めてください。
