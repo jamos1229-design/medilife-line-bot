@@ -153,3 +153,6 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ MEDiLIFE LINE Bot が起動しました (port ${PORT})`);
 });
+
+// ─── Instagram 自動投稿スケジューラー起動 ─────────────────────────────────────
+require('./instagram-poster');
