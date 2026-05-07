@@ -984,21 +984,6 @@ function VisionTab({ vision, onChange, tasks, clients }) {
   );
 }
 
-// ── Tab: Calendar ─────────────────────────────────────────────
-function CalendarTab() {
-  return (
-    <div>
-      <div className="section-title">カレンダー</div>
-      <div className="cal-wrap">
-        <iframe
-          src="https://calendar.google.com/calendar/embed?src=jamos1229%40gmail.com&ctz=Asia%2FTokyo"
-          title="Google Calendar"
-          allowFullScreen
-        />
-      </div>
-    </div>
-  );
-}
 
 // ── Bottom Nav Config ─────────────────────────────────────────
 const TABS = [
@@ -1006,7 +991,6 @@ const TABS = [
   { id:'matrix',   label:'マトリクス',   icon:'▦' },
   { id:'clients',  label:'クライアント', icon:'👥' },
   { id:'vision',   label:'ビジョン',     icon:'⭐' },
-  { id:'calendar', label:'カレンダー',   icon:'📅' },
 ];
 
 // ── App ───────────────────────────────────────────────────────
@@ -1064,7 +1048,6 @@ function App() {
             onDelete={deleteClient} />
         )}
         {tab==='vision'   && <VisionTab vision={vision} onChange={updateVision} tasks={tasks} clients={clients} />}
-        {tab==='calendar' && <CalendarTab />}
       </div>
 
       {showFab && (
