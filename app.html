@@ -1,0 +1,1112 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Medilife 業務管理</title>
+  <!-- iPhone ホーム画面追加対応 -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Medilife">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#5B5BD6">
+  <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%235B5BD6'/><text y='68' x='50' text-anchor='middle' font-size='55'>📋</text></svg>">
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --accent: #5B5BD6;
+      --accent-light: #EEEEFF;
+      --bg: #F6F6F8;
+      --surface: #FFFFFF;
+      --border: #E4E4E8;
+      --text: #18181B;
+      --text-sub: #71717A;
+      --danger: #EF4444;
+      --warning: #F59E0B;
+      --success: #22C55E;
+      --nav-h: 64px;
+      --safe-b: env(safe-area-inset-bottom, 0px);
+      --safe-t: env(safe-area-inset-top, 0px);
+    }
+
+    html, body { height: 100%; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'Hiragino Sans', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
+      font-size: 15px;
+      line-height: 1.5;
+      overscroll-behavior: none;
+    }
+
+    #root {
+      min-height: 100vh;
+      max-width: 430px;
+      margin: 0 auto;
+    }
+
+    /* ── Header ── */
+    .header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      background: rgba(255,255,255,0.92);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 16px 12px;
+      padding-top: calc(14px + var(--safe-t));
+    }
+    .header-row { display: flex; align-items: center; justify-content: space-between; }
+    .header h1 { font-size: 20px; font-weight: 800; letter-spacing: -0.5px; color: var(--accent); }
+    .header-date { font-size: 12px; color: var(--text-sub); font-weight: 500; }
+
+    /* ── Content ── */
+    .content {
+      padding: 14px 14px;
+      padding-bottom: calc(var(--nav-h) + var(--safe-b) + 72px);
+    }
+
+    /* ── Bottom Nav ── */
+    .bottom-nav {
+      position: fixed;
+      bottom: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 100%;
+      max-width: 430px;
+      background: rgba(255,255,255,0.95);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-top: 1px solid var(--border);
+      display: flex;
+      padding-bottom: var(--safe-b);
+      z-index: 20;
+      height: calc(var(--nav-h) + var(--safe-b));
+    }
+    .nav-item {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 6px 2px 4px;
+      cursor: pointer;
+      border: none;
+      background: none;
+      gap: 2px;
+      -webkit-tap-highlight-color: transparent;
+      transition: opacity 0.1s;
+    }
+    .nav-item:active { opacity: 0.5; }
+    .nav-icon {
+      width: 28px; height: 28px;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 8px;
+      font-size: 17px;
+      transition: background 0.15s;
+    }
+    .nav-item.active .nav-icon { background: var(--accent-light); }
+    .nav-label { font-size: 10px; font-weight: 600; color: var(--text-sub); }
+    .nav-item.active .nav-label { color: var(--accent); }
+
+    /* ── Cards ── */
+    .card {
+      background: var(--surface);
+      border-radius: 14px;
+      padding: 14px;
+      margin-bottom: 10px;
+      border: 1px solid var(--border);
+    }
+    .card-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-sub);
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      margin-bottom: 10px;
+    }
+
+    .section-title {
+      font-size: 20px;
+      font-weight: 800;
+      margin-bottom: 14px;
+      letter-spacing: -0.4px;
+    }
+
+    /* ── Buttons ── */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+      padding: 10px 16px;
+      border-radius: 10px;
+      font-size: 14px; font-weight: 600;
+      cursor: pointer; border: none;
+      transition: opacity 0.1s, transform 0.1s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .btn:active { opacity: 0.7; transform: scale(0.97); }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-ghost { background: transparent; color: var(--text-sub); padding: 6px 8px; font-size: 16px; }
+    .btn-danger { color: var(--danger); background: #FEF2F2; }
+    .btn-sm { padding: 6px 10px; font-size: 13px; border-radius: 8px; }
+    .btn-full { width: 100%; }
+
+    /* ── Form ── */
+    .form-group { margin-bottom: 14px; }
+    .form-label { font-size: 13px; font-weight: 600; color: var(--text-sub); margin-bottom: 6px; display: block; }
+    .form-input, .form-select, .form-textarea {
+      width: 100%; padding: 11px 12px;
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      font-size: 15px; font-family: inherit;
+      background: var(--bg); color: var(--text);
+      outline: none;
+      transition: border-color 0.15s, background 0.15s;
+      -webkit-appearance: none;
+    }
+    .form-input:focus, .form-select:focus, .form-textarea:focus {
+      border-color: var(--accent);
+      background: var(--surface);
+    }
+    .form-textarea { resize: vertical; min-height: 80px; line-height: 1.5; }
+
+    .toggle-group { display: flex; gap: 6px; }
+    .toggle-btn {
+      flex: 1; padding: 9px 6px;
+      border-radius: 9px;
+      border: 1.5px solid var(--border);
+      background: var(--bg);
+      font-size: 13px; font-weight: 600;
+      cursor: pointer; text-align: center;
+      transition: all 0.15s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .toggle-btn.sel-red { border-color: var(--danger); background: #FEF2F2; color: var(--danger); }
+    .toggle-btn.sel-blue { border-color: var(--accent); background: var(--accent-light); color: var(--accent); }
+
+    /* ── Task Item ── */
+    .task-item {
+      display: flex; align-items: flex-start; gap: 10px;
+      padding: 11px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .task-item:last-child { border-bottom: none; }
+    .task-check {
+      width: 23px; height: 23px; border-radius: 7px;
+      border: 2px solid var(--border);
+      cursor: pointer; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.15s; margin-top: 1px;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .task-check.done { background: var(--accent); border-color: var(--accent); }
+    .task-check.done::after { content: '✓'; color: #fff; font-size: 12px; font-weight: 800; }
+    .task-body { flex: 1; min-width: 0; cursor: pointer; }
+    .task-name { font-size: 15px; font-weight: 500; word-break: break-all; }
+    .task-name.done { text-decoration: line-through; color: var(--text-sub); }
+    .task-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+    .tag {
+      display: inline-flex; align-items: center;
+      padding: 2px 7px; border-radius: 5px;
+      font-size: 11px; font-weight: 600;
+    }
+    .tag-date { background: #F0F0F5; color: #555; }
+    .tag-client { background: var(--accent-light); color: var(--accent); }
+    .tag-imp { background: #FEF2F2; color: #DC2626; }
+    .tag-urg { background: #FFF7ED; color: #C2410C; }
+
+    /* ── Matrix ── */
+    .matrix-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .matrix-cell {
+      border-radius: 12px; padding: 12px; min-height: 110px;
+    }
+    .mc-q1 { background: #FEF2F2; border: 1.5px solid #FECACA; }
+    .mc-q2 { background: #EFF6FF; border: 1.5px solid #BFDBFE; }
+    .mc-q3 { background: #FFFBEB; border: 1.5px solid #FDE68A; }
+    .mc-q4 { background: #F0FDF4; border: 1.5px solid #BBF7D0; }
+    .mc-label { font-size: 12px; font-weight: 800; margin-bottom: 2px; }
+    .mc-q1 .mc-label { color: #DC2626; }
+    .mc-q2 .mc-label { color: #2563EB; }
+    .mc-q3 .mc-label { color: #D97706; }
+    .mc-q4 .mc-label { color: #16A34A; }
+    .mc-sub { font-size: 10px; opacity: 0.6; margin-bottom: 8px; font-weight: 500; }
+    .mc-task { font-size: 12px; padding: 3px 0; border-bottom: 1px solid rgba(0,0,0,0.06); line-height: 1.4; }
+    .mc-task:last-child { border-bottom: none; }
+    .matrix-axis {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+      margin-bottom: 4px;
+    }
+    .ax { text-align: center; font-size: 11px; font-weight: 700; color: var(--text-sub); padding: 3px 0; }
+
+    /* ── Client ── */
+    .client-item {
+      padding: 12px 0; border-bottom: 1px solid var(--border);
+    }
+    .client-item:last-child { border-bottom: none; }
+    .client-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+    .client-name { font-size: 16px; font-weight: 700; }
+    .client-right { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+    .cat-badge {
+      padding: 3px 9px; border-radius: 6px;
+      font-size: 11px; font-weight: 700;
+    }
+    .cat-etax { background: #EDE9FE; color: #7C3AED; }
+    .cat-april { background: #FEF9C3; color: #92400E; }
+    .cat-other { background: #F3F4F6; color: #4B5563; }
+    .client-info-grid {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 6px; margin-top: 8px;
+    }
+    .client-info-item {
+      background: var(--bg); border-radius: 8px;
+      padding: 7px 10px;
+    }
+    .client-info-label { font-size: 10px; font-weight: 700; color: var(--text-sub); margin-bottom: 2px; letter-spacing: 0.3px; }
+    .client-info-value { font-size: 13px; font-weight: 600; color: var(--text); }
+    .client-info-full { grid-column: 1 / -1; }
+    .client-help { font-size: 13px; color: var(--text-sub); white-space: pre-wrap; line-height: 1.5; }
+    .ac-value { color: var(--accent); font-size: 15px; font-weight: 800; }
+    .task-badge {
+      background: var(--accent); color: #fff;
+      border-radius: 10px; padding: 1px 7px;
+      font-size: 11px; font-weight: 700;
+    }
+
+    /* ── 神メモ Vision ── */
+    .km-band {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      overflow: hidden;
+      margin-bottom: 14px;
+    }
+    /* 3列グリッド：タスク左 | 神センター | タスク右 */
+    .km-grid { display: grid; grid-template-columns: 1fr 1.5fr 1fr; }
+    /* ヘッダー行 */
+    .km-head-cell {
+      padding: 8px 6px;
+      border-bottom: 1px solid var(--border);
+      border-right: 1px solid var(--border);
+      text-align: center;
+    }
+    .km-head-cell:last-child { border-right: none; }
+    .km-head-tag { font-size: 9px; font-weight: 700; color: var(--text-sub); letter-spacing: 0.4px; }
+    .km-head-period { font-size: 12px; font-weight: 800; color: var(--text); margin-top: 1px; }
+    .km-head-center { }
+    .km-head-axis { font-size: 15px; font-weight: 800; margin-top: 1px; }
+    .km-head-sub { font-size: 9px; font-weight: 500; opacity: 0.65; margin-top: 1px; }
+    /* データセル */
+    .km-data-cell {
+      padding: 8px 6px;
+      border-bottom: 1px solid var(--border);
+      border-right: 1px solid var(--border);
+    }
+    .km-data-cell:last-child { border-right: none; }
+    .km-data-cell.km-last-row { border-bottom: none; }
+    .km-data-label {
+      font-size: 9px; font-weight: 700;
+      color: var(--text-sub); margin-bottom: 4px;
+      letter-spacing: 0.3px;
+    }
+    .km-data-hint {
+      font-size: 9px; color: var(--text-sub);
+      line-height: 1.4; margin-bottom: 5px;
+    }
+    .km-ta {
+      width: 100%; border: 1.5px solid var(--border);
+      background: var(--bg); border-radius: 6px;
+      padding: 6px; font-size: 11px; font-family: inherit;
+      color: var(--text); resize: none; outline: none;
+      min-height: 68px; line-height: 1.4;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .km-ta:focus { border-color: var(--accent); background: var(--surface); }
+    .km-ta::placeholder { color: #C4C4CC; font-size: 10px; }
+    .km-ta-center { background: var(--surface); }
+
+    /* ── Calendar ── */
+    .cal-wrap {
+      border-radius: 14px; overflow: hidden;
+      border: 1px solid var(--border);
+    }
+    .cal-wrap iframe {
+      display: block; width: 100%; border: none;
+      height: calc(100dvh - 170px);
+      min-height: 400px;
+    }
+
+    /* ── Drawer / Modal ── */
+    .overlay {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.45);
+      z-index: 50;
+      display: flex; align-items: flex-end; justify-content: center;
+    }
+    .drawer {
+      background: var(--surface);
+      border-radius: 22px 22px 0 0;
+      padding: 18px 16px;
+      padding-bottom: calc(24px + var(--safe-b));
+      width: 100%; max-width: 430px;
+      max-height: 92vh; overflow-y: auto;
+    }
+    .drawer-handle {
+      width: 38px; height: 4px;
+      background: var(--border);
+      border-radius: 2px; margin: 0 auto 18px;
+    }
+    .drawer-title { font-size: 19px; font-weight: 800; margin-bottom: 18px; letter-spacing: -0.4px; }
+
+    /* ── FAB ── */
+    .fab {
+      position: fixed;
+      bottom: calc(var(--nav-h) + var(--safe-b) + 14px);
+      right: calc(50% - 215px + 14px);
+      width: 54px; height: 54px;
+      border-radius: 50%;
+      background: var(--accent); color: #fff;
+      border: none; font-size: 26px;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 4px 16px rgba(91,91,214,0.45);
+      z-index: 30;
+      -webkit-tap-highlight-color: transparent;
+      transition: transform 0.1s;
+    }
+    .fab:active { transform: scale(0.91); }
+
+    /* ── Empty ── */
+    .empty { text-align: center; padding: 28px 16px; color: var(--text-sub); font-size: 13px; }
+    .empty-icon { font-size: 34px; margin-bottom: 8px; }
+
+    /* ── Misc ── */
+    .filter-row { display: flex; gap: 6px; margin-bottom: 12px; overflow-x: auto; padding-bottom: 2px; }
+    .filter-btn {
+      padding: 5px 12px; border-radius: 20px;
+      border: none; cursor: pointer;
+      font-size: 13px; font-weight: 600;
+      white-space: nowrap; flex-shrink: 0;
+      -webkit-tap-highlight-color: transparent;
+      transition: all 0.15s;
+    }
+    .overdue-card { background: #FEF2F2 !important; border-color: #FECACA !important; }
+    .overdue-title { color: #DC2626 !important; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useCallback } = React;
+
+// ── Utils ────────────────────────────────────────────────────
+const uid = () => Math.random().toString(36).slice(2, 9);
+const todayStr = () => new Date().toISOString().split('T')[0];
+const JP_DAY = ['日','月','火','水','木','金','土'];
+const todayFull = () => {
+  const d = new Date();
+  return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日（${JP_DAY[d.getDay()]}）`;
+};
+const fmtDate = (s) => {
+  if (!s) return '';
+  const [, m, d] = s.split('-');
+  return `${parseInt(m)}/${parseInt(d)}`;
+};
+
+// タスク → Googleカレンダー新規イベントURL
+const toGCalUrl = (task) => {
+  const title = encodeURIComponent(task.title);
+  let dates = '';
+  if (task.date) {
+    const d = task.date.replace(/-/g, '');
+    // 終日イベント：翌日を終了日にする
+    const next = new Date(task.date);
+    next.setDate(next.getDate() + 1);
+    const nd = next.toISOString().split('T')[0].replace(/-/g, '');
+    dates = `&dates=${d}/${nd}`;
+  }
+  return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}${dates}`;
+};
+
+// 神メモ軸カラー
+const KM_AXIS_MAP = {
+  'ロマン':   { color: '#7C3AED', bg: '#F5F3FF' },
+  'ソロバン': { color: '#2563EB', bg: '#EFF6FF' },
+  'チャージ': { color: '#059669', bg: '#ECFDF5' },
+};
+const KM_AXES = ['ロマン', 'ソロバン', 'チャージ'];
+
+const AxisBadge = ({ axis }) => {
+  if (!axis) return null;
+  const a = KM_AXIS_MAP[axis];
+  if (!a) return null;
+  return (
+    <span style={{
+      display:'inline-flex', alignItems:'center',
+      padding:'2px 7px', borderRadius:5,
+      fontSize:11, fontWeight:700,
+      background: a.bg, color: a.color,
+    }}>{axis}</span>
+  );
+};
+
+// タスク日付 → 残り日数
+const daysUntil = (dateStr) => {
+  if (!dateStr) return null;
+  const today = new Date(); today.setHours(0,0,0,0);
+  return Math.ceil((new Date(dateStr) - today) / 86400000);
+};
+
+// ── localStorage hook ────────────────────────────────────────
+function useLS(key, init) {
+  const [val, setVal] = useState(() => {
+    try { const s = localStorage.getItem(key); return s ? JSON.parse(s) : init; }
+    catch { return init; }
+  });
+  const set = useCallback(v => {
+    setVal(prev => {
+      const next = typeof v === 'function' ? v(prev) : v;
+      try { localStorage.setItem(key, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, [key]);
+  return [val, set];
+}
+
+// ── Task Drawer ───────────────────────────────────────────────
+function TaskDrawer({ clients, editing, onSave, onClose }) {
+  const [form, setForm] = useState(editing || {
+    title: '', date: todayStr(), importance: 1, urgency: 1, clientId: '', rowType: 'work', completed: false
+  });
+  const s = k => v => setForm(f => ({ ...f, [k]: v }));
+
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="drawer">
+        <div className="drawer-handle"/>
+        <div className="drawer-title">{editing ? 'タスク編集' : 'タスク追加'}</div>
+
+        <div className="form-group">
+          <label className="form-label">タスク名</label>
+          <input className="form-input" placeholder="タスク名を入力..." value={form.title}
+            onChange={e => s('title')(e.target.value)} autoFocus />
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">日付</label>
+          <input className="form-input" type="date" value={form.date}
+            onChange={e => s('date')(e.target.value)} />
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">区分</label>
+          <div className="toggle-group">
+            <button className={`toggle-btn ${form.rowType==='work' ? 'sel-blue' : ''}`}
+              onClick={() => s('rowType')('work')}>💼 仕事上</button>
+            <button className={`toggle-btn ${form.rowType==='private' ? 'sel-blue' : ''}`}
+              onClick={() => s('rowType')('private')}>🌱 プライベート</button>
+          </div>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">重要度</label>
+          <div className="toggle-group">
+            <button className={`toggle-btn ${form.importance===1 ? 'sel-red' : ''}`} onClick={() => s('importance')(1)}>🔴 重要</button>
+            <button className={`toggle-btn ${form.importance===0 ? 'sel-blue' : ''}`} onClick={() => s('importance')(0)}>⚪ 通常</button>
+          </div>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">緊急度</label>
+          <div className="toggle-group">
+            <button className={`toggle-btn ${form.urgency===1 ? 'sel-red' : ''}`} onClick={() => s('urgency')(1)}>⚡ 緊急</button>
+            <button className={`toggle-btn ${form.urgency===0 ? 'sel-blue' : ''}`} onClick={() => s('urgency')(0)}>🕐 通常</button>
+          </div>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">神メモ軸（任意）</label>
+          <div className="toggle-group">
+            <button className={`toggle-btn ${!form.axis ? 'sel-blue' : ''}`} onClick={() => s('axis')('')}>なし</button>
+            {KM_AXES.map(ax => {
+              const a = KM_AXIS_MAP[ax];
+              return (
+                <button key={ax} className="toggle-btn"
+                  style={form.axis===ax ? {borderColor:a.color, background:a.bg, color:a.color} : {}}
+                  onClick={() => s('axis')(ax)}>{ax}</button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">クライアント（任意）</label>
+          <select className="form-select" value={form.clientId} onChange={e => s('clientId')(e.target.value)}>
+            <option value="">なし</option>
+            {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+
+        <button className="btn btn-primary btn-full" style={{marginTop:4}}
+          onClick={() => { if (!form.title.trim()) return; onSave({...form, id: form.id || uid()}); onClose(); }}>
+          保存
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Client Drawer ─────────────────────────────────────────────
+const MONTHS = ['未定','1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
+
+function ClientDrawer({ editing, onSave, onClose }) {
+  const [form, setForm] = useState(editing || {
+    name: '', prospectMonth: '未定', helpWith: '', prospectAC: '', memo: ''
+  });
+  const s = k => v => setForm(f => ({ ...f, [k]: v }));
+
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="drawer">
+        <div className="drawer-handle"/>
+        <div className="drawer-title">{editing ? 'クライアント編集' : 'クライアント追加'}</div>
+
+        <div className="form-group">
+          <label className="form-label">名前</label>
+          <input className="form-input" placeholder="クライアント名" value={form.name}
+            onChange={e => s('name')(e.target.value)} autoFocus />
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">何月の見込みか</label>
+          <div style={{display:'flex', gap:6, flexWrap:'wrap'}}>
+            {MONTHS.map(m => (
+              <button key={m}
+                style={{
+                  padding:'6px 11px', borderRadius:8, border:'1.5px solid',
+                  fontSize:13, fontWeight:600, cursor:'pointer',
+                  borderColor: form.prospectMonth===m ? 'var(--accent)' : 'var(--border)',
+                  background: form.prospectMonth===m ? 'var(--accent-light)' : 'var(--bg)',
+                  color: form.prospectMonth===m ? 'var(--accent)' : 'var(--text-sub)',
+                }}
+                onClick={() => s('prospectMonth')(m)}>{m}</button>
+            ))}
+          </div>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">見込みAC（万円）</label>
+          <input className="form-input" type="number" placeholder="例: 120" value={form.prospectAC}
+            onChange={e => s('prospectAC')(e.target.value)}
+            style={{fontSize:16}}
+          />
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">お役に立てること</label>
+          <textarea className="form-textarea" placeholder="提供できる価値・サービス内容..." value={form.helpWith}
+            onChange={e => s('helpWith')(e.target.value)} />
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">メモ</label>
+          <textarea className="form-textarea" placeholder="備考・メモ..." value={form.memo}
+            onChange={e => s('memo')(e.target.value)} />
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">神メモ軸（任意）</label>
+          <div className="toggle-group">
+            <button className={`toggle-btn ${!form.axis ? 'sel-blue' : ''}`} onClick={() => s('axis')('')}>なし</button>
+            {KM_AXES.map(ax => {
+              const a = KM_AXIS_MAP[ax];
+              return (
+                <button key={ax} className="toggle-btn"
+                  style={form.axis===ax ? {borderColor:a.color, background:a.bg, color:a.color} : {}}
+                  onClick={() => s('axis')(ax)}>{ax}</button>
+              );
+            })}
+          </div>
+        </div>
+
+        <button className="btn btn-primary btn-full" style={{marginTop:4}}
+          onClick={() => { if (!form.name.trim()) return; onSave({...form, id: form.id || uid()}); onClose(); }}>
+          保存
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Tab: Today ────────────────────────────────────────────────
+function TodayTab({ tasks, clients, onToggle, onEdit, onDelete }) {
+  const td = todayStr();
+  const clientName = id => clients.find(c => c.id === id)?.name;
+
+  const todayTasks = tasks.filter(t => t.date === td);
+  const overdue    = tasks.filter(t => !t.completed && t.date < td);
+  const upcoming   = tasks.filter(t => !t.completed && t.date > td);
+
+  const TaskRow = ({ t }) => (
+    <div className="task-item">
+      <div className={`task-check ${t.completed ? 'done' : ''}`} onClick={() => onToggle(t.id)} />
+      <div className="task-body" onClick={() => onEdit(t)}>
+        <div className={`task-name ${t.completed ? 'done' : ''}`}>{t.title}</div>
+        <div className="task-tags">
+          {t.date !== td && <span className="tag tag-date">{fmtDate(t.date)}</span>}
+          {t.importance === 1 && <span className="tag tag-imp">重要</span>}
+          {t.urgency === 1    && <span className="tag tag-urg">緊急</span>}
+          {clientName(t.clientId) && <span className="tag tag-client">{clientName(t.clientId)}</span>}
+          {t.axis && <AxisBadge axis={t.axis} />}
+        </div>
+      </div>
+      <a href={toGCalUrl(t)} target="_blank" rel="noreferrer"
+        style={{color:'#AAA', fontSize:16, padding:'4px 6px', textDecoration:'none', lineHeight:1}}
+        title="Googleカレンダーに追加">📅</a>
+      <button className="btn btn-ghost" style={{color:'#CCC',padding:'4px 6px'}} onClick={() => onDelete(t.id)}>×</button>
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{fontSize:13, color:'var(--text-sub)', fontWeight:500, marginBottom:12}}>{todayFull()}</div>
+
+      {overdue.length > 0 && (
+        <div className="card overdue-card">
+          <div className="card-title overdue-title">⚠ 未完了（期限切れ {overdue.length}件）</div>
+          {overdue.map(t => <TaskRow key={t.id} t={t} />)}
+        </div>
+      )}
+
+      <div className="card">
+        <div className="card-title">今日のタスク</div>
+        {todayTasks.length === 0
+          ? <div className="empty"><div className="empty-icon">✓</div><div>本日のタスクはありません</div></div>
+          : todayTasks.map(t => <TaskRow key={t.id} t={t} />)
+        }
+      </div>
+
+      {upcoming.length > 0 && (
+        <div className="card">
+          <div className="card-title">今後の予定</div>
+          {upcoming.map(t => <TaskRow key={t.id} t={t} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Tab: Matrix ───────────────────────────────────────────────
+function MatrixTab({ tasks, clients }) {
+  const active = tasks.filter(t => !t.completed);
+  const cn = id => clients.find(c => c.id === id)?.name;
+
+  const quads = [
+    { imp:1, urg:1, cls:'mc-q1', badge:'🔴', label:'すぐやる',  sub:'重要 × 緊急' },
+    { imp:1, urg:0, cls:'mc-q2', badge:'🔵', label:'計画する',  sub:'重要 × 非緊急' },
+    { imp:0, urg:1, cls:'mc-q3', badge:'🟡', label:'委任する',  sub:'通常 × 緊急' },
+    { imp:0, urg:0, cls:'mc-q4', badge:'🟢', label:'減らす',    sub:'通常 × 非緊急' },
+  ];
+
+  return (
+    <div>
+      <div className="section-title">タスクマトリクス</div>
+
+      <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', marginBottom:6, paddingLeft:2}}>
+        <div style={{textAlign:'center', fontSize:11, fontWeight:700, color:'#DC2626', padding:'4px 0'}}>← 緊急</div>
+        <div style={{textAlign:'center', fontSize:11, fontWeight:700, color:'var(--text-sub)', padding:'4px 0'}}>非緊急 →</div>
+      </div>
+
+      <div className="matrix-grid">
+        {quads.map(q => {
+          const items = active.filter(t => t.importance===q.imp && t.urgency===q.urg);
+          return (
+            <div key={q.label} className={`matrix-cell ${q.cls}`}>
+              <div className="mc-label">{q.badge} {q.label}</div>
+              <div className="mc-sub">{q.sub}</div>
+              {items.length === 0
+                ? <div style={{fontSize:11, opacity:0.35}}>タスクなし</div>
+                : items.map(t => (
+                    <div key={t.id} className="mc-task">
+                      · {t.title}
+                      {cn(t.clientId) && <span style={{opacity:0.6}}> ({cn(t.clientId)})</span>}
+                      {t.date && <span style={{opacity:0.5, fontSize:10}}> {fmtDate(t.date)}</span>}
+                    </div>
+                  ))
+              }
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{marginTop:12, padding:'10px 12px', background:'var(--surface)', borderRadius:10, border:'1px solid var(--border)'}}>
+        <div style={{fontSize:11, color:'var(--text-sub)', lineHeight:1.7}}>
+          タスク追加時に重要度・緊急度を設定するとここに自動分類されます。
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Tab: Clients ──────────────────────────────────────────────
+function ClientsTab({ clients, tasks, onAdd, onEdit, onDelete }) {
+  const [search, setSearch] = useState('');
+
+  const openTasks = id => tasks.filter(t => t.clientId===id && !t.completed).length;
+
+  const filtered = clients.filter(c =>
+    c.name.includes(search) ||
+    (c.helpWith||'').includes(search) ||
+    (c.memo||'').includes(search) ||
+    (c.prospectAC||'').includes(search)
+  );
+
+  return (
+    <div>
+      <div className="section-title">クライアント</div>
+
+      <input className="form-input" placeholder="🔍 検索..." value={search}
+        onChange={e => setSearch(e.target.value)} style={{marginBottom:10}} />
+
+
+      {filtered.length === 0
+        ? <div className="empty"><div className="empty-icon">👤</div><div>クライアントなし</div></div>
+        : <div className="card">
+            {filtered.map(c => (
+              <div key={c.id} className="client-item">
+                <div className="client-top">
+                  <div style={{display:'flex', alignItems:'center', gap:7}}>
+                    <span className="client-name">{c.name}</span>
+                    {openTasks(c.id) > 0 &&
+                      <span className="task-badge">{openTasks(c.id)}</span>}
+                  </div>
+                  <div className="client-right">
+                    {c.axis && <AxisBadge axis={c.axis} />}
+                    <button className="btn btn-ghost btn-sm" onClick={() => onEdit(c)}>✎</button>
+                    <button className="btn btn-ghost btn-sm" style={{color:'var(--danger)'}} onClick={() => onDelete(c.id)}>×</button>
+                  </div>
+                </div>
+                <div className="client-info-grid">
+                  <div className="client-info-item">
+                    <div className="client-info-label">何月の見込み</div>
+                    <div className="client-info-value">{c.prospectMonth || '未定'}</div>
+                  </div>
+                  <div className="client-info-item">
+                    <div className="client-info-label">見込みAC</div>
+                    <div className="client-info-value ac-value">
+                      {c.prospectAC ? `${Number(c.prospectAC).toLocaleString()}万円` : '—'}
+                    </div>
+                  </div>
+                  {c.helpWith && (
+                    <div className="client-info-item client-info-full">
+                      <div className="client-info-label">お役に立てること</div>
+                      <div className="client-help">{c.helpWith}</div>
+                    </div>
+                  )}
+                  {c.memo && (
+                    <div className="client-info-item client-info-full">
+                      <div className="client-info-label">メモ</div>
+                      <div className="client-help">{c.memo}</div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+      }
+    </div>
+  );
+}
+
+// ── Tab: Vision（神メモ） ─────────────────────────────────────
+const KM_BANDS = [
+  {
+    leftPeriod:  '3年以内',
+    rightPeriod: '6ヶ月以内',
+    axisName:    'ロマン',
+    axisSub:     'ミッション・ビジョン・クレド',
+    axisColor:   '#7C3AED',
+    axisBg:      '#F5F3FF',
+    splitDays:   180, // 180日以内→右、それ以上→左
+    centerWorkHint:    '最終的に仕事上でどうなっていたいか',
+    centerPrivateHint: 'プライベートでどうなっていたいか',
+    taskHint:          '実現したいこと・しないといけないこと',
+  },
+  {
+    leftPeriod:  '2年以内',
+    rightPeriod: '3ヶ月〜1ヶ月以内',
+    axisName:    'ソロバン',
+    axisSub:     '本業',
+    axisColor:   '#2563EB',
+    axisBg:      '#EFF6FF',
+    splitDays:   90,  // 90日以内→右、それ以上→左
+    centerWorkHint:    '何でお金を頂いているのか',
+    centerPrivateHint: 'プライベートで何が中心になっているのか',
+    taskHint:          '実現したいこと・しないといけないこと',
+  },
+  {
+    leftPeriod:  '1年以内',
+    rightPeriod: '1週間〜本日',
+    axisName:    'チャージ',
+    axisSub:     '成長や喜び',
+    axisColor:   '#059669',
+    axisBg:      '#ECFDF5',
+    splitDays:   7,   // 7日以内→右、それ以上→左
+    centerWorkHint:    '目標を叶えるためにどんな学習をするのか',
+    centerPrivateHint: '自分や家族へのご褒美・してあげたいこと',
+    taskHint:          '仕事で何をするのか',
+  },
+];
+
+function VisionTab({ vision, onChange, tasks, clients }) {
+  const rows = [
+    { key:'work',    label:'仕事上' },
+    { key:'private', label:'プライベート' },
+  ];
+
+  return (
+    <div>
+      <div className="section-title">神メモ</div>
+      <p style={{fontSize:12, color:'var(--text-sub)', marginBottom:14, lineHeight:1.6}}>
+        神センター（中央）にビジョンを書き、左右のタスクでそれを実現する
+      </p>
+
+      {KM_BANDS.map((band, bi) => {
+        const isLast = bi === KM_BANDS.length - 1;
+        return (
+          <div key={bi} className="km-band">
+
+            {/* ヘッダー行 */}
+            <div className="km-grid">
+              <div className="km-head-cell" style={{background: 'var(--bg)'}}>
+                <div className="km-head-tag">タスク</div>
+                <div className="km-head-period">{band.leftPeriod}</div>
+              </div>
+              <div className="km-head-cell" style={{background: band.axisBg}}>
+                <div className="km-head-tag" style={{color: band.axisColor}}>神センター</div>
+                <div className="km-head-axis" style={{color: band.axisColor}}>{band.axisName}</div>
+                <div className="km-head-sub" style={{color: band.axisColor}}>{band.axisSub}</div>
+              </div>
+              <div className="km-head-cell" style={{background: 'var(--bg)'}}>
+                <div className="km-head-tag">タスク</div>
+                <div className="km-head-period">{band.rightPeriod}</div>
+              </div>
+            </div>
+
+            {/* 仕事上・プライベート 行 */}
+            {rows.map((row, ri) => {
+              const lastRow = ri === rows.length - 1;
+              const lKey = `km_${bi}_left_${row.key}`;
+              const cKey = `km_${bi}_center_${row.key}`;
+              const rKey = `km_${bi}_right_${row.key}`;
+              const centerHint = row.key === 'work' ? band.centerWorkHint : band.centerPrivateHint;
+
+              // 軸・区分で絞り、日付で左右を振り分け
+              const rowType = row.key === 'work' ? 'work' : 'private';
+              const axTasks    = (tasks||[]).filter(t =>
+                !t.completed && t.axis === band.axisName &&
+                (t.rowType || 'work') === rowType
+              );
+              const leftTasks  = axTasks.filter(t => {
+                const d = daysUntil(t.date);
+                return d === null || d > band.splitDays;
+              });
+              const rightTasks = axTasks.filter(t => {
+                const d = daysUntil(t.date);
+                return d !== null && d <= band.splitDays;
+              });
+              // 関連クライアントはセンターに表示
+              const relClients = (clients||[]).filter(c => c.axis === band.axisName);
+
+              const TaskList = ({ items, color }) => items.length === 0 ? null : (
+                <div style={{marginTop:5, display:'flex', flexDirection:'column', gap:2}}>
+                  {items.map(t => (
+                    <div key={t.id} style={{
+                      fontSize:10, color, lineHeight:1.4,
+                      padding:'2px 5px', borderRadius:4,
+                      background: band.axisBg, fontWeight:600,
+                    }}>📌 {t.title}</div>
+                  ))}
+                </div>
+              );
+
+              const ClientList = ({ items, color }) => items.length === 0 ? null : (
+                <div style={{marginTop:5, display:'flex', flexDirection:'column', gap:2}}>
+                  {items.map(c => (
+                    <div key={c.id} style={{
+                      fontSize:10, color, lineHeight:1.4,
+                      padding:'2px 5px', borderRadius:4,
+                      background: band.axisBg, fontWeight:600,
+                    }}>👤 {c.name}</div>
+                  ))}
+                </div>
+              );
+
+              return (
+                <div key={row.key} className="km-grid">
+                  {/* 左タスク */}
+                  <div className={`km-data-cell ${lastRow ? 'km-last-row' : ''}`}>
+                    <div className="km-data-label">{row.label}</div>
+                    <textarea className="km-ta" placeholder={band.taskHint}
+                      value={vision[lKey] || ''}
+                      onChange={e => onChange(lKey, e.target.value)} />
+                    <TaskList items={leftTasks} color={band.axisColor} />
+                  </div>
+                  {/* 神センター */}
+                  <div className={`km-data-cell ${lastRow ? 'km-last-row' : ''}`}
+                    style={{background: band.axisBg + '66'}}>
+                    <div className="km-data-label" style={{color: band.axisColor}}>{row.label}</div>
+                    <div className="km-data-hint">{centerHint}</div>
+                    <textarea className="km-ta km-ta-center" placeholder={centerHint}
+                      value={vision[cKey] || ''}
+                      onChange={e => onChange(cKey, e.target.value)} />
+                    {row.key === 'work' && <ClientList items={relClients} color={band.axisColor} />}
+                  </div>
+                  {/* 右タスク */}
+                  <div className={`km-data-cell ${lastRow ? 'km-last-row' : ''}`}>
+                    <div className="km-data-label">{row.label}</div>
+                    <textarea className="km-ta" placeholder={band.taskHint}
+                      value={vision[rKey] || ''}
+                      onChange={e => onChange(rKey, e.target.value)} />
+                    <TaskList items={rightTasks} color={band.axisColor} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Tab: Calendar ─────────────────────────────────────────────
+function CalendarTab() {
+  return (
+    <div>
+      <div className="section-title">カレンダー</div>
+      <div className="cal-wrap">
+        <iframe
+          src="https://calendar.google.com/calendar/embed?src=jamos1229%40gmail.com&ctz=Asia%2FTokyo"
+          title="Google Calendar"
+          allowFullScreen
+        />
+      </div>
+    </div>
+  );
+}
+
+// ── Bottom Nav Config ─────────────────────────────────────────
+const TABS = [
+  { id:'today',    label:'今日',         icon:'✓' },
+  { id:'matrix',   label:'マトリクス',   icon:'▦' },
+  { id:'clients',  label:'クライアント', icon:'👥' },
+  { id:'vision',   label:'ビジョン',     icon:'⭐' },
+  { id:'calendar', label:'カレンダー',   icon:'📅' },
+];
+
+// ── App ───────────────────────────────────────────────────────
+function App() {
+  const [tab, setTab]         = useState('today');
+  const [tasks, setTasks]     = useLS('ml_tasks_v1', []);
+  const [clients, setClients] = useLS('ml_clients_v1', []);
+  const [vision, setVision]   = useLS('ml_vision_v1', {});
+
+  const [taskDrawer,   setTaskDrawer]   = useState(null); // null | 'new' | task
+  const [clientDrawer, setClientDrawer] = useState(null); // null | 'new' | client
+
+  // Task CRUD
+  const upsertTask = t => setTasks(prev => {
+    const i = prev.findIndex(x => x.id===t.id);
+    if (i>=0) { const a=[...prev]; a[i]=t; return a; }
+    return [t, ...prev];
+  });
+  const toggleTask = id => setTasks(prev => prev.map(t => t.id===id ? {...t, completed:!t.completed} : t));
+  const deleteTask = id => setTasks(prev => prev.filter(t => t.id!==id));
+
+  // Client CRUD
+  const upsertClient = c => setClients(prev => {
+    const i = prev.findIndex(x => x.id===c.id);
+    if (i>=0) { const a=[...prev]; a[i]=c; return a; }
+    return [c, ...prev];
+  });
+  const deleteClient = id => setClients(prev => prev.filter(c => c.id!==id));
+
+  const updateVision = (key, val) => setVision(prev => ({...prev, [key]: val}));
+
+  const showFab = tab==='today' || tab==='clients';
+
+  return (
+    <>
+      <div className="header">
+        <div className="header-row">
+          <h1>Medilife</h1>
+          <span className="header-date">{todayFull()}</span>
+        </div>
+      </div>
+
+      <div className="content">
+        {tab==='today' && (
+          <TodayTab tasks={tasks} clients={clients}
+            onToggle={toggleTask}
+            onEdit={t => setTaskDrawer(t)}
+            onDelete={deleteTask} />
+        )}
+        {tab==='matrix'   && <MatrixTab tasks={tasks} clients={clients} />}
+        {tab==='clients'  && (
+          <ClientsTab clients={clients} tasks={tasks}
+            onAdd={() => setClientDrawer('new')}
+            onEdit={c => setClientDrawer(c)}
+            onDelete={deleteClient} />
+        )}
+        {tab==='vision'   && <VisionTab vision={vision} onChange={updateVision} tasks={tasks} clients={clients} />}
+        {tab==='calendar' && <CalendarTab />}
+      </div>
+
+      {showFab && (
+        <button className="fab"
+          onClick={() => tab==='today' ? setTaskDrawer('new') : setClientDrawer('new')}>
+          +
+        </button>
+      )}
+
+      <div className="bottom-nav">
+        {TABS.map(t => (
+          <button key={t.id} className={`nav-item ${tab===t.id ? 'active' : ''}`} onClick={() => setTab(t.id)}>
+            <div className="nav-icon"
+              style={{color: tab===t.id ? 'var(--accent)' : 'var(--text-sub)'}}>
+              {t.icon}
+            </div>
+            <span className="nav-label">{t.label}</span>
+          </button>
+        ))}
+      </div>
+
+      {taskDrawer && (
+        <TaskDrawer
+          clients={clients}
+          editing={taskDrawer==='new' ? null : taskDrawer}
+          onSave={upsertTask}
+          onClose={() => setTaskDrawer(null)}
+        />
+      )}
+
+      {clientDrawer && (
+        <ClientDrawer
+          editing={clientDrawer==='new' ? null : clientDrawer}
+          onSave={upsertClient}
+          onClose={() => setClientDrawer(null)}
+        />
+      )}
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
