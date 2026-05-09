@@ -1075,9 +1075,190 @@ function VisionTab({ vision, onChange, tasks, clients }) {
 }
 
 
+// ── Tab: Gantt ────────────────────────────────────────────────
+function GanttTab({ tasks, clients }) {
+  const CELL_W    = 34;   // 1日あたりの幅(px)
+  const LABEL_W   = 108;  // 左ラベル幅(px)
+  const DAYS_BEFORE = 4;  // 今日より前を何日表示するか
+  const DAYS_TOTAL  = 56; // 合計8週間
+
+  const todayD = new Date(); todayD.setHours(0,0,0,0);
+  const startD = new Date(todayD); startD.setDate(startD.getDate() - DAYS_BEFORE);
+
+  const toStr = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const todaySt = toStr(todayD);
+
+  // 日付配列を生成
+  const dates = Array.from({ length: DAYS_TOTAL }, (_, i) => {
+    const d = new Date(startD);
+    d.setDate(d.getDate() + i);
+    return d;
+  });
+
+  // 月ヘッダーグループ
+  const monthGroups = [];
+  dates.forEach((d, i) => {
+    const label = `${d.getMonth()+1}月`;
+    if (!monthGroups.length || monthGroups[monthGroups.length-1].label !== label) {
+      monthGroups.push({ label, start: i, count: 1 });
+    } else {
+      monthGroups[monthGroups.length-1].count++;
+    }
+  });
+
+  const clientName = id => clients.find(c => c.id === id)?.name;
+
+  // 日付あり・非繰り返しタスクを日付順に
+  const scheduled = [...tasks]
+    .filter(t => t.date && (!t.recurrence || t.recurrence === 'none'))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  // ドットの色
+  const dotColor = t => {
+    if (t.completed) return '#D1D5DB';
+    if (t.axis && KM_AXIS_MAP[t.axis]) return KM_AXIS_MAP[t.axis].color;
+    if (t.importance === 1) return '#EF4444';
+    return 'var(--accent)';
+  };
+
+  // 今日列へ自動スクロール
+  const scrollRef = React.useRef(null);
+  React.useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollLeft = DAYS_BEFORE * CELL_W - 8;
+    }
+  }, []);
+
+  const headerBg = '#FFFFFF';
+
+  return (
+    <div>
+      <div className="section-title">ガントチャート</div>
+      <p style={{fontSize:12, color:'var(--text-sub)', marginBottom:10, lineHeight:1.6}}>
+        タスクの締切日を横軸で確認。横スクロールで8週先まで見えます。
+      </p>
+
+      {scheduled.length === 0 ? (
+        <div className="empty" style={{marginTop:40}}>
+          <div className="empty-icon">📊</div>
+          <div>日付付きのタスクを追加すると<br/>ここに表示されます</div>
+        </div>
+      ) : (
+        <div style={{overflowX:'auto', WebkitOverflowScrolling:'touch', borderRadius:12, border:'1px solid var(--border)'}} ref={scrollRef}>
+          <div style={{minWidth: LABEL_W + CELL_W * DAYS_TOTAL}}>
+
+            {/* 月ヘッダー */}
+            <div style={{display:'flex', background: headerBg, borderBottom:'1px solid var(--border)'}}>
+              <div style={{width:LABEL_W, flexShrink:0}} />
+              {monthGroups.map((mg, i) => (
+                <div key={i} style={{
+                  width: CELL_W * mg.count, flexShrink:0,
+                  fontSize:10, fontWeight:800, color:'var(--accent)',
+                  padding:'4px 6px',
+                  borderLeft: i > 0 ? '2px solid var(--accent)' : 'none',
+                }}>{mg.label}</div>
+              ))}
+            </div>
+
+            {/* 日付ヘッダー */}
+            <div style={{display:'flex', background: headerBg, borderBottom:'2px solid var(--border)'}}>
+              <div style={{
+                width:LABEL_W, flexShrink:0,
+                fontSize:10, fontWeight:600, color:'var(--text-sub)',
+                padding:'4px 8px', display:'flex', alignItems:'center',
+              }}>タスク名</div>
+              {dates.map((d, i) => {
+                const isToday  = toStr(d) === todaySt;
+                const isSun    = d.getDay() === 0;
+                const isSat    = d.getDay() === 6;
+                return (
+                  <div key={i} style={{
+                    width:CELL_W, flexShrink:0, textAlign:'center', padding:'3px 0',
+                    borderLeft:'1px solid var(--border)',
+                    background: isToday ? 'var(--accent)' : isSun ? '#FEF2F2' : isSat ? '#EFF6FF' : '',
+                  }}>
+                    <div style={{fontSize:9, fontWeight:700,
+                      color: isToday ? '#fff' : isSun ? '#EF4444' : isSat ? '#2563EB' : 'var(--text-sub)',
+                    }}>{JP_DAY[d.getDay()]}</div>
+                    <div style={{fontSize:11, fontWeight: isToday ? 800 : 500,
+                      color: isToday ? '#fff' : isSun ? '#EF4444' : isSat ? '#2563EB' : 'var(--text)',
+                    }}>{d.getDate()}</div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* タスク行 */}
+            {scheduled.map((t, ti) => (
+              <div key={t.id} style={{
+                display:'flex', alignItems:'center',
+                borderBottom: ti < scheduled.length-1 ? '1px solid var(--border)' : 'none',
+                minHeight:44,
+              }}>
+                {/* 左ラベル */}
+                <div style={{
+                  width:LABEL_W, flexShrink:0, padding:'6px 8px',
+                  borderRight:'1px solid var(--border)', alignSelf:'stretch',
+                  display:'flex', flexDirection:'column', justifyContent:'center',
+                }}>
+                  <div style={{
+                    fontSize:12, fontWeight:600, lineHeight:1.3,
+                    whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+                    color: t.completed ? 'var(--text-sub)' : 'var(--text)',
+                    textDecoration: t.completed ? 'line-through' : 'none',
+                  }}>{t.title}</div>
+                  {clientName(t.clientId) && (
+                    <div style={{fontSize:10, color:'var(--text-sub)', marginTop:2,
+                      whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>
+                      👤 {clientName(t.clientId)}
+                    </div>
+                  )}
+                  {t.axis && (
+                    <div style={{fontSize:10, color: KM_AXIS_MAP[t.axis]?.color, marginTop:1, fontWeight:600}}>
+                      {t.axis}
+                    </div>
+                  )}
+                </div>
+
+                {/* グリッドセル */}
+                {dates.map((d, i) => {
+                  const ds      = toStr(d);
+                  const isToday = ds === todaySt;
+                  const isSun   = d.getDay() === 0;
+                  const isSat   = d.getDay() === 6;
+                  const hit     = t.date === ds;
+                  return (
+                    <div key={i} style={{
+                      width:CELL_W, flexShrink:0, height:44,
+                      display:'flex', alignItems:'center', justifyContent:'center',
+                      borderLeft:'1px solid var(--border)',
+                      background: isToday ? '#EEEEFF' : isSun ? '#FFF8F8' : isSat ? '#F5F9FF' : ti%2===1 ? '#FAFAFA' : '',
+                    }}>
+                      {hit && (
+                        <div style={{
+                          width:14, height:14, borderRadius:'50%',
+                          background: dotColor(t),
+                          boxShadow:`0 0 0 4px ${dotColor(t)}30`,
+                          flexShrink:0,
+                        }} title={t.title} />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Bottom Nav Config ─────────────────────────────────────────
 const TABS = [
   { id:'today',    label:'今日',         icon:'✓' },
+  { id:'gantt',    label:'ガント',       icon:'📊' },
   { id:'matrix',   label:'マトリクス',   icon:'▦' },
   { id:'clients',  label:'クライアント', icon:'👥' },
   { id:'vision',   label:'ビジョン',     icon:'⭐' },
@@ -1130,6 +1311,7 @@ function App() {
             onEdit={t => setTaskDrawer(t)}
             onDelete={deleteTask} />
         )}
+        {tab==='gantt'    && <GanttTab tasks={tasks} clients={clients} />}
         {tab==='matrix'   && <MatrixTab tasks={tasks} clients={clients} />}
         {tab==='clients'  && (
           <ClientsTab clients={clients} tasks={tasks}
