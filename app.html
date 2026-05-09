@@ -691,9 +691,9 @@ function TodayTab({ tasks, clients, onToggle, onEdit, onDelete }) {
   // 繰り返しかどうか判定
   const isRecurring = t => t.recurrence && t.recurrence !== 'none';
 
-  // 今日表示すべき繰り返しタスク
+  // 今日表示すべき繰り返しタスク（完了済みも残す）
   const recurringToday = tasks.filter(t => {
-    if (!isRecurring(t) || t.completed) return false;
+    if (!isRecurring(t)) return false;
     if (t.recurrence === 'daily') return true;
     if (t.recurrence === 'monthly' && t.date) {
       const day = new Date(t.date + 'T00:00:00').getDate();
@@ -724,21 +724,30 @@ function TodayTab({ tasks, clients, onToggle, onEdit, onDelete }) {
   };
 
   const TaskRow = ({ t }) => (
-    <div className="task-item">
+    <div className="task-item" style={t.completed ? {opacity:0.55, background:'#F9FAFB'} : {}}>
       <div className={`task-check ${t.completed ? 'done' : ''}`} onClick={() => onToggle(t.id)} />
       <div className="task-body" onClick={() => onEdit(t)}>
         <div className={`task-name ${t.completed ? 'done' : ''}`}>{t.title}</div>
-        <div className="task-tags">
-          {isRecurring(t) ? <RecurBadge t={t} /> : t.date !== td && <span className="tag tag-date">{fmtDate(t.date)}</span>}
-          {t.importance === 1 && <span className="tag tag-imp">重要</span>}
-          {t.urgency === 1    && <span className="tag tag-urg">緊急</span>}
-          {clientName(t.clientId) && <span className="tag tag-client">{clientName(t.clientId)}</span>}
-          {t.axis && <AxisBadge axis={t.axis} />}
-        </div>
+        {!t.completed && (
+          <div className="task-tags">
+            {isRecurring(t) ? <RecurBadge t={t} /> : t.date !== td && <span className="tag tag-date">{fmtDate(t.date)}</span>}
+            {t.importance === 1 && <span className="tag tag-imp">重要</span>}
+            {t.urgency === 1    && <span className="tag tag-urg">緊急</span>}
+            {clientName(t.clientId) && <span className="tag tag-client">{clientName(t.clientId)}</span>}
+            {t.axis && <AxisBadge axis={t.axis} />}
+          </div>
+        )}
+        {t.completed && (
+          <div style={{fontSize:11, color:'var(--text-sub)', marginTop:3}}>
+            タップで完了取り消し
+          </div>
+        )}
       </div>
-      <a href={toGCalUrl(t)} target="_blank" rel="noreferrer"
-        style={{color:'#AAA', fontSize:16, padding:'4px 6px', textDecoration:'none', lineHeight:1}}
-        title="Googleカレンダーに追加">📅</a>
+      {!t.completed && (
+        <a href={toGCalUrl(t)} target="_blank" rel="noreferrer"
+          style={{color:'#AAA', fontSize:16, padding:'4px 6px', textDecoration:'none', lineHeight:1}}
+          title="Googleカレンダーに追加">📅</a>
+      )}
       <button className="btn btn-ghost" style={{color:'#CCC',padding:'4px 6px'}} onClick={() => onDelete(t.id)}>×</button>
     </div>
   );
