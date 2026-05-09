@@ -685,55 +685,29 @@ function TodayTab({ tasks, clients, onToggle, onEdit, onDelete }) {
   const td = todayStr();
   const todayDate = new Date();
   const clientName = id => clients.find(c => c.id === id)?.name;
+  const [showDone, setShowDone] = useState(false);
 
-  // 完了後3秒で自動消去するためのID管理
-  const [fading, setFading] = useState(new Set()); // 完了直後（表示中）
-  const timers = React.useRef({});
-
-  const handleToggle = (id) => {
-    const t = tasks.find(x => x.id === id);
-    if (!t) return;
-    if (!t.completed) {
-      // 未完了→完了: fadingに追加、3秒後に削除
-      onToggle(id);
-      setFading(prev => new Set([...prev, id]));
-      timers.current[id] = setTimeout(() => {
-        setFading(prev => { const n = new Set(prev); n.delete(id); return n; });
-        delete timers.current[id];
-      }, 3000);
-    } else {
-      // 完了→未完了: タイマーキャンセル、fadingから削除
-      clearTimeout(timers.current[id]);
-      delete timers.current[id];
-      setFading(prev => { const n = new Set(prev); n.delete(id); return n; });
-      onToggle(id);
-    }
-  };
-
-  // 繰り返しかどうか判定
   const isRecurring = t => t.recurrence && t.recurrence !== 'none';
 
-  // 今日表示すべき繰り返しタスク（完了→fading中のみ表示）
+  // 完了フォルダー（全タスクの完了済み）
+  const doneTasks = tasks.filter(t => t.completed);
+
+  // 繰り返しタスク（未完了のみ表示）
   const recurringToday = tasks.filter(t => {
-    if (!isRecurring(t)) return false;
-    if (t.completed && !fading.has(t.id)) return false;
+    if (!isRecurring(t) || t.completed) return false;
     if (t.recurrence === 'daily') return true;
     if (t.recurrence === 'monthly' && t.date) {
-      const day = new Date(t.date + 'T00:00:00').getDate();
-      return day === todayDate.getDate();
+      return new Date(t.date + 'T00:00:00').getDate() === todayDate.getDate();
     }
     return false;
   });
 
-  // 通常（一回限り）タスク
-  const onceOnly = tasks.filter(t => !isRecurring(t));
-  // 完了済みはfading中のみ表示
-  const isVisible = t => !t.completed || fading.has(t.id);
-
-  const todayTasks = onceOnly.filter(t => t.date === td && isVisible(t));
-  const overdue    = onceOnly.filter(t => !t.completed && t.date && t.date < td);
-  const upcoming   = onceOnly.filter(t => !t.completed && t.date && t.date > td);
-  const undated    = onceOnly.filter(t => !t.completed && !t.date);
+  // 通常タスク（未完了のみ）
+  const onceOnly = tasks.filter(t => !isRecurring(t) && !t.completed);
+  const todayTasks = onceOnly.filter(t => t.date === td);
+  const overdue    = onceOnly.filter(t => t.date && t.date < td);
+  const upcoming   = onceOnly.filter(t => t.date && t.date > td);
+  const undated    = onceOnly.filter(t => !t.date);
 
   const RecurBadge = ({ t }) => {
     if (t.recurrence === 'daily') return (
@@ -750,34 +724,55 @@ function TodayTab({ tasks, clients, onToggle, onEdit, onDelete }) {
     return null;
   };
 
+  // 通常タスク行
   const TaskRow = ({ t, hideDate }) => (
-    <div className="task-item" style={t.completed ? {opacity:0.5, background:'#F9FAFB'} : {}}>
-      <div className={`task-check ${t.completed ? 'done' : ''}`} onClick={() => handleToggle(t.id)} />
-      <div className="task-body" onClick={() => !t.completed && onEdit(t)}>
-        <div className={`task-name ${t.completed ? 'done' : ''}`}>{t.title}</div>
-        {!t.completed && (
-          <div className="task-tags">
-            {isRecurring(t)
-              ? <RecurBadge t={t} />
-              : (!hideDate && t.date && t.date !== td) && <span className="tag tag-date">{fmtDate(t.date)}</span>}
-            {t.importance === 1 && <span className="tag tag-imp">重要</span>}
-            {t.urgency === 1    && <span className="tag tag-urg">緊急</span>}
-            {clientName(t.clientId) && <span className="tag tag-client">{clientName(t.clientId)}</span>}
-            {t.axis && <AxisBadge axis={t.axis} />}
-          </div>
-        )}
-        {t.completed && (
-          <div style={{fontSize:11, color:'var(--success)', marginTop:3, fontWeight:600}}>
-            ✓ 完了　タップで取り消し
-          </div>
-        )}
+    <div className="task-item">
+      <div className="task-check" onClick={() => onToggle(t.id)} />
+      <div className="task-body" onClick={() => onEdit(t)}>
+        <div className="task-name">{t.title}</div>
+        <div className="task-tags">
+          {isRecurring(t)
+            ? <RecurBadge t={t} />
+            : (!hideDate && t.date && t.date !== td) && <span className="tag tag-date">{fmtDate(t.date)}</span>}
+          {t.importance === 1 && <span className="tag tag-imp">重要</span>}
+          {t.urgency === 1    && <span className="tag tag-urg">緊急</span>}
+          {clientName(t.clientId) && <span className="tag tag-client">{clientName(t.clientId)}</span>}
+          {t.axis && <AxisBadge axis={t.axis} />}
+        </div>
       </div>
-      {!t.completed && (
-        <a href={toGCalUrl(t)} target="_blank" rel="noreferrer"
-          style={{color:'#AAA', fontSize:16, padding:'4px 6px', textDecoration:'none', lineHeight:1}}
-          title="Googleカレンダーに追加">📅</a>
-      )}
+      <a href={toGCalUrl(t)} target="_blank" rel="noreferrer"
+        style={{color:'#AAA', fontSize:16, padding:'4px 6px', textDecoration:'none', lineHeight:1}}
+        title="Googleカレンダーに追加">📅</a>
       <button className="btn btn-ghost" style={{color:'#CCC',padding:'4px 6px'}} onClick={() => onDelete(t.id)}>×</button>
+    </div>
+  );
+
+  // 完了フォルダー内のタスク行
+  const DoneRow = ({ t }) => (
+    <div style={{
+      display:'flex', alignItems:'center', gap:8,
+      padding:'10px 0', borderBottom:'1px solid var(--border)',
+    }}>
+      <div className="task-check done" style={{flexShrink:0}} />
+      <div style={{flex:1, minWidth:0}}>
+        <div style={{fontSize:14, fontWeight:500, textDecoration:'line-through',
+          color:'var(--text-sub)', wordBreak:'break-all'}}>{t.title}</div>
+        {t.date && <div style={{fontSize:11, color:'var(--text-sub)', marginTop:2}}>{fmtDate(t.date)}</div>}
+      </div>
+      <button
+        onClick={() => onToggle(t.id)}
+        style={{
+          fontSize:12, fontWeight:700, padding:'5px 10px', borderRadius:8,
+          border:'1.5px solid var(--accent)', background:'var(--accent-light)',
+          color:'var(--accent)', cursor:'pointer', whiteSpace:'nowrap', flexShrink:0,
+        }}>↩ 戻す</button>
+      <button
+        onClick={() => onDelete(t.id)}
+        style={{
+          fontSize:12, fontWeight:700, padding:'5px 10px', borderRadius:8,
+          border:'1.5px solid var(--danger)', background:'#FEF2F2',
+          color:'var(--danger)', cursor:'pointer', whiteSpace:'nowrap', flexShrink:0,
+        }}>🗑 消去</button>
     </div>
   );
 
@@ -820,6 +815,31 @@ function TodayTab({ tasks, clients, onToggle, onEdit, onDelete }) {
           {undated.map(t => <TaskRow key={t.id} t={t} hideDate />)}
         </div>
       )}
+
+      {/* 完了フォルダー */}
+      <div className="card" style={{marginTop:8}}>
+        <div
+          className="card-title"
+          onClick={() => setShowDone(v => !v)}
+          style={{
+            display:'flex', justifyContent:'space-between', alignItems:'center',
+            cursor:'pointer', userSelect:'none',
+            color: doneTasks.length > 0 ? 'var(--text)' : 'var(--text-sub)',
+          }}>
+          <span>✅ 完了フォルダー {doneTasks.length > 0 && <span style={{
+            fontSize:12, background:'var(--success)', color:'#fff',
+            borderRadius:10, padding:'1px 7px', marginLeft:4, fontWeight:700,
+          }}>{doneTasks.length}</span>}</span>
+          <span style={{fontSize:13, color:'var(--text-sub)'}}>{showDone ? '▲' : '▼'}</span>
+        </div>
+        {showDone && (
+          doneTasks.length === 0
+            ? <div className="empty" style={{padding:'16px 0'}}>
+                <div>完了済みタスクはありません</div>
+              </div>
+            : doneTasks.map(t => <DoneRow key={t.id} t={t} />)
+        )}
+      </div>
     </div>
   );
 }
