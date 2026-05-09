@@ -443,6 +443,30 @@ const KM_AXIS_MAP = {
 };
 const KM_AXES = ['ロマン', 'ソロバン', 'チャージ'];
 
+// ── Log constants ─────────────────────────────────────────────
+const LOG_CATS = [
+  { id: 'call',     label: '📞 電話/商談', color: '#2563EB', bg: '#EFF6FF' },
+  { id: 'meeting',  label: '🤝 会議',      color: '#7C3AED', bg: '#F5F3FF' },
+  { id: 'admin',    label: '📝 事務',      color: '#D97706', bg: '#FFFBEB' },
+  { id: 'create',   label: '💻 資料作成',  color: '#0891B2', bg: '#ECFEFF' },
+  { id: 'travel',   label: '🚗 移動',      color: '#059669', bg: '#ECFDF5' },
+  { id: 'learning', label: '📚 学習',      color: '#DC2626', bg: '#FEF2F2' },
+  { id: 'other',    label: 'その他',       color: '#6B7280', bg: '#F3F4F6' },
+];
+const LOG_DURATIONS = [15, 30, 45, 60, 90, 120];
+const fmtDur = m => {
+  if (!m) return '—';
+  if (m < 60) return `${m}分`;
+  const h = Math.floor(m / 60), min = m % 60;
+  return min ? `${h}時間${min}分` : `${h}時間`;
+};
+const logCat = id => LOG_CATS.find(c => c.id === id) || LOG_CATS[LOG_CATS.length - 1];
+const shiftDate = (dateStr, delta) => {
+  const d = new Date(dateStr + 'T00:00:00');
+  d.setDate(d.getDate() + delta);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+};
+
 const AxisBadge = ({ axis }) => {
   if (!axis) return null;
   const a = KM_AXIS_MAP[axis];
@@ -1318,13 +1342,274 @@ function GanttTab({ tasks, clients }) {
   );
 }
 
+// ── Log Drawer ────────────────────────────────────────────────
+function LogDrawer({ clients, editing, onSave, onClose }) {
+  const now = new Date();
+  const nowTime = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+  const [form, setForm] = useState({
+    title: '', category: 'call', duration: 30,
+    time: nowTime, date: todayStr(),
+    clientId: '', axis: '', memo: '',
+    ...(editing || {}),
+  });
+  const s = k => v => setForm(f => ({ ...f, [k]: v }));
+
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="drawer">
+        <div className="drawer-handle"/>
+        <div className="drawer-title">{editing ? 'ログ編集' : '業務ログ追加'}</div>
+
+        <div className="form-group">
+          <label className="form-label">内容</label>
+          <input className="form-input" placeholder="何をしましたか？" value={form.title}
+            onChange={e => s('title')(e.target.value)} autoFocus />
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">カテゴリ</label>
+          <div style={{display:'flex', flexWrap:'wrap', gap:6}}>
+            {LOG_CATS.map(c => (
+              <button key={c.id}
+                style={{
+                  padding:'7px 11px', borderRadius:8, border:'1.5px solid',
+                  fontSize:13, fontWeight:600, cursor:'pointer',
+                  borderColor: form.category===c.id ? c.color : 'var(--border)',
+                  background: form.category===c.id ? c.bg : 'var(--bg)',
+                  color: form.category===c.id ? c.color : 'var(--text-sub)',
+                  WebkitTapHighlightColor:'transparent',
+                }}
+                onClick={() => s('category')(c.id)}>{c.label}</button>
+            ))}
+          </div>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">所要時間</label>
+          <div style={{display:'flex', gap:6, flexWrap:'wrap'}}>
+            {LOG_DURATIONS.map(d => (
+              <button key={d}
+                style={{
+                  padding:'8px 13px', borderRadius:8, border:'1.5px solid',
+                  fontSize:13, fontWeight:700, cursor:'pointer',
+                  borderColor: form.duration===d ? 'var(--accent)' : 'var(--border)',
+                  background: form.duration===d ? 'var(--accent-light)' : 'var(--bg)',
+                  color: form.duration===d ? 'var(--accent)' : 'var(--text-sub)',
+                  WebkitTapHighlightColor:'transparent',
+                }}
+                onClick={() => s('duration')(d)}>{fmtDur(d)}</button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{display:'flex', gap:10}}>
+          <div className="form-group" style={{flex:1}}>
+            <label className="form-label">日付</label>
+            <input className="form-input" type="date" value={form.date}
+              onChange={e => s('date')(e.target.value)} />
+          </div>
+          <div className="form-group" style={{width:105}}>
+            <label className="form-label">時刻</label>
+            <input className="form-input" type="time" value={form.time}
+              onChange={e => s('time')(e.target.value)} />
+          </div>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">クライアント（任意）</label>
+          <select className="form-select" value={form.clientId} onChange={e => s('clientId')(e.target.value)}>
+            <option value="">なし</option>
+            {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">神メモ軸（任意）</label>
+          <div className="toggle-group">
+            <button className={`toggle-btn ${!form.axis ? 'sel-blue' : ''}`} onClick={() => s('axis')('')}>なし</button>
+            {KM_AXES.map(ax => {
+              const a = KM_AXIS_MAP[ax];
+              return (
+                <button key={ax} className="toggle-btn"
+                  style={form.axis===ax ? {borderColor:a.color, background:a.bg, color:a.color} : {}}
+                  onClick={() => s('axis')(ax)}>{ax}</button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">メモ（任意）</label>
+          <textarea className="form-textarea" placeholder="備考..." value={form.memo}
+            onChange={e => s('memo')(e.target.value)} style={{minHeight:60}} />
+        </div>
+
+        <button className="btn btn-primary btn-full" style={{marginTop:4}}
+          onClick={() => { if (!form.title.trim()) return; onSave({...form, id: form.id || uid()}); onClose(); }}>
+          保存
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Tab: Log ──────────────────────────────────────────────────
+function LogTab({ logs, clients, onEdit, onDelete }) {
+  const [viewDate, setViewDate] = useState(todayStr());
+  const [showWeekly, setShowWeekly] = useState(false);
+  const clientName = id => clients.find(c => c.id === id)?.name;
+
+  const dayEntries = [...logs]
+    .filter(l => l.date === viewDate)
+    .sort((a, b) => (b.time || '').localeCompare(a.time || ''));
+
+  const totalMin = dayEntries.reduce((s, l) => s + (l.duration || 0), 0);
+
+  const today = todayStr();
+  const weekAgo = shiftDate(today, -6);
+  const weekLogs = logs.filter(l => l.date >= weekAgo && l.date <= today);
+  const weekTotal = weekLogs.reduce((s, l) => s + (l.duration || 0), 0);
+  const catTotals = LOG_CATS.map(c => ({
+    ...c,
+    total: weekLogs.filter(l => l.category === c.id).reduce((s, l) => s + (l.duration || 0), 0),
+  })).filter(c => c.total > 0).sort((a, b) => b.total - a.total);
+
+  const dateLabel = (() => {
+    if (viewDate === today) return `今日（${parseInt(today.slice(5,7))}/${parseInt(today.slice(8))}）`;
+    const yest = shiftDate(today, -1);
+    if (viewDate === yest) {
+      return `昨日（${parseInt(viewDate.slice(5,7))}/${parseInt(viewDate.slice(8))}）`;
+    }
+    const d = new Date(viewDate + 'T00:00:00');
+    return `${d.getMonth()+1}月${d.getDate()}日（${JP_DAY[d.getDay()]}）`;
+  })();
+
+  return (
+    <div>
+      <div className="section-title">業務ログ</div>
+
+      {/* 日付ナビ */}
+      <div style={{
+        display:'flex', alignItems:'center', justifyContent:'space-between',
+        background:'var(--surface)', borderRadius:12, border:'1px solid var(--border)',
+        padding:'8px 12px', marginBottom:12,
+      }}>
+        <button onClick={() => setViewDate(d => shiftDate(d, -1))}
+          style={{fontSize:22, fontWeight:700, padding:'2px 10px', border:'none',
+            background:'none', cursor:'pointer', color:'var(--text-sub)',
+            WebkitTapHighlightColor:'transparent'}}>‹</button>
+        <div style={{fontWeight:700, fontSize:15}}>{dateLabel}</div>
+        <button
+          onClick={() => viewDate < today && setViewDate(d => shiftDate(d, 1))}
+          style={{fontSize:22, fontWeight:700, padding:'2px 10px', border:'none',
+            background:'none', cursor: viewDate >= today ? 'default' : 'pointer',
+            color:'var(--text-sub)', opacity: viewDate >= today ? 0.25 : 1,
+            WebkitTapHighlightColor:'transparent'}}>›</button>
+      </div>
+
+      {/* 当日合計 */}
+      {dayEntries.length > 0 && (
+        <div style={{
+          display:'flex', gap:10, alignItems:'center',
+          marginBottom:10, fontSize:13, color:'var(--text-sub)', paddingLeft:2,
+        }}>
+          <span><span style={{fontWeight:700, color:'var(--text)'}}>{dayEntries.length}</span> 件</span>
+          <span>·</span>
+          <span>合計 <span style={{fontWeight:700, color:'var(--text)'}}>{fmtDur(totalMin)}</span></span>
+        </div>
+      )}
+
+      {/* エントリ一覧 */}
+      {dayEntries.length === 0 ? (
+        <div className="empty">
+          <div className="empty-icon">📋</div>
+          <div>この日の記録はありません</div>
+        </div>
+      ) : (
+        <div className="card" style={{padding:'4px 14px'}}>
+          {dayEntries.map((l, i) => {
+            const c = logCat(l.category);
+            return (
+              <div key={l.id} style={{
+                display:'flex', gap:10, alignItems:'flex-start',
+                padding:'11px 0',
+                borderBottom: i < dayEntries.length-1 ? '1px solid var(--border)' : 'none',
+              }}>
+                <div style={{flexShrink:0, textAlign:'center', minWidth:40}}>
+                  {l.time && <div style={{fontSize:12, fontWeight:700, color:'var(--text)'}}>{l.time}</div>}
+                  <div style={{
+                    fontSize:11, fontWeight:700, marginTop:3,
+                    color: c.color, background: c.bg,
+                    borderRadius:4, padding:'1px 5px', display:'inline-block',
+                  }}>{fmtDur(l.duration)}</div>
+                </div>
+                <div style={{flex:1, minWidth:0}}>
+                  <div style={{fontSize:14, fontWeight:600}}>{l.title}</div>
+                  <div style={{display:'flex', flexWrap:'wrap', gap:4, marginTop:4}}>
+                    <span style={{
+                      fontSize:11, fontWeight:700, padding:'1px 7px', borderRadius:5,
+                      background: c.bg, color: c.color,
+                    }}>{c.label}</span>
+                    {clientName(l.clientId) && <span className="tag tag-client">{clientName(l.clientId)}</span>}
+                    {l.axis && <AxisBadge axis={l.axis} />}
+                  </div>
+                  {l.memo && <div style={{fontSize:12, color:'var(--text-sub)', marginTop:4, lineHeight:1.4}}>{l.memo}</div>}
+                </div>
+                <div style={{display:'flex', flexDirection:'column', gap:2, flexShrink:0}}>
+                  <button className="btn btn-ghost btn-sm" style={{fontSize:14, padding:'4px 7px'}} onClick={() => onEdit(l)}>✎</button>
+                  <button className="btn btn-ghost btn-sm" style={{color:'var(--danger)', fontSize:16, padding:'4px 7px'}} onClick={() => onDelete(l.id)}>×</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* 週次サマリ */}
+      <div className="card" style={{marginTop:10}}>
+        <div style={{
+          display:'flex', justifyContent:'space-between', alignItems:'center',
+          cursor:'pointer', userSelect:'none',
+        }} onClick={() => setShowWeekly(v => !v)}>
+          <div className="card-title" style={{margin:0}}>📊 週次サマリ（7日間）</div>
+          <span style={{fontSize:13, color:'var(--text-sub)'}}>{showWeekly ? '▲' : '▼'}</span>
+        </div>
+        {showWeekly && (
+          weekTotal === 0
+            ? <div className="empty" style={{padding:'12px 0'}}>記録がありません</div>
+            : <div style={{marginTop:12}}>
+                <div style={{fontSize:12, color:'var(--text-sub)', marginBottom:10}}>
+                  合計 <span style={{fontWeight:700, color:'var(--text)'}}>{fmtDur(weekTotal)}</span> · {weekLogs.length}件
+                </div>
+                {catTotals.map(c => (
+                  <div key={c.id} style={{marginBottom:10}}>
+                    <div style={{display:'flex', justifyContent:'space-between', marginBottom:4}}>
+                      <span style={{fontSize:12, fontWeight:600, color:c.color}}>{c.label}</span>
+                      <span style={{fontSize:12, fontWeight:700}}>{fmtDur(c.total)}</span>
+                    </div>
+                    <div style={{height:6, borderRadius:3, background:'var(--border)', overflow:'hidden'}}>
+                      <div style={{
+                        height:'100%', borderRadius:3, background:c.color,
+                        width:`${Math.round(c.total / weekTotal * 100)}%`,
+                      }}/>
+                    </div>
+                  </div>
+                ))}
+              </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Bottom Nav Config ─────────────────────────────────────────
 const TABS = [
-  { id:'today',    label:'今日',         icon:'✓' },
-  { id:'gantt',    label:'ガント',       icon:'📊' },
-  { id:'matrix',   label:'マトリクス',   icon:'▦' },
-  { id:'clients',  label:'クライアント', icon:'👥' },
-  { id:'vision',   label:'ビジョン',     icon:'⭐' },
+  { id:'today',    label:'今日',    icon:'✓' },
+  { id:'gantt',    label:'ガント',  icon:'📊' },
+  { id:'matrix',   label:'マトリ',  icon:'▦' },
+  { id:'clients',  label:'商談',    icon:'👥' },
+  { id:'vision',   label:'ビジョン',icon:'⭐' },
+  { id:'log',      label:'ログ',    icon:'📋' },
 ];
 
 // ── App ───────────────────────────────────────────────────────
@@ -1333,9 +1618,11 @@ function App() {
   const [tasks, setTasks]     = useLS('ml_tasks_v1', []);
   const [clients, setClients] = useLS('ml_clients_v1', []);
   const [vision, setVision]   = useLS('ml_vision_v1', {});
+  const [logs, setLogs]       = useLS('ml_logs_v1', []);
 
-  const [taskDrawer,   setTaskDrawer]   = useState(null); // null | 'new' | task
-  const [clientDrawer, setClientDrawer] = useState(null); // null | 'new' | client
+  const [taskDrawer,   setTaskDrawer]   = useState(null);
+  const [clientDrawer, setClientDrawer] = useState(null);
+  const [logDrawer,    setLogDrawer]    = useState(null);
 
   // Task CRUD
   const upsertTask = t => setTasks(prev => {
@@ -1356,7 +1643,15 @@ function App() {
 
   const updateVision = (key, val) => setVision(prev => ({...prev, [key]: val}));
 
-  const showFab = tab==='today' || tab==='clients';
+  // Log CRUD
+  const upsertLog = l => setLogs(prev => {
+    const i = prev.findIndex(x => x.id === l.id);
+    if (i >= 0) { const a = [...prev]; a[i] = l; return a; }
+    return [l, ...prev];
+  });
+  const deleteLog = id => setLogs(prev => prev.filter(l => l.id !== id));
+
+  const showFab = tab==='today' || tab==='clients' || tab==='log';
 
   return (
     <>
@@ -1383,11 +1678,16 @@ function App() {
             onDelete={deleteClient} />
         )}
         {tab==='vision'   && <VisionTab vision={vision} onChange={updateVision} tasks={tasks} clients={clients} />}
+        {tab==='log'      && <LogTab logs={logs} clients={clients} onEdit={l => setLogDrawer(l)} onDelete={deleteLog} />}
       </div>
 
       {showFab && (
         <button className="fab"
-          onClick={() => tab==='today' ? setTaskDrawer('new') : setClientDrawer('new')}>
+          onClick={() => {
+            if (tab==='today') setTaskDrawer('new');
+            else if (tab==='clients') setClientDrawer('new');
+            else if (tab==='log') setLogDrawer('new');
+          }}>
           +
         </button>
       )}
@@ -1418,6 +1718,15 @@ function App() {
           editing={clientDrawer==='new' ? null : clientDrawer}
           onSave={upsertClient}
           onClose={() => setClientDrawer(null)}
+        />
+      )}
+
+      {logDrawer && (
+        <LogDrawer
+          clients={clients}
+          editing={logDrawer==='new' ? null : logDrawer}
+          onSave={upsertLog}
+          onClose={() => setLogDrawer(null)}
         />
       )}
     </>
