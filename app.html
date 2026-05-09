@@ -487,7 +487,7 @@ function useLS(key, init) {
 function TaskDrawer({ clients, editing, onSave, onClose }) {
   // デフォルト値を先に設定し、editing で上書き（rowType など古いタスクに無いフィールドを補完）
   const [form, setForm] = useState({
-    title: '', date: todayStr(), importance: 1, urgency: 1,
+    title: '', date: '', importance: 1, urgency: 1,
     clientId: '', rowType: 'work', axis: '', recurrence: 'none', completed: false,
     ...(editing || {}),
   });
@@ -520,7 +520,7 @@ function TaskDrawer({ clients, editing, onSave, onClose }) {
         {form.recurrence !== 'daily' && (
           <div className="form-group">
             <label className="form-label">
-              {form.recurrence === 'monthly' ? '繰り返し日（毎月この日）' : '日付'}
+              {form.recurrence === 'monthly' ? '繰り返し日（毎月この日）' : '日付（任意）'}
             </label>
             <input className="form-input" type="date" value={form.date}
               onChange={e => s('date')(e.target.value)} />
@@ -686,12 +686,37 @@ function TodayTab({ tasks, clients, onToggle, onEdit, onDelete }) {
   const todayDate = new Date();
   const clientName = id => clients.find(c => c.id === id)?.name;
 
+  // 完了後3秒で自動消去するためのID管理
+  const [fading, setFading] = useState(new Set()); // 完了直後（表示中）
+  const timers = React.useRef({});
+
+  const handleToggle = (id) => {
+    const t = tasks.find(x => x.id === id);
+    if (!t) return;
+    if (!t.completed) {
+      // 未完了→完了: fadingに追加、3秒後に削除
+      onToggle(id);
+      setFading(prev => new Set([...prev, id]));
+      timers.current[id] = setTimeout(() => {
+        setFading(prev => { const n = new Set(prev); n.delete(id); return n; });
+        delete timers.current[id];
+      }, 3000);
+    } else {
+      // 完了→未完了: タイマーキャンセル、fadingから削除
+      clearTimeout(timers.current[id]);
+      delete timers.current[id];
+      setFading(prev => { const n = new Set(prev); n.delete(id); return n; });
+      onToggle(id);
+    }
+  };
+
   // 繰り返しかどうか判定
   const isRecurring = t => t.recurrence && t.recurrence !== 'none';
 
-  // 今日表示すべき繰り返しタスク（完了済みも残す）
+  // 今日表示すべき繰り返しタスク（完了→fading中のみ表示）
   const recurringToday = tasks.filter(t => {
     if (!isRecurring(t)) return false;
+    if (t.completed && !fading.has(t.id)) return false;
     if (t.recurrence === 'daily') return true;
     if (t.recurrence === 'monthly' && t.date) {
       const day = new Date(t.date + 'T00:00:00').getDate();
@@ -700,11 +725,15 @@ function TodayTab({ tasks, clients, onToggle, onEdit, onDelete }) {
     return false;
   });
 
-  // 通常（一回限り）タスクのみ
+  // 通常（一回限り）タスク
   const onceOnly = tasks.filter(t => !isRecurring(t));
-  const todayTasks = onceOnly.filter(t => t.date === td);
+  // 完了済みはfading中のみ表示
+  const isVisible = t => !t.completed || fading.has(t.id);
+
+  const todayTasks = onceOnly.filter(t => t.date === td && isVisible(t));
   const overdue    = onceOnly.filter(t => !t.completed && t.date && t.date < td);
   const upcoming   = onceOnly.filter(t => !t.completed && t.date && t.date > td);
+  const undated    = onceOnly.filter(t => !t.completed && !t.date);
 
   const RecurBadge = ({ t }) => {
     if (t.recurrence === 'daily') return (
@@ -721,14 +750,16 @@ function TodayTab({ tasks, clients, onToggle, onEdit, onDelete }) {
     return null;
   };
 
-  const TaskRow = ({ t }) => (
-    <div className="task-item" style={t.completed ? {opacity:0.55, background:'#F9FAFB'} : {}}>
-      <div className={`task-check ${t.completed ? 'done' : ''}`} onClick={() => onToggle(t.id)} />
-      <div className="task-body" onClick={() => onEdit(t)}>
+  const TaskRow = ({ t, hideDate }) => (
+    <div className="task-item" style={t.completed ? {opacity:0.5, background:'#F9FAFB'} : {}}>
+      <div className={`task-check ${t.completed ? 'done' : ''}`} onClick={() => handleToggle(t.id)} />
+      <div className="task-body" onClick={() => !t.completed && onEdit(t)}>
         <div className={`task-name ${t.completed ? 'done' : ''}`}>{t.title}</div>
         {!t.completed && (
           <div className="task-tags">
-            {isRecurring(t) ? <RecurBadge t={t} /> : t.date !== td && <span className="tag tag-date">{fmtDate(t.date)}</span>}
+            {isRecurring(t)
+              ? <RecurBadge t={t} />
+              : (!hideDate && t.date && t.date !== td) && <span className="tag tag-date">{fmtDate(t.date)}</span>}
             {t.importance === 1 && <span className="tag tag-imp">重要</span>}
             {t.urgency === 1    && <span className="tag tag-urg">緊急</span>}
             {clientName(t.clientId) && <span className="tag tag-client">{clientName(t.clientId)}</span>}
@@ -736,8 +767,8 @@ function TodayTab({ tasks, clients, onToggle, onEdit, onDelete }) {
           </div>
         )}
         {t.completed && (
-          <div style={{fontSize:11, color:'var(--text-sub)', marginTop:3}}>
-            タップで完了取り消し
+          <div style={{fontSize:11, color:'var(--success)', marginTop:3, fontWeight:600}}>
+            ✓ 完了　タップで取り消し
           </div>
         )}
       </div>
@@ -757,7 +788,7 @@ function TodayTab({ tasks, clients, onToggle, onEdit, onDelete }) {
       {recurringToday.length > 0 && (
         <div className="card">
           <div className="card-title">🔁 定期タスク</div>
-          {recurringToday.map(t => <TaskRow key={t.id} t={t} />)}
+          {recurringToday.map(t => <TaskRow key={t.id} t={t} hideDate />)}
         </div>
       )}
 
@@ -772,7 +803,7 @@ function TodayTab({ tasks, clients, onToggle, onEdit, onDelete }) {
         <div className="card-title">今日のタスク</div>
         {todayTasks.length === 0
           ? <div className="empty"><div className="empty-icon">✓</div><div>本日のタスクはありません</div></div>
-          : todayTasks.map(t => <TaskRow key={t.id} t={t} />)
+          : todayTasks.map(t => <TaskRow key={t.id} t={t} hideDate />)
         }
       </div>
 
@@ -780,6 +811,13 @@ function TodayTab({ tasks, clients, onToggle, onEdit, onDelete }) {
         <div className="card">
           <div className="card-title">今後の予定</div>
           {upcoming.map(t => <TaskRow key={t.id} t={t} />)}
+        </div>
+      )}
+
+      {undated.length > 0 && (
+        <div className="card">
+          <div className="card-title" style={{color:'var(--text-sub)'}}>📋 日付未定</div>
+          {undated.map(t => <TaskRow key={t.id} t={t} hideDate />)}
         </div>
       )}
     </div>
