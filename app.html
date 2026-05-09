@@ -513,9 +513,14 @@ function TaskDrawer({ clients, editing, onSave, onClose }) {
   const [form, setForm] = useState({
     title: '', date: '', importance: 1, urgency: 1,
     clientId: '', rowType: 'work', axis: '', recurrence: 'none', completed: false,
+    steps: [],
     ...(editing || {}),
   });
   const s = k => v => setForm(f => ({ ...f, [k]: v }));
+
+  const addStep = () => setForm(f => ({ ...f, steps: [...(f.steps||[]), { id: uid(), text: '', done: false }] }));
+  const updateStep = (id, text) => setForm(f => ({ ...f, steps: f.steps.map(st => st.id===id ? {...st, text} : st) }));
+  const removeStep = id => setForm(f => ({ ...f, steps: f.steps.filter(st => st.id!==id) }));
 
   return (
     <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -598,6 +603,33 @@ function TaskDrawer({ clients, editing, onSave, onClose }) {
             <option value="">なし</option>
             {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">ベビーステップ（任意）</label>
+          {(form.steps||[]).map((st, i) => (
+            <div key={st.id} style={{display:'flex', gap:6, alignItems:'center', marginBottom:6}}>
+              <span style={{fontSize:12, color:'var(--text-sub)', flexShrink:0, minWidth:18}}>{i+1}.</span>
+              <input
+                className="form-input"
+                placeholder={`ステップ ${i+1}`}
+                value={st.text}
+                onChange={e => updateStep(st.id, e.target.value)}
+                style={{flex:1, padding:'8px 10px', fontSize:14}}
+              />
+              <button onClick={() => removeStep(st.id)}
+                style={{flexShrink:0, border:'none', background:'none', color:'#CCC',
+                  fontSize:18, cursor:'pointer', padding:'4px 6px', lineHeight:1}}>×</button>
+            </div>
+          ))}
+          <button onClick={addStep}
+            style={{
+              display:'flex', alignItems:'center', gap:5,
+              padding:'8px 12px', borderRadius:9, border:'1.5px dashed var(--border)',
+              background:'var(--bg)', color:'var(--text-sub)',
+              fontSize:13, fontWeight:600, cursor:'pointer', width:'100%',
+              justifyContent:'center', WebkitTapHighlightColor:'transparent',
+            }}>＋ ステップ追加</button>
         </div>
 
         <button className="btn btn-primary btn-full" style={{marginTop:4}}
@@ -705,7 +737,7 @@ function ClientDrawer({ editing, onSave, onClose }) {
 }
 
 // ── Tab: Today ────────────────────────────────────────────────
-function TodayTab({ tasks, clients, onToggle, onEdit, onDelete }) {
+function TodayTab({ tasks, clients, onToggle, onToggleStep, onEdit, onDelete }) {
   const td = todayStr();
   const todayDate = new Date();
   const clientName = id => clients.find(c => c.id === id)?.name;
@@ -749,27 +781,60 @@ function TodayTab({ tasks, clients, onToggle, onEdit, onDelete }) {
   };
 
   // 通常タスク行
-  const TaskRow = ({ t, hideDate }) => (
-    <div className="task-item">
-      <div className="task-check" onClick={() => onToggle(t.id)} />
-      <div className="task-body" onClick={() => onEdit(t)}>
-        <div className="task-name">{t.title}</div>
-        <div className="task-tags">
-          {isRecurring(t)
-            ? <RecurBadge t={t} />
-            : (!hideDate && t.date && t.date !== td) && <span className="tag tag-date">{fmtDate(t.date)}</span>}
-          {t.importance === 1 && <span className="tag tag-imp">重要</span>}
-          {t.urgency === 1    && <span className="tag tag-urg">緊急</span>}
-          {clientName(t.clientId) && <span className="tag tag-client">{clientName(t.clientId)}</span>}
-          {t.axis && <AxisBadge axis={t.axis} />}
+  const TaskRow = ({ t, hideDate }) => {
+    const steps = t.steps || [];
+    const doneCount = steps.filter(st => st.done).length;
+    return (
+      <div className="task-item">
+        <div className="task-check" onClick={() => onToggle(t.id)} />
+        <div className="task-body" onClick={() => onEdit(t)}>
+          <div className="task-name">{t.title}</div>
+          <div className="task-tags">
+            {isRecurring(t)
+              ? <RecurBadge t={t} />
+              : (!hideDate && t.date && t.date !== td) && <span className="tag tag-date">{fmtDate(t.date)}</span>}
+            {t.importance === 1 && <span className="tag tag-imp">重要</span>}
+            {t.urgency === 1    && <span className="tag tag-urg">緊急</span>}
+            {clientName(t.clientId) && <span className="tag tag-client">{clientName(t.clientId)}</span>}
+            {t.axis && <AxisBadge axis={t.axis} />}
+            {steps.length > 0 && (
+              <span style={{fontSize:11, fontWeight:700, padding:'2px 7px', borderRadius:5,
+                background: doneCount===steps.length ? '#ECFDF5' : '#F0F0F5',
+                color: doneCount===steps.length ? '#059669' : '#555'}}>
+                {doneCount}/{steps.length}
+              </span>
+            )}
+          </div>
+          {steps.length > 0 && (
+            <div style={{marginTop:7, display:'flex', flexDirection:'column', gap:4}}>
+              {steps.map(st => (
+                <div key={st.id}
+                  onClick={e => { e.stopPropagation(); onToggleStep(t.id, st.id); }}
+                  style={{display:'flex', alignItems:'center', gap:7, cursor:'pointer'}}>
+                  <div style={{
+                    width:16, height:16, borderRadius:4, flexShrink:0,
+                    border: st.done ? 'none' : '2px solid #CCC',
+                    background: st.done ? 'var(--accent)' : 'transparent',
+                    display:'flex', alignItems:'center', justifyContent:'center',
+                  }}>
+                    {st.done && <span style={{color:'#fff', fontSize:10, fontWeight:800}}>✓</span>}
+                  </div>
+                  <span style={{
+                    fontSize:13, color: st.done ? 'var(--text-sub)' : 'var(--text)',
+                    textDecoration: st.done ? 'line-through' : 'none',
+                  }}>{st.text}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
+        <a href={toGCalUrl(t)} target="_blank" rel="noreferrer"
+          style={{color:'#AAA', fontSize:16, padding:'4px 6px', textDecoration:'none', lineHeight:1}}
+          title="Googleカレンダーに追加">📅</a>
+        <button className="btn btn-ghost" style={{color:'#CCC',padding:'4px 6px'}} onClick={() => onDelete(t.id)}>×</button>
       </div>
-      <a href={toGCalUrl(t)} target="_blank" rel="noreferrer"
-        style={{color:'#AAA', fontSize:16, padding:'4px 6px', textDecoration:'none', lineHeight:1}}
-        title="Googleカレンダーに追加">📅</a>
-      <button className="btn btn-ghost" style={{color:'#CCC',padding:'4px 6px'}} onClick={() => onDelete(t.id)}>×</button>
-    </div>
-  );
+    );
+  };
 
   // 完了フォルダー内のタスク行
   const DoneRow = ({ t }) => (
@@ -1631,6 +1696,9 @@ function App() {
     return [t, ...prev];
   });
   const toggleTask = id => setTasks(prev => prev.map(t => t.id===id ? {...t, completed:!t.completed} : t));
+  const toggleStep = (taskId, stepId) => setTasks(prev => prev.map(t =>
+    t.id===taskId ? {...t, steps: (t.steps||[]).map(st => st.id===stepId ? {...st, done:!st.done} : st)} : t
+  ));
   const deleteTask = id => setTasks(prev => prev.filter(t => t.id!==id));
 
   // Client CRUD
@@ -1666,6 +1734,7 @@ function App() {
         {tab==='today' && (
           <TodayTab tasks={tasks} clients={clients}
             onToggle={toggleTask}
+            onToggleStep={toggleStep}
             onEdit={t => setTaskDrawer(t)}
             onDelete={deleteTask} />
         )}
