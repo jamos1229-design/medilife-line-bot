@@ -461,7 +461,10 @@ const AxisBadge = ({ axis }) => {
 const daysUntil = (dateStr) => {
   if (!dateStr) return null;
   const today = new Date(); today.setHours(0,0,0,0);
-  return Math.ceil((new Date(dateStr) - today) / 86400000);
+  // ローカル時間でパース（UTCにするとJSTでズレる）
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const target = new Date(y, m - 1, d);
+  return Math.ceil((target - today) / 86400000);
 };
 
 // ── localStorage hook ────────────────────────────────────────
@@ -482,8 +485,11 @@ function useLS(key, init) {
 
 // ── Task Drawer ───────────────────────────────────────────────
 function TaskDrawer({ clients, editing, onSave, onClose }) {
-  const [form, setForm] = useState(editing || {
-    title: '', date: todayStr(), importance: 1, urgency: 1, clientId: '', rowType: 'work', recurrence: 'none', completed: false
+  // デフォルト値を先に設定し、editing で上書き（rowType など古いタスクに無いフィールドを補完）
+  const [form, setForm] = useState({
+    title: '', date: todayStr(), importance: 1, urgency: 1,
+    clientId: '', rowType: 'work', axis: '', recurrence: 'none', completed: false,
+    ...(editing || {}),
   });
   const s = k => v => setForm(f => ({ ...f, [k]: v }));
 
@@ -522,16 +528,6 @@ function TaskDrawer({ clients, editing, onSave, onClose }) {
         )}
 
         <div className="form-group">
-          <label className="form-label">区分</label>
-          <div className="toggle-group">
-            <button className={`toggle-btn ${form.rowType==='work' ? 'sel-blue' : ''}`}
-              onClick={() => s('rowType')('work')}>💼 仕事上</button>
-            <button className={`toggle-btn ${form.rowType==='private' ? 'sel-blue' : ''}`}
-              onClick={() => s('rowType')('private')}>🌱 プライベート</button>
-          </div>
-        </div>
-
-        <div className="form-group">
           <label className="form-label">重要度</label>
           <div className="toggle-group">
             <button className={`toggle-btn ${form.importance===1 ? 'sel-red' : ''}`} onClick={() => s('importance')(1)}>🔴 重要</button>
@@ -561,6 +557,18 @@ function TaskDrawer({ clients, editing, onSave, onClose }) {
             })}
           </div>
         </div>
+
+        {form.axis && (
+          <div className="form-group">
+            <label className="form-label">神メモの区分（仕事 or プライベート）</label>
+            <div className="toggle-group">
+              <button className={`toggle-btn ${form.rowType==='work' ? 'sel-blue' : ''}`}
+                onClick={() => s('rowType')('work')}>💼 仕事上</button>
+              <button className={`toggle-btn ${form.rowType==='private' ? 'sel-blue' : ''}`}
+                onClick={() => s('rowType')('private')}>🌱 プライベート</button>
+            </div>
+          </div>
+        )}
 
         <div className="form-group">
           <label className="form-label">クライアント（任意）</label>
