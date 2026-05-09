@@ -558,17 +558,15 @@ function TaskDrawer({ clients, editing, onSave, onClose }) {
           </div>
         </div>
 
-        {form.axis && (
-          <div className="form-group">
-            <label className="form-label">神メモの区分（仕事 or プライベート）</label>
-            <div className="toggle-group">
-              <button className={`toggle-btn ${form.rowType==='work' ? 'sel-blue' : ''}`}
-                onClick={() => s('rowType')('work')}>💼 仕事上</button>
-              <button className={`toggle-btn ${form.rowType==='private' ? 'sel-blue' : ''}`}
-                onClick={() => s('rowType')('private')}>🌱 プライベート</button>
-            </div>
+        <div className="form-group">
+          <label className="form-label">神メモの区分（仕事 or プライベート）</label>
+          <div className="toggle-group">
+            <button className={`toggle-btn ${form.rowType==='work' ? 'sel-blue' : ''}`}
+              onClick={() => s('rowType')('work')}>💼 仕事上</button>
+            <button className={`toggle-btn ${form.rowType==='private' ? 'sel-blue' : ''}`}
+              onClick={() => s('rowType')('private')}>🌱 プライベート</button>
           </div>
-        )}
+        </div>
 
         <div className="form-group">
           <label className="form-label">クライアント（任意）</label>
