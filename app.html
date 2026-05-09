@@ -1055,13 +1055,15 @@ function VisionTab({ vision, onChange, tasks, clients }) {
                 !t.completed && t.axis === band.axisName &&
                 (t.rowType || 'work') === rowType
               );
+              // 日付なし or 期間内 → 右（短期アクション）
+              // 日付あり & 期間外 → 左（長期計画）
               const leftTasks  = axTasks.filter(t => {
                 const d = daysUntil(t.date);
-                return d === null || d > band.splitDays;
+                return d !== null && d > band.splitDays;
               });
               const rightTasks = axTasks.filter(t => {
                 const d = daysUntil(t.date);
-                return d !== null && d <= band.splitDays;
+                return d === null || d <= band.splitDays;
               });
               // 関連クライアントはセンターに表示（軸＋区分でフィルタ）
               const relClients = (clients||[]).filter(c =>
@@ -1069,13 +1071,18 @@ function VisionTab({ vision, onChange, tasks, clients }) {
               );
 
               const TaskList = ({ items, color }) => items.length === 0 ? null : (
-                <div style={{marginTop:5, display:'flex', flexDirection:'column', gap:2}}>
+                <div style={{marginTop:5, display:'flex', flexDirection:'column', gap:3}}>
                   {items.map(t => (
                     <div key={t.id} style={{
-                      fontSize:10, color, lineHeight:1.4,
-                      padding:'2px 5px', borderRadius:4,
-                      background: band.axisBg, fontWeight:600,
-                    }}>📌 {t.title}</div>
+                      lineHeight:1.4, padding:'3px 5px', borderRadius:4,
+                      background: band.axisBg, borderLeft: `2px solid ${color}`,
+                    }}>
+                      <div style={{fontSize:10, color, fontWeight:700}}>📌 {t.title}</div>
+                      {t.date
+                        ? <div style={{fontSize:9, color, opacity:0.7, marginTop:1}}>{fmtDate(t.date)}</div>
+                        : <div style={{fontSize:9, color:'#999', marginTop:1}}>日付未定</div>
+                      }
+                    </div>
                   ))}
                 </div>
               );
