@@ -483,7 +483,7 @@ function useLS(key, init) {
 // ── Task Drawer ───────────────────────────────────────────────
 function TaskDrawer({ clients, editing, onSave, onClose }) {
   const [form, setForm] = useState(editing || {
-    title: '', date: todayStr(), importance: 1, urgency: 1, clientId: '', rowType: 'work', completed: false
+    title: '', date: todayStr(), importance: 1, urgency: 1, clientId: '', rowType: 'work', recurrence: 'none', completed: false
   });
   const s = k => v => setForm(f => ({ ...f, [k]: v }));
 
@@ -500,10 +500,26 @@ function TaskDrawer({ clients, editing, onSave, onClose }) {
         </div>
 
         <div className="form-group">
-          <label className="form-label">日付</label>
-          <input className="form-input" type="date" value={form.date}
-            onChange={e => s('date')(e.target.value)} />
+          <label className="form-label">繰り返し</label>
+          <div className="toggle-group">
+            <button className={`toggle-btn ${form.recurrence==='none'||!form.recurrence ? 'sel-blue' : ''}`}
+              onClick={() => s('recurrence')('none')}>なし</button>
+            <button className={`toggle-btn ${form.recurrence==='daily' ? 'sel-blue' : ''}`}
+              onClick={() => s('recurrence')('daily')}>🔁 毎日</button>
+            <button className={`toggle-btn ${form.recurrence==='monthly' ? 'sel-blue' : ''}`}
+              onClick={() => s('recurrence')('monthly')}>📅 毎月</button>
+          </div>
         </div>
+
+        {form.recurrence !== 'daily' && (
+          <div className="form-group">
+            <label className="form-label">
+              {form.recurrence === 'monthly' ? '繰り返し日（毎月この日）' : '日付'}
+            </label>
+            <input className="form-input" type="date" value={form.date}
+              onChange={e => s('date')(e.target.value)} />
+          </div>
+        )}
 
         <div className="form-group">
           <label className="form-label">区分</label>
@@ -648,11 +664,43 @@ function ClientDrawer({ editing, onSave, onClose }) {
 // ── Tab: Today ────────────────────────────────────────────────
 function TodayTab({ tasks, clients, onToggle, onEdit, onDelete }) {
   const td = todayStr();
+  const todayDate = new Date();
   const clientName = id => clients.find(c => c.id === id)?.name;
 
-  const todayTasks = tasks.filter(t => t.date === td);
-  const overdue    = tasks.filter(t => !t.completed && t.date < td);
-  const upcoming   = tasks.filter(t => !t.completed && t.date > td);
+  // 繰り返しかどうか判定
+  const isRecurring = t => t.recurrence && t.recurrence !== 'none';
+
+  // 今日表示すべき繰り返しタスク
+  const recurringToday = tasks.filter(t => {
+    if (!isRecurring(t) || t.completed) return false;
+    if (t.recurrence === 'daily') return true;
+    if (t.recurrence === 'monthly' && t.date) {
+      const day = new Date(t.date + 'T00:00:00').getDate();
+      return day === todayDate.getDate();
+    }
+    return false;
+  });
+
+  // 通常（一回限り）タスクのみ
+  const onceOnly = tasks.filter(t => !isRecurring(t));
+  const todayTasks = onceOnly.filter(t => t.date === td);
+  const overdue    = onceOnly.filter(t => !t.completed && t.date && t.date < td);
+  const upcoming   = onceOnly.filter(t => !t.completed && t.date && t.date > td);
+
+  const RecurBadge = ({ t }) => {
+    if (t.recurrence === 'daily') return (
+      <span style={{fontSize:11, background:'#ECFDF5', color:'#059669',
+        border:'1px solid #A7F3D0', borderRadius:4, padding:'1px 5px', fontWeight:600}}>🔁 毎日</span>
+    );
+    if (t.recurrence === 'monthly' && t.date) {
+      const day = new Date(t.date + 'T00:00:00').getDate();
+      return (
+        <span style={{fontSize:11, background:'#EFF6FF', color:'#2563EB',
+          border:'1px solid #BFDBFE', borderRadius:4, padding:'1px 5px', fontWeight:600}}>📅 毎月{day}日</span>
+      );
+    }
+    return null;
+  };
 
   const TaskRow = ({ t }) => (
     <div className="task-item">
@@ -660,7 +708,7 @@ function TodayTab({ tasks, clients, onToggle, onEdit, onDelete }) {
       <div className="task-body" onClick={() => onEdit(t)}>
         <div className={`task-name ${t.completed ? 'done' : ''}`}>{t.title}</div>
         <div className="task-tags">
-          {t.date !== td && <span className="tag tag-date">{fmtDate(t.date)}</span>}
+          {isRecurring(t) ? <RecurBadge t={t} /> : t.date !== td && <span className="tag tag-date">{fmtDate(t.date)}</span>}
           {t.importance === 1 && <span className="tag tag-imp">重要</span>}
           {t.urgency === 1    && <span className="tag tag-urg">緊急</span>}
           {clientName(t.clientId) && <span className="tag tag-client">{clientName(t.clientId)}</span>}
@@ -677,6 +725,13 @@ function TodayTab({ tasks, clients, onToggle, onEdit, onDelete }) {
   return (
     <div>
       <div style={{fontSize:13, color:'var(--text-sub)', fontWeight:500, marginBottom:12}}>{todayFull()}</div>
+
+      {recurringToday.length > 0 && (
+        <div className="card">
+          <div className="card-title">🔁 定期タスク</div>
+          {recurringToday.map(t => <TaskRow key={t.id} t={t} />)}
+        </div>
+      )}
 
       {overdue.length > 0 && (
         <div className="card overdue-card">
