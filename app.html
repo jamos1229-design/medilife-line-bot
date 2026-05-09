@@ -591,8 +591,9 @@ function TaskDrawer({ clients, editing, onSave, onClose }) {
 const MONTHS = ['未定','1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
 
 function ClientDrawer({ editing, onSave, onClose }) {
-  const [form, setForm] = useState(editing || {
-    name: '', prospectMonth: '未定', helpWith: '', prospectAC: '', memo: ''
+  const [form, setForm] = useState({
+    name: '', prospectMonth: '未定', helpWith: '', prospectAC: '', memo: '', axis: '', rowType: 'work',
+    ...(editing || {}),
   });
   const s = k => v => setForm(f => ({ ...f, [k]: v }));
 
@@ -659,6 +660,18 @@ function ClientDrawer({ editing, onSave, onClose }) {
             })}
           </div>
         </div>
+
+        {form.axis && (
+          <div className="form-group">
+            <label className="form-label">神メモの区分（仕事 or プライベート）</label>
+            <div className="toggle-group">
+              <button className={`toggle-btn ${form.rowType==='work' ? 'sel-blue' : ''}`}
+                onClick={() => s('rowType')('work')}>💼 仕事上</button>
+              <button className={`toggle-btn ${form.rowType==='private' ? 'sel-blue' : ''}`}
+                onClick={() => s('rowType')('private')}>🌱 プライベート</button>
+            </div>
+          </div>
+        )}
 
         <button className="btn btn-primary btn-full" style={{marginTop:4}}
           onClick={() => { if (!form.name.trim()) return; onSave({...form, id: form.id || uid()}); onClose(); }}>
@@ -985,8 +998,10 @@ function VisionTab({ vision, onChange, tasks, clients }) {
                 const d = daysUntil(t.date);
                 return d !== null && d <= band.splitDays;
               });
-              // 関連クライアントはセンターに表示
-              const relClients = (clients||[]).filter(c => c.axis === band.axisName);
+              // 関連クライアントはセンターに表示（軸＋区分でフィルタ）
+              const relClients = (clients||[]).filter(c =>
+                c.axis === band.axisName && (c.rowType || 'work') === rowType
+              );
 
               const TaskList = ({ items, color }) => items.length === 0 ? null : (
                 <div style={{marginTop:5, display:'flex', flexDirection:'column', gap:2}}>
@@ -1030,7 +1045,7 @@ function VisionTab({ vision, onChange, tasks, clients }) {
                     <textarea className="km-ta km-ta-center" placeholder={centerHint}
                       value={vision[cKey] || ''}
                       onChange={e => onChange(cKey, e.target.value)} />
-                    {row.key === 'work' && <ClientList items={relClients} color={band.axisColor} />}
+                    <ClientList items={relClients} color={band.axisColor} />
                   </div>
                   {/* 右タスク */}
                   <div className={`km-data-cell ${lastRow ? 'km-last-row' : ''}`}>
