@@ -453,9 +453,11 @@ const LOG_CATS = [
   { id: 'learning', label: '📚 学習',      color: '#DC2626', bg: '#FEF2F2' },
   { id: 'other',    label: 'その他',       color: '#6B7280', bg: '#F3F4F6' },
 ];
-const LOG_DURATIONS = [15, 30, 45, 60, 90, 120];
+const LOG_DURATIONS = [15, 30, 60, 120, 180, 240, 360, 480];
 const fmtDur = m => {
   if (!m) return '—';
+  if (m === 240) return '半日';
+  if (m === 480) return '終日';
   if (m < 60) return `${m}分`;
   const h = Math.floor(m / 60), min = m % 60;
   return min ? `${h}時間${min}分` : `${h}時間`;
