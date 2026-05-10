@@ -453,11 +453,8 @@ const LOG_CATS = [
   { id: 'learning', label: '📚 学習',      color: '#DC2626', bg: '#FEF2F2' },
   { id: 'other',    label: 'その他',       color: '#6B7280', bg: '#F3F4F6' },
 ];
-const LOG_DURATIONS = [15, 30, 60, 120, 180, 240, 360, 480];
 const fmtDur = m => {
   if (!m) return '—';
-  if (m === 240) return '半日';
-  if (m === 480) return '終日';
   if (m < 60) return `${m}分`;
   const h = Math.floor(m / 60), min = m % 60;
   return min ? `${h}時間${min}分` : `${h}時間`;
@@ -1453,20 +1450,27 @@ function LogDrawer({ clients, editing, onSave, onClose }) {
 
         <div className="form-group">
           <label className="form-label">所要時間</label>
-          <div style={{display:'flex', gap:6, flexWrap:'wrap'}}>
-            {LOG_DURATIONS.map(d => (
-              <button key={d}
-                style={{
-                  padding:'8px 13px', borderRadius:8, border:'1.5px solid',
-                  fontSize:13, fontWeight:700, cursor:'pointer',
-                  borderColor: form.duration===d ? 'var(--accent)' : 'var(--border)',
-                  background: form.duration===d ? 'var(--accent-light)' : 'var(--bg)',
-                  color: form.duration===d ? 'var(--accent)' : 'var(--text-sub)',
-                  WebkitTapHighlightColor:'transparent',
-                }}
-                onClick={() => s('duration')(d)}>{fmtDur(d)}</button>
-            ))}
+          <div style={{display:'flex', gap:8, alignItems:'center'}}>
+            <select className="form-select" style={{flex:1, textAlign:'center'}}
+              value={Math.floor((form.duration||0) / 60)}
+              onChange={e => s('duration')(parseInt(e.target.value)*60 + ((form.duration||0)%60))}>
+              {Array.from({length:13},(_,i)=>i).map(h=>(
+                <option key={h} value={h}>{h}時間</option>
+              ))}
+            </select>
+            <select className="form-select" style={{flex:1, textAlign:'center'}}
+              value={(form.duration||0) % 60}
+              onChange={e => s('duration')(Math.floor((form.duration||0)/60)*60 + parseInt(e.target.value))}>
+              {[0,15,30,45].map(m=>(
+                <option key={m} value={m}>{m}分</option>
+              ))}
+            </select>
           </div>
+          {(form.duration||0) > 0 && (
+            <div style={{fontSize:12, color:'var(--text-sub)', marginTop:6, textAlign:'center'}}>
+              合計 <span style={{fontWeight:700, color:'var(--accent)'}}>{fmtDur(form.duration)}</span>
+            </div>
+          )}
         </div>
 
         <div style={{display:'flex', gap:10}}>
