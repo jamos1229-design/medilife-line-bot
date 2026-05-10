@@ -535,25 +535,54 @@ function TaskDrawer({ clients, editing, onSave, onClose }) {
 
         <div className="form-group">
           <label className="form-label">繰り返し</label>
-          <div className="toggle-group">
-            <button className={`toggle-btn ${form.recurrence==='none'||!form.recurrence ? 'sel-blue' : ''}`}
-              onClick={() => s('recurrence')('none')}>なし</button>
-            <button className={`toggle-btn ${form.recurrence==='daily' ? 'sel-blue' : ''}`}
-              onClick={() => s('recurrence')('daily')}>🔁 毎日</button>
-            <button className={`toggle-btn ${form.recurrence==='monthly' ? 'sel-blue' : ''}`}
-              onClick={() => s('recurrence')('monthly')}>📅 毎月</button>
+          <div style={{display:'flex', flexWrap:'wrap', gap:6}}>
+            {[
+              {id:'none',      label:'なし'},
+              {id:'daily',     label:'🔁 毎日'},
+              {id:'weekly',    label:'📆 毎週'},
+              {id:'monthly',   label:'📅 毎月'},
+              {id:'bimonthly', label:'🗓 隔月'},
+            ].map(r => (
+              <button key={r.id}
+                className={`toggle-btn ${(form.recurrence||'none')===r.id ? 'sel-blue' : ''}`}
+                style={{flex:'1 1 auto'}}
+                onClick={() => s('recurrence')(r.id)}>{r.label}</button>
+            ))}
           </div>
         </div>
 
-        {form.recurrence !== 'daily' && (
+        {(form.recurrence !== 'daily' && form.recurrence !== 'none' && form.recurrence) ? (
           <div className="form-group">
             <label className="form-label">
-              {form.recurrence === 'monthly' ? '繰り返し日（毎月この日）' : '日付（任意）'}
+              {form.recurrence === 'weekly'    ? '繰り返す曜日（この日を選択）' :
+               form.recurrence === 'monthly'   ? '繰り返し日（毎月この日）' :
+               form.recurrence === 'bimonthly' ? '繰り返し日（2ヶ月ごとのこの日）' : '日付（任意）'}
             </label>
             <input className="form-input" type="date" value={form.date}
               onChange={e => s('date')(e.target.value)} />
+            {form.date && form.recurrence === 'weekly' && (
+              <div style={{fontSize:12, color:'var(--accent)', marginTop:5, fontWeight:600}}>
+                ✓ 毎週{JP_DAY[new Date(form.date+'T00:00:00').getDay()]}曜日
+              </div>
+            )}
+            {form.date && form.recurrence === 'monthly' && (
+              <div style={{fontSize:12, color:'var(--accent)', marginTop:5, fontWeight:600}}>
+                ✓ 毎月{new Date(form.date+'T00:00:00').getDate()}日
+              </div>
+            )}
+            {form.date && form.recurrence === 'bimonthly' && (
+              <div style={{fontSize:12, color:'var(--accent)', marginTop:5, fontWeight:600}}>
+                ✓ 2ヶ月ごと・{new Date(form.date+'T00:00:00').getDate()}日
+              </div>
+            )}
           </div>
-        )}
+        ) : form.recurrence === 'none' || !form.recurrence ? (
+          <div className="form-group">
+            <label className="form-label">日付（任意）</label>
+            <input className="form-input" type="date" value={form.date}
+              onChange={e => s('date')(e.target.value)} />
+          </div>
+        ) : null}
 
         <div className="form-group">
           <label className="form-label">重要度</label>
@@ -751,8 +780,20 @@ function TodayTab({ tasks, clients, onToggle, onToggleStep, onEdit, onDelete }) 
   const recurringToday = tasks.filter(t => {
     if (!isRecurring(t) || t.completed) return false;
     if (t.recurrence === 'daily') return true;
+    if (t.recurrence === 'weekly' && t.date) {
+      const taskDow = new Date(t.date + 'T00:00:00').getDay();
+      return todayDate.getDay() === taskDow;
+    }
     if (t.recurrence === 'monthly' && t.date) {
-      return new Date(t.date + 'T00:00:00').getDate() === todayDate.getDate();
+      const taskDay = new Date(t.date + 'T00:00:00').getDate();
+      return todayDate.getDate() === taskDay;
+    }
+    if (t.recurrence === 'bimonthly' && t.date) {
+      const taskDate = new Date(t.date + 'T00:00:00');
+      const sameDay = taskDate.getDate() === todayDate.getDate();
+      const monthDiff = (todayDate.getFullYear() * 12 + todayDate.getMonth())
+                      - (taskDate.getFullYear() * 12 + taskDate.getMonth());
+      return sameDay && monthDiff >= 0 && monthDiff % 2 === 0;
     }
     return false;
   });
@@ -765,16 +806,21 @@ function TodayTab({ tasks, clients, onToggle, onToggleStep, onEdit, onDelete }) 
   const undated    = onceOnly.filter(t => !t.date);
 
   const RecurBadge = ({ t }) => {
+    const base = {fontSize:11, borderRadius:4, padding:'1px 5px', fontWeight:600, border:'1px solid'};
     if (t.recurrence === 'daily') return (
-      <span style={{fontSize:11, background:'#ECFDF5', color:'#059669',
-        border:'1px solid #A7F3D0', borderRadius:4, padding:'1px 5px', fontWeight:600}}>🔁 毎日</span>
+      <span style={{...base, background:'#ECFDF5', color:'#059669', borderColor:'#A7F3D0'}}>🔁 毎日</span>
     );
+    if (t.recurrence === 'weekly' && t.date) {
+      const dow = JP_DAY[new Date(t.date + 'T00:00:00').getDay()];
+      return <span style={{...base, background:'#F5F3FF', color:'#7C3AED', borderColor:'#DDD6FE'}}>📆 毎週{dow}</span>;
+    }
     if (t.recurrence === 'monthly' && t.date) {
       const day = new Date(t.date + 'T00:00:00').getDate();
-      return (
-        <span style={{fontSize:11, background:'#EFF6FF', color:'#2563EB',
-          border:'1px solid #BFDBFE', borderRadius:4, padding:'1px 5px', fontWeight:600}}>📅 毎月{day}日</span>
-      );
+      return <span style={{...base, background:'#EFF6FF', color:'#2563EB', borderColor:'#BFDBFE'}}>📅 毎月{day}日</span>;
+    }
+    if (t.recurrence === 'bimonthly' && t.date) {
+      const day = new Date(t.date + 'T00:00:00').getDate();
+      return <span style={{...base, background:'#FFF7ED', color:'#C2410C', borderColor:'#FED7AA'}}>🗓 隔月{day}日</span>;
     }
     return null;
   };
