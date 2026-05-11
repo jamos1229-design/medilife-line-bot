@@ -1892,5 +1892,12 @@ function App() {
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
 </script>
+  <script>
+    // Service Worker 登録（iOSホーム画面アプリを常に最新版に保つ）
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/medilife-line-bot/sw.js', { scope: '/medilife-line-bot/' })
+        .catch(err => console.log('SW registration failed:', err));
+    }
+  </script>
 </body>
 </html>
