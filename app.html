@@ -1568,12 +1568,11 @@ function SuspectsTab({ suspects, onAdd, onEdit, onDelete }) {
 }
 
 // ── Tab: Log ───────────────────────────────────────────────────
-function LogTab({ tasks, clients, suspects }) {
+function LogTab({ tasks, clients, suspects, vision, onRestore }) {
   const completedTasks = tasks.filter(t => t.completed);
-  const totalTasks     = tasks.length;
   const activeTasks    = tasks.filter(t => !t.completed).length;
-  const totalClients   = clients.length;
-  const totalSuspects  = suspects.length;
+  const [restoreMsg, setRestoreMsg] = React.useState('');
+  const [confirmRestore, setConfirmRestore] = React.useState(null); // backup data waiting confirm
 
   const clientName = (id) => {
     const c = clients.find(c => c.id === id);
@@ -1584,6 +1583,53 @@ function LogTab({ tasks, clients, suspects }) {
     .sort((a, b) => (b.updatedAt || b.id) - (a.updatedAt || a.id))
     .slice(0, 20);
 
+  // ── バックアップ書き出し ──
+  const handleExport = () => {
+    const data = {
+      exportedAt: new Date().toISOString(),
+      version: 1,
+      tasks, clients, suspects, vision,
+    };
+    const json = JSON.stringify(data, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const now  = new Date();
+    const stamp = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}`;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `medilife_backup_${stamp}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // ── バックアップ読み込み ──
+  const handleImport = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target.result);
+        if (!data.tasks && !data.clients && !data.suspects) {
+          setRestoreMsg('❌ ファイルの形式が違います');
+          return;
+        }
+        setConfirmRestore(data);
+      } catch {
+        setRestoreMsg('❌ ファイルの読み込みに失敗しました');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const doRestore = () => {
+    onRestore(confirmRestore);
+    setConfirmRestore(null);
+    setRestoreMsg('✅ データを復元しました！');
+    setTimeout(() => setRestoreMsg(''), 3000);
+  };
+
   return (
     <div>
       <h2 style={{fontSize:18, fontWeight:700, marginBottom:16}}>📝 ログ</h2>
@@ -1591,10 +1637,10 @@ function LogTab({ tasks, clients, suspects }) {
       {/* サマリーカード */}
       <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:20}}>
         {[
-          { label:'アクティブタスク', value: activeTasks,    color:'var(--accent)' },
+          { label:'アクティブタスク', value: activeTasks,           color:'var(--accent)' },
           { label:'完了タスク',       value: completedTasks.length, color:'var(--success)' },
-          { label:'クライアント数',   value: totalClients,   color:'#8B5CF6' },
-          { label:'サスペクト数',     value: totalSuspects,  color:'#F59E0B' },
+          { label:'クライアント数',   value: clients.length,        color:'#8B5CF6' },
+          { label:'サスペクト数',     value: suspects.length,       color:'#F59E0B' },
         ].map(s => (
           <div key={s.label} className="card" style={{textAlign:'center', padding:'14px 8px'}}>
             <div style={{fontSize:28, fontWeight:800, color:s.color}}>{s.value}</div>
@@ -1602,6 +1648,79 @@ function LogTab({ tasks, clients, suspects }) {
           </div>
         ))}
       </div>
+
+      {/* バックアップ */}
+      <div className="card" style={{marginBottom:16}}>
+        <div style={{fontSize:15, fontWeight:700, marginBottom:4}}>🔒 データバックアップ</div>
+        <div style={{fontSize:12, color:'var(--text-sub)', marginBottom:14, lineHeight:1.6}}>
+          打ち込んだデータをファイルに保存します。<br/>
+          Safariのデータ消去や機種変更の前にかならず書き出してください。
+        </div>
+
+        {/* 書き出し */}
+        <button onClick={handleExport} style={{
+          display:'block', width:'100%', padding:'13px',
+          background:'var(--accent)', color:'#fff',
+          border:'none', borderRadius:10, fontSize:15, fontWeight:700,
+          marginBottom:10, cursor:'pointer',
+        }}>
+          📤 バックアップを書き出す
+        </button>
+
+        {/* 読み込み */}
+        <label style={{
+          display:'block', width:'100%', padding:'13px',
+          background:'var(--bg)', color:'var(--text)',
+          border:'2px dashed var(--border)', borderRadius:10,
+          fontSize:15, fontWeight:700, textAlign:'center', cursor:'pointer',
+        }}>
+          📥 バックアップから復元する
+          <input type="file" accept=".json" onChange={handleImport}
+            style={{display:'none'}} />
+        </label>
+
+        {restoreMsg && (
+          <div style={{marginTop:10, fontSize:13, textAlign:'center', color: restoreMsg.startsWith('✅') ? 'var(--success)' : 'var(--danger)'}}>
+            {restoreMsg}
+          </div>
+        )}
+      </div>
+
+      {/* 復元確認ダイアログ */}
+      {confirmRestore && (
+        <div style={{
+          position:'fixed', inset:0, background:'rgba(0,0,0,0.5)',
+          display:'flex', alignItems:'center', justifyContent:'center',
+          zIndex:200, padding:20,
+        }}>
+          <div style={{background:'#fff', borderRadius:16, padding:24, width:'100%', maxWidth:340}}>
+            <div style={{fontSize:16, fontWeight:700, marginBottom:8}}>データを復元しますか？</div>
+            <div style={{fontSize:13, color:'var(--text-sub)', marginBottom:6, lineHeight:1.6}}>
+              バックアップファイルの内容：
+            </div>
+            <div style={{fontSize:13, background:'var(--bg)', borderRadius:8, padding:10, marginBottom:16}}>
+              📋 タスク: {confirmRestore.tasks?.length || 0}件<br/>
+              👥 クライアント: {confirmRestore.clients?.length || 0}件<br/>
+              🎯 サスペクト: {confirmRestore.suspects?.length || 0}件<br/>
+              🗓 保存日: {confirmRestore.exportedAt ? new Date(confirmRestore.exportedAt).toLocaleDateString('ja-JP') : '不明'}
+            </div>
+            <div style={{fontSize:12, color:'var(--danger)', marginBottom:16}}>
+              ⚠️ 現在のデータはすべて上書きされます
+            </div>
+            <div style={{display:'flex', gap:8}}>
+              <button onClick={() => setConfirmRestore(null)} style={{
+                flex:1, padding:'11px', border:'1px solid var(--border)',
+                borderRadius:8, background:'#fff', fontSize:14, cursor:'pointer',
+              }}>キャンセル</button>
+              <button onClick={doRestore} style={{
+                flex:1, padding:'11px', border:'none',
+                borderRadius:8, background:'var(--danger)', color:'#fff',
+                fontSize:14, fontWeight:700, cursor:'pointer',
+              }}>復元する</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 完了タスク履歴 */}
       <div className="card">
@@ -1723,7 +1842,13 @@ function App() {
             onDelete={deleteSuspect} />
         )}
         {tab==='vision'   && <VisionTab vision={vision} onChange={updateVision} tasks={tasks} clients={clients} />}
-        {tab==='log'      && <LogTab tasks={tasks} clients={clients} suspects={suspects} />}
+        {tab==='log'      && <LogTab tasks={tasks} clients={clients} suspects={suspects} vision={vision}
+            onRestore={(data) => {
+              if (data.tasks)    setTasks(data.tasks);
+              if (data.clients)  setClients(data.clients);
+              if (data.suspects) setSuspects(data.suspects);
+              if (data.vision)   setVision(data.vision);
+            }} />}
       </div>
 
       {showFab && (
