@@ -85,12 +85,16 @@
       -webkit-backdrop-filter: blur(12px);
       border-top: 1px solid var(--border);
       display: flex;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
       padding-bottom: var(--safe-b);
       z-index: 20;
       height: calc(var(--nav-h) + var(--safe-b));
     }
+    .bottom-nav::-webkit-scrollbar { display: none; }
     .nav-item {
-      flex: 1;
+      flex: 0 0 58px;
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -112,7 +116,7 @@
       transition: background 0.15s;
     }
     .nav-item.active .nav-icon { background: var(--accent-light); }
-    .nav-label { font-size: 10px; font-weight: 600; color: var(--text-sub); }
+    .nav-label { font-size: 9px; font-weight: 600; color: var(--text-sub); white-space: nowrap; }
     .nav-item.active .nav-label { color: var(--accent); }
 
     /* ── Cards ── */
@@ -1563,14 +1567,88 @@ function SuspectsTab({ suspects, onAdd, onEdit, onDelete }) {
   );
 }
 
+// ── Tab: Log ───────────────────────────────────────────────────
+function LogTab({ tasks, clients, suspects }) {
+  const completedTasks = tasks.filter(t => t.completed);
+  const totalTasks     = tasks.length;
+  const activeTasks    = tasks.filter(t => !t.completed).length;
+  const totalClients   = clients.length;
+  const totalSuspects  = suspects.length;
+
+  const clientName = (id) => {
+    const c = clients.find(c => c.id === id);
+    return c ? c.name : '';
+  };
+
+  const recentDone = [...completedTasks]
+    .sort((a, b) => (b.updatedAt || b.id) - (a.updatedAt || a.id))
+    .slice(0, 20);
+
+  return (
+    <div>
+      <h2 style={{fontSize:18, fontWeight:700, marginBottom:16}}>📝 ログ</h2>
+
+      {/* サマリーカード */}
+      <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:20}}>
+        {[
+          { label:'アクティブタスク', value: activeTasks,    color:'var(--accent)' },
+          { label:'完了タスク',       value: completedTasks.length, color:'var(--success)' },
+          { label:'クライアント数',   value: totalClients,   color:'#8B5CF6' },
+          { label:'サスペクト数',     value: totalSuspects,  color:'#F59E0B' },
+        ].map(s => (
+          <div key={s.label} className="card" style={{textAlign:'center', padding:'14px 8px'}}>
+            <div style={{fontSize:28, fontWeight:800, color:s.color}}>{s.value}</div>
+            <div style={{fontSize:11, color:'var(--text-sub)', marginTop:2}}>{s.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* 完了タスク履歴 */}
+      <div className="card">
+        <div style={{fontSize:14, fontWeight:700, marginBottom:12, color:'var(--text-sub)'}}>
+          ✅ 完了したタスク
+        </div>
+        {recentDone.length === 0 ? (
+          <div style={{textAlign:'center', color:'var(--text-sub)', padding:'20px 0', fontSize:13}}>
+            完了タスクはまだありません
+          </div>
+        ) : (
+          recentDone.map(t => (
+            <div key={t.id} style={{
+              display:'flex', alignItems:'center', gap:8,
+              padding:'8px 0', borderBottom:'1px solid var(--border)'
+            }}>
+              <div style={{
+                width:8, height:8, borderRadius:'50%',
+                background:'var(--success)', flexShrink:0
+              }} />
+              <div style={{flex:1, minWidth:0}}>
+                <div style={{fontSize:13, fontWeight:500, textDecoration:'line-through', color:'var(--text-sub)'}}>
+                  {t.title}
+                </div>
+                {t.clientId && clientName(t.clientId) && (
+                  <div style={{fontSize:11, color:'var(--text-sub)', marginTop:1}}>
+                    👤 {clientName(t.clientId)}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Bottom Nav Config ─────────────────────────────────────────
 const TABS = [
-  { id:'today',    label:'今日',   icon:'✓'  },
-  { id:'gantt',    label:'ガント', icon:'📊' },
-  { id:'matrix',   label:'行列',   icon:'▦'  },
-  { id:'clients',  label:'顧客',   icon:'👥' },
-  { id:'suspects', label:'候補',   icon:'🎯' },
-  { id:'vision',   label:'神メモ', icon:'⭐' },
+  { id:'today',    label:'今日',       icon:'✓'  },
+  { id:'gantt',    label:'ガント',     icon:'📊' },
+  { id:'matrix',   label:'マトリクス', icon:'▦'  },
+  { id:'clients',  label:'クライアント', icon:'👥' },
+  { id:'vision',   label:'ビジョン',   icon:'⭐' },
+  { id:'log',      label:'ログ',       icon:'📝' },
+  { id:'suspects', label:'サスペクト', icon:'🎯' },
 ];
 
 // ── App ───────────────────────────────────────────────────────
@@ -1612,7 +1690,7 @@ function App() {
 
   const updateVision = (key, val) => setVision(prev => ({...prev, [key]: val}));
 
-  const showFab = tab==='today' || tab==='clients';
+  const showFab = tab==='today' || tab==='clients' || tab==='suspects';
 
   return (
     <>
@@ -1645,11 +1723,12 @@ function App() {
             onDelete={deleteSuspect} />
         )}
         {tab==='vision'   && <VisionTab vision={vision} onChange={updateVision} tasks={tasks} clients={clients} />}
+        {tab==='log'      && <LogTab tasks={tasks} clients={clients} suspects={suspects} />}
       </div>
 
       {showFab && (
         <button className="fab"
-          onClick={() => tab==='today' ? setTaskDrawer('new') : setClientDrawer('new')}>
+          onClick={() => tab==='today' ? setTaskDrawer('new') : tab==='clients' ? setClientDrawer('new') : setSuspectDrawer('new')}>
           +
         </button>
       )}
