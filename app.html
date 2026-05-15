@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Medilife 業務管理</title>
+  <!-- iPhone ホーム画面追加対応 -->
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Medilife">
@@ -49,6 +50,7 @@
       margin: 0 auto;
     }
 
+    /* ── Header ── */
     .header {
       position: sticky;
       top: 0;
@@ -64,11 +66,13 @@
     .header h1 { font-size: 20px; font-weight: 800; letter-spacing: -0.5px; color: var(--accent); }
     .header-date { font-size: 12px; color: var(--text-sub); font-weight: 500; }
 
+    /* ── Content ── */
     .content {
       padding: 14px 14px;
       padding-bottom: calc(var(--nav-h) + var(--safe-b) + 72px);
     }
 
+    /* ── Bottom Nav ── */
     .bottom-nav {
       position: fixed;
       bottom: 0;
@@ -111,6 +115,7 @@
     .nav-label { font-size: 10px; font-weight: 600; color: var(--text-sub); }
     .nav-item.active .nav-label { color: var(--accent); }
 
+    /* ── Cards ── */
     .card {
       background: var(--surface);
       border-radius: 14px;
@@ -134,6 +139,7 @@
       letter-spacing: -0.4px;
     }
 
+    /* ── Buttons ── */
     .btn {
       display: inline-flex; align-items: center; justify-content: center; gap: 5px;
       padding: 10px 16px;
@@ -150,6 +156,7 @@
     .btn-sm { padding: 6px 10px; font-size: 13px; border-radius: 8px; }
     .btn-full { width: 100%; }
 
+    /* ── Form ── */
     .form-group { margin-bottom: 14px; }
     .form-label { font-size: 13px; font-weight: 600; color: var(--text-sub); margin-bottom: 6px; display: block; }
     .form-input, .form-select, .form-textarea {
@@ -182,6 +189,7 @@
     .toggle-btn.sel-red { border-color: var(--danger); background: #FEF2F2; color: var(--danger); }
     .toggle-btn.sel-blue { border-color: var(--accent); background: var(--accent-light); color: var(--accent); }
 
+    /* ── Task Item ── */
     .task-item {
       display: flex; align-items: flex-start; gap: 10px;
       padding: 11px 0;
@@ -212,6 +220,7 @@
     .tag-imp { background: #FEF2F2; color: #DC2626; }
     .tag-urg { background: #FFF7ED; color: #C2410C; }
 
+    /* ── Matrix ── */
     .matrix-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
     .matrix-cell {
       border-radius: 12px; padding: 12px; min-height: 110px;
@@ -228,7 +237,13 @@
     .mc-sub { font-size: 10px; opacity: 0.6; margin-bottom: 8px; font-weight: 500; }
     .mc-task { font-size: 12px; padding: 3px 0; border-bottom: 1px solid rgba(0,0,0,0.06); line-height: 1.4; }
     .mc-task:last-child { border-bottom: none; }
+    .matrix-axis {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+      margin-bottom: 4px;
+    }
+    .ax { text-align: center; font-size: 11px; font-weight: 700; color: var(--text-sub); padding: 3px 0; }
 
+    /* ── Client ── */
     .client-item {
       padding: 12px 0; border-bottom: 1px solid var(--border);
     }
@@ -240,6 +255,9 @@
       padding: 3px 9px; border-radius: 6px;
       font-size: 11px; font-weight: 700;
     }
+    .cat-etax { background: #EDE9FE; color: #7C3AED; }
+    .cat-april { background: #FEF9C3; color: #92400E; }
+    .cat-other { background: #F3F4F6; color: #4B5563; }
     .client-info-grid {
       display: grid; grid-template-columns: 1fr 1fr;
       gap: 6px; margin-top: 8px;
@@ -259,75 +277,7 @@
       font-size: 11px; font-weight: 700;
     }
 
-    /* ── 売上トラッカー ── */
-    .sales-tracker {
-      background: linear-gradient(135deg, #5B5BD6 0%, #7C3AED 100%);
-      border-radius: 16px;
-      padding: 16px;
-      margin-bottom: 12px;
-      color: #fff;
-      position: relative;
-      overflow: hidden;
-    }
-    .sales-tracker::before {
-      content: '';
-      position: absolute;
-      top: -30px; right: -30px;
-      width: 120px; height: 120px;
-      border-radius: 50%;
-      background: rgba(255,255,255,0.08);
-    }
-    .sales-tracker-title {
-      font-size: 11px; font-weight: 700; opacity: 0.8;
-      letter-spacing: 0.8px; text-transform: uppercase; margin-bottom: 10px;
-    }
-    .sales-main-row {
-      display: flex; align-items: flex-end; justify-content: space-between;
-      margin-bottom: 12px;
-    }
-    .sales-current {
-      font-size: 28px; font-weight: 900; letter-spacing: -1px; line-height: 1;
-    }
-    .sales-current-label { font-size: 11px; opacity: 0.7; margin-top: 2px; }
-    .sales-remaining {
-      text-align: right;
-    }
-    .sales-remaining-num {
-      font-size: 16px; font-weight: 800;
-      background: rgba(255,255,255,0.2);
-      padding: 3px 10px; border-radius: 8px;
-    }
-    .sales-remaining-label { font-size: 10px; opacity: 0.7; margin-top: 2px; }
-    .sales-progress-wrap {
-      background: rgba(255,255,255,0.2);
-      border-radius: 8px; height: 10px; overflow: hidden; margin-bottom: 8px;
-    }
-    .sales-progress-bar {
-      height: 100%; border-radius: 8px;
-      background: #fff;
-      transition: width 0.6s cubic-bezier(0.34,1.56,0.64,1);
-    }
-    .sales-footer-row {
-      display: flex; justify-content: space-between; align-items: center;
-    }
-    .sales-target-label { font-size: 11px; opacity: 0.75; }
-    .sales-pct { font-size: 16px; font-weight: 900; }
-    .sales-edit-btn {
-      background: rgba(255,255,255,0.2);
-      border: none; color: #fff;
-      padding: 5px 12px; border-radius: 8px;
-      font-size: 12px; font-weight: 700; cursor: pointer;
-      -webkit-tap-highlight-color: transparent;
-    }
-
-    /* ── 売上設定Drawer ── */
-    .sales-drawer-hint {
-      font-size: 12px; color: var(--text-sub);
-      background: var(--bg); border-radius: 8px;
-      padding: 8px 10px; margin-bottom: 14px; line-height: 1.5;
-    }
-
-    /* ── 神メモ ── */
+    /* ── 神メモ Vision ── */
     .km-band {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -335,7 +285,9 @@
       overflow: hidden;
       margin-bottom: 14px;
     }
+    /* 3列グリッド：タスク左 | 神センター | タスク右 */
     .km-grid { display: grid; grid-template-columns: 1fr 1.5fr 1fr; }
+    /* ヘッダー行 */
     .km-head-cell {
       padding: 8px 6px;
       border-bottom: 1px solid var(--border);
@@ -345,8 +297,10 @@
     .km-head-cell:last-child { border-right: none; }
     .km-head-tag { font-size: 9px; font-weight: 700; color: var(--text-sub); letter-spacing: 0.4px; }
     .km-head-period { font-size: 12px; font-weight: 800; color: var(--text); margin-top: 1px; }
+    .km-head-center { }
     .km-head-axis { font-size: 15px; font-weight: 800; margin-top: 1px; }
     .km-head-sub { font-size: 9px; font-weight: 500; opacity: 0.65; margin-top: 1px; }
+    /* データセル */
     .km-data-cell {
       padding: 8px 6px;
       border-bottom: 1px solid var(--border);
@@ -359,7 +313,10 @@
       color: var(--text-sub); margin-bottom: 4px;
       letter-spacing: 0.3px;
     }
-    .km-data-hint { font-size: 9px; color: var(--text-sub); line-height: 1.4; margin-bottom: 5px; }
+    .km-data-hint {
+      font-size: 9px; color: var(--text-sub);
+      line-height: 1.4; margin-bottom: 5px;
+    }
     .km-ta {
       width: 100%; border: 1.5px solid var(--border);
       background: var(--bg); border-radius: 6px;
@@ -372,6 +329,18 @@
     .km-ta::placeholder { color: #C4C4CC; font-size: 10px; }
     .km-ta-center { background: var(--surface); }
 
+    /* ── Calendar ── */
+    .cal-wrap {
+      border-radius: 14px; overflow: hidden;
+      border: 1px solid var(--border);
+    }
+    .cal-wrap iframe {
+      display: block; width: 100%; border: none;
+      height: calc(100dvh - 170px);
+      min-height: 400px;
+    }
+
+    /* ── Drawer / Modal ── */
     .overlay {
       position: fixed; inset: 0;
       background: rgba(0,0,0,0.45);
@@ -393,6 +362,7 @@
     }
     .drawer-title { font-size: 19px; font-weight: 800; margin-bottom: 18px; letter-spacing: -0.4px; }
 
+    /* ── FAB ── */
     .fab {
       position: fixed;
       bottom: calc(var(--nav-h) + var(--safe-b) + 14px);
@@ -410,9 +380,11 @@
     }
     .fab:active { transform: scale(0.91); }
 
+    /* ── Empty ── */
     .empty { text-align: center; padding: 28px 16px; color: var(--text-sub); font-size: 13px; }
     .empty-icon { font-size: 34px; margin-bottom: 8px; }
 
+    /* ── Misc ── */
     .filter-row { display: flex; gap: 6px; margin-bottom: 12px; overflow-x: auto; padding-bottom: 2px; }
     .filter-btn {
       padding: 5px 12px; border-radius: 20px;
@@ -429,8 +401,9 @@
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const { useState, useCallback, useRef, useEffect } = React;
+const { useState, useCallback } = React;
 
+// ── Utils ────────────────────────────────────────────────────
 const uid = () => Math.random().toString(36).slice(2, 9);
 const todayStr = () => {
   const d = new Date();
@@ -447,11 +420,13 @@ const fmtDate = (s) => {
   return `${parseInt(m)}/${parseInt(d)}`;
 };
 
+// タスク → Googleカレンダー新規イベントURL
 const toGCalUrl = (task) => {
   const title = encodeURIComponent(task.title);
   let dates = '';
   if (task.date) {
     const d = task.date.replace(/-/g, '');
+    // 終日イベント：翌日を終了日にする
     const next = new Date(task.date);
     next.setDate(next.getDate() + 1);
     const nd = next.toISOString().split('T')[0].replace(/-/g, '');
@@ -460,34 +435,13 @@ const toGCalUrl = (task) => {
   return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}${dates}`;
 };
 
+// 神メモ軸カラー
 const KM_AXIS_MAP = {
   'ロマン':   { color: '#7C3AED', bg: '#F5F3FF' },
   'ソロバン': { color: '#2563EB', bg: '#EFF6FF' },
   'チャージ': { color: '#059669', bg: '#ECFDF5' },
 };
 const KM_AXES = ['ロマン', 'ソロバン', 'チャージ'];
-
-const LOG_CATS = [
-  { id: 'call',     label: '📞 電話/商談', color: '#2563EB', bg: '#EFF6FF' },
-  { id: 'meeting',  label: '🤝 会議',      color: '#7C3AED', bg: '#F5F3FF' },
-  { id: 'admin',    label: '📝 事務',      color: '#D97706', bg: '#FFFBEB' },
-  { id: 'create',   label: '💻 資料作成',  color: '#0891B2', bg: '#ECFEFF' },
-  { id: 'travel',   label: '🚗 移動',      color: '#059669', bg: '#ECFDF5' },
-  { id: 'learning', label: '📚 学習',      color: '#DC2626', bg: '#FEF2F2' },
-  { id: 'other',    label: 'その他',       color: '#6B7280', bg: '#F3F4F6' },
-];
-const fmtDur = m => {
-  if (!m) return '—';
-  if (m < 60) return `${m}分`;
-  const h = Math.floor(m / 60), min = m % 60;
-  return min ? `${h}時間${min}分` : `${h}時間`;
-};
-const logCat = id => LOG_CATS.find(c => c.id === id) || LOG_CATS[LOG_CATS.length - 1];
-const shiftDate = (dateStr, delta) => {
-  const d = new Date(dateStr + 'T00:00:00');
-  d.setDate(d.getDate() + delta);
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-};
 
 const AxisBadge = ({ axis }) => {
   if (!axis) return null;
@@ -503,14 +457,17 @@ const AxisBadge = ({ axis }) => {
   );
 };
 
+// タスク日付 → 残り日数
 const daysUntil = (dateStr) => {
   if (!dateStr) return null;
   const today = new Date(); today.setHours(0,0,0,0);
+  // ローカル時間でパース（UTCにするとJSTでズレる）
   const [y, m, d] = dateStr.split('-').map(Number);
   const target = new Date(y, m - 1, d);
   return Math.ceil((target - today) / 86400000);
 };
 
+// ── localStorage hook ────────────────────────────────────────
 function useLS(key, init) {
   const [val, setVal] = useState(() => {
     try { const s = localStorage.getItem(key); return s ? JSON.parse(s) : init; }
@@ -526,131 +483,15 @@ function useLS(key, init) {
   return [val, set];
 }
 
-// ── 売上設定 Drawer ────────────────────────────────────────────
-function SalesDrawer({ sales, onSave, onClose }) {
-  const [form, setForm] = useState({
-    target: sales.target || '',
-    current: sales.current || '',
-    label: sales.label || '今月',
-  });
-  const s = k => v => setForm(f => ({ ...f, [k]: v }));
-
-  return (
-    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="drawer">
-        <div className="drawer-handle"/>
-        <div className="drawer-title">💰 売上設定</div>
-        <div className="sales-drawer-hint">
-          金額は万円単位で入力してください。<br/>例）目標100万円 → 100
-        </div>
-
-        <div className="form-group">
-          <label className="form-label">期間ラベル（例：今月・今期・2025年）</label>
-          <input className="form-input" placeholder="今月" value={form.label}
-            onChange={e => s('label')(e.target.value)} />
-        </div>
-
-        <div className="form-group">
-          <label className="form-label">目標額（万円）</label>
-          <input className="form-input" type="number" placeholder="例: 500"
-            value={form.target} onChange={e => s('target')(e.target.value)}
-            style={{fontSize:18, fontWeight:700}} />
-        </div>
-
-        <div className="form-group">
-          <label className="form-label">現在の売上（万円）</label>
-          <input className="form-input" type="number" placeholder="例: 320"
-            value={form.current} onChange={e => s('current')(e.target.value)}
-            style={{fontSize:18, fontWeight:700}} />
-        </div>
-
-        <button className="btn btn-primary btn-full" style={{marginTop:4}}
-          onClick={() => {
-            onSave({
-              target: parseFloat(form.target) || 0,
-              current: parseFloat(form.current) || 0,
-              label: form.label || '今月',
-            });
-            onClose();
-          }}>
-          保存
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ── 売上トラッカー ─────────────────────────────────────────────
-function SalesTracker({ sales, onEdit }) {
-  const target  = sales.target  || 0;
-  const current = sales.current || 0;
-  const remaining = Math.max(0, target - current);
-  const pct = target > 0 ? Math.min(100, Math.round(current / target * 100)) : 0;
-
-  if (target === 0) {
-    return (
-      <div style={{
-        background:'var(--surface)', borderRadius:14, padding:14,
-        marginBottom:12, border:'2px dashed var(--border)',
-        display:'flex', alignItems:'center', justifyContent:'space-between',
-      }}>
-        <div>
-          <div style={{fontSize:13, fontWeight:700, color:'var(--text-sub)'}}>💰 売上トラッカー</div>
-          <div style={{fontSize:12, color:'var(--text-sub)', marginTop:2}}>目標を設定して進捗を確認</div>
-        </div>
-        <button onClick={onEdit} style={{
-          background:'var(--accent)', color:'#fff', border:'none',
-          padding:'8px 14px', borderRadius:10, fontSize:13, fontWeight:700,
-          cursor:'pointer', WebkitTapHighlightColor:'transparent',
-        }}>設定する</button>
-      </div>
-    );
-  }
-
-  const pctColor = pct >= 100 ? '#22C55E' : pct >= 70 ? '#F59E0B' : '#fff';
-
-  return (
-    <div className="sales-tracker">
-      <div className="sales-tracker-title">💰 売上トラッカー · {sales.label || '今月'}</div>
-      <div className="sales-main-row">
-        <div>
-          <div className="sales-current">{current.toLocaleString()}<span style={{fontSize:14, fontWeight:600, marginLeft:2}}>万円</span></div>
-          <div className="sales-current-label">現在の売上</div>
-        </div>
-        <div className="sales-remaining">
-          <div className="sales-remaining-num">
-            {remaining > 0 ? `あと ${remaining.toLocaleString()}万円` : '🎉 達成！'}
-          </div>
-          <div className="sales-remaining-label">目標まで</div>
-        </div>
-      </div>
-      <div className="sales-progress-wrap">
-        <div className="sales-progress-bar" style={{width:`${pct}%`}} />
-      </div>
-      <div className="sales-footer-row">
-        <div>
-          <div className="sales-pct" style={{color: pctColor}}>{pct}%</div>
-          <div className="sales-target-label">目標 {target.toLocaleString()}万円</div>
-        </div>
-        <button className="sales-edit-btn" onClick={onEdit}>編集</button>
-      </div>
-    </div>
-  );
-}
-
 // ── Task Drawer ───────────────────────────────────────────────
 function TaskDrawer({ clients, editing, onSave, onClose }) {
+  // デフォルト値を先に設定し、editing で上書き（rowType など古いタスクに無いフィールドを補完）
   const [form, setForm] = useState({
     title: '', date: '', importance: 1, urgency: 1,
     clientId: '', rowType: 'work', axis: '', recurrence: 'none', completed: false,
-    steps: [],
     ...(editing || {}),
   });
   const s = k => v => setForm(f => ({ ...f, [k]: v }));
-
-  const addStep = () => setForm(f => ({ ...f, steps: [...(f.steps||[]), { id: uid(), text: '', done: false }] }));
-  const updateStep = (id, text) => setForm(f => ({ ...f, steps: f.steps.map(st => st.id===id ? {...st, text} : st) }));
-  const removeStep = id => setForm(f => ({ ...f, steps: f.steps.filter(st => st.id!==id) }));
 
   return (
     <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -666,39 +507,25 @@ function TaskDrawer({ clients, editing, onSave, onClose }) {
 
         <div className="form-group">
           <label className="form-label">繰り返し</label>
-          <div style={{display:'flex', flexWrap:'wrap', gap:6}}>
-            {[
-              {id:'none',      label:'なし'},
-              {id:'daily',     label:'🔁 毎日'},
-              {id:'weekly',    label:'📆 毎週'},
-              {id:'monthly',   label:'📅 毎月'},
-              {id:'bimonthly', label:'🗓 隔月'},
-            ].map(r => (
-              <button key={r.id}
-                className={`toggle-btn ${(form.recurrence||'none')===r.id ? 'sel-blue' : ''}`}
-                style={{flex:'1 1 auto'}}
-                onClick={() => s('recurrence')(r.id)}>{r.label}</button>
-            ))}
+          <div className="toggle-group">
+            <button className={`toggle-btn ${form.recurrence==='none'||!form.recurrence ? 'sel-blue' : ''}`}
+              onClick={() => s('recurrence')('none')}>なし</button>
+            <button className={`toggle-btn ${form.recurrence==='daily' ? 'sel-blue' : ''}`}
+              onClick={() => s('recurrence')('daily')}>🔁 毎日</button>
+            <button className={`toggle-btn ${form.recurrence==='monthly' ? 'sel-blue' : ''}`}
+              onClick={() => s('recurrence')('monthly')}>📅 毎月</button>
           </div>
         </div>
 
-        {(form.recurrence !== 'daily' && form.recurrence !== 'none' && form.recurrence) ? (
+        {form.recurrence !== 'daily' && (
           <div className="form-group">
             <label className="form-label">
-              {form.recurrence === 'weekly'    ? '繰り返す曜日（この日を選択）' :
-               form.recurrence === 'monthly'   ? '繰り返し日（毎月この日）' :
-               form.recurrence === 'bimonthly' ? '繰り返し日（2ヶ月ごとのこの日）' : '日付（任意）'}
+              {form.recurrence === 'monthly' ? '繰り返し日（毎月この日）' : '日付（任意）'}
             </label>
             <input className="form-input" type="date" value={form.date}
               onChange={e => s('date')(e.target.value)} />
           </div>
-        ) : form.recurrence === 'none' || !form.recurrence ? (
-          <div className="form-group">
-            <label className="form-label">日付（任意）</label>
-            <input className="form-input" type="date" value={form.date}
-              onChange={e => s('date')(e.target.value)} />
-          </div>
-        ) : null}
+        )}
 
         <div className="form-group">
           <label className="form-label">重要度</label>
@@ -749,33 +576,6 @@ function TaskDrawer({ clients, editing, onSave, onClose }) {
           </select>
         </div>
 
-        <div className="form-group">
-          <label className="form-label">ベビーステップ（任意）</label>
-          {(form.steps||[]).map((st, i) => (
-            <div key={st.id} style={{display:'flex', gap:6, alignItems:'center', marginBottom:6}}>
-              <span style={{fontSize:12, color:'var(--text-sub)', flexShrink:0, minWidth:18}}>{i+1}.</span>
-              <input
-                className="form-input"
-                placeholder={`ステップ ${i+1}`}
-                value={st.text}
-                onChange={e => updateStep(st.id, e.target.value)}
-                style={{flex:1, padding:'8px 10px', fontSize:14}}
-              />
-              <button onClick={() => removeStep(st.id)}
-                style={{flexShrink:0, border:'none', background:'none', color:'#CCC',
-                  fontSize:18, cursor:'pointer', padding:'4px 6px', lineHeight:1}}>×</button>
-            </div>
-          ))}
-          <button onClick={addStep}
-            style={{
-              display:'flex', alignItems:'center', gap:5,
-              padding:'8px 12px', borderRadius:9, border:'1.5px dashed var(--border)',
-              background:'var(--bg)', color:'var(--text-sub)',
-              fontSize:13, fontWeight:600, cursor:'pointer', width:'100%',
-              justifyContent:'center', WebkitTapHighlightColor:'transparent',
-            }}>＋ ステップ追加</button>
-        </div>
-
         <button className="btn btn-primary btn-full" style={{marginTop:4}}
           onClick={() => { if (!form.title.trim()) return; onSave({...form, id: form.id || uid()}); onClose(); }}>
           保存
@@ -787,18 +587,10 @@ function TaskDrawer({ clients, editing, onSave, onClose }) {
 
 // ── Client Drawer ─────────────────────────────────────────────
 const MONTHS = ['未定','1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
-const THIS_YEAR = new Date().getFullYear();
-const PROSPECT_YEARS = [THIS_YEAR, THIS_YEAR+1, THIS_YEAR+2, THIS_YEAR+3];
-const fmtProspect = (month, year) => {
-  if (!month || month === '未定') return '未定';
-  if (year) return `${year}年${month}`;
-  return month;
-};
 
 function ClientDrawer({ editing, onSave, onClose }) {
   const [form, setForm] = useState({
-    name: '', prospectMonth: '未定', prospectYear: THIS_YEAR,
-    helpWith: '', prospectAC: '', memo: '', axis: '', rowType: 'work',
+    name: '', prospectMonth: '未定', helpWith: '', prospectAC: '', memo: '', axis: '', rowType: 'work',
     ...(editing || {}),
   });
   const s = k => v => setForm(f => ({ ...f, [k]: v }));
@@ -817,20 +609,6 @@ function ClientDrawer({ editing, onSave, onClose }) {
 
         <div className="form-group">
           <label className="form-label">何月の見込みか</label>
-          <div style={{display:'flex', gap:6, marginBottom:8}}>
-            {PROSPECT_YEARS.map(y => (
-              <button key={y}
-                style={{
-                  flex:1, padding:'7px 4px', borderRadius:8, border:'1.5px solid',
-                  fontSize:13, fontWeight:700, cursor:'pointer',
-                  borderColor: form.prospectYear===y ? 'var(--accent)' : 'var(--border)',
-                  background: form.prospectYear===y ? 'var(--accent-light)' : 'var(--bg)',
-                  color: form.prospectYear===y ? 'var(--accent)' : 'var(--text-sub)',
-                  WebkitTapHighlightColor:'transparent',
-                }}
-                onClick={() => s('prospectYear')(y)}>{y}年</button>
-            ))}
-          </div>
           <div style={{display:'flex', gap:6, flexWrap:'wrap'}}>
             {MONTHS.map(m => (
               <button key={m}
@@ -840,16 +618,10 @@ function ClientDrawer({ editing, onSave, onClose }) {
                   borderColor: form.prospectMonth===m ? 'var(--accent)' : 'var(--border)',
                   background: form.prospectMonth===m ? 'var(--accent-light)' : 'var(--bg)',
                   color: form.prospectMonth===m ? 'var(--accent)' : 'var(--text-sub)',
-                  WebkitTapHighlightColor:'transparent',
                 }}
                 onClick={() => s('prospectMonth')(m)}>{m}</button>
             ))}
           </div>
-          {form.prospectMonth !== '未定' && (
-            <div style={{fontSize:12, color:'var(--accent)', marginTop:6, fontWeight:700}}>
-              ✓ {form.prospectYear}年{form.prospectMonth}
-            </div>
-          )}
         </div>
 
         <div className="form-group">
@@ -909,32 +681,28 @@ function ClientDrawer({ editing, onSave, onClose }) {
 }
 
 // ── Tab: Today ────────────────────────────────────────────────
-function TodayTab({ tasks, clients, onToggle, onToggleStep, onEdit, onDelete, sales, onSalesEdit }) {
+function TodayTab({ tasks, clients, onToggle, onEdit, onDelete }) {
   const td = todayStr();
   const todayDate = new Date();
   const clientName = id => clients.find(c => c.id === id)?.name;
   const [showDone, setShowDone] = useState(false);
 
   const isRecurring = t => t.recurrence && t.recurrence !== 'none';
+
+  // 完了フォルダー（全タスクの完了済み）
   const doneTasks = tasks.filter(t => t.completed);
 
-  const isDueToday = t => {
+  // 繰り返しタスク（未完了のみ表示）
+  const recurringToday = tasks.filter(t => {
+    if (!isRecurring(t) || t.completed) return false;
     if (t.recurrence === 'daily') return true;
-    if (t.recurrence === 'weekly' && t.date)
-      return todayDate.getDay() === new Date(t.date + 'T00:00:00').getDay();
-    if (t.recurrence === 'monthly' && t.date)
-      return todayDate.getDate() === new Date(t.date + 'T00:00:00').getDate();
-    if (t.recurrence === 'bimonthly' && t.date) {
-      const taskDate = new Date(t.date + 'T00:00:00');
-      const sameDay = taskDate.getDate() === todayDate.getDate();
-      const monthDiff = (todayDate.getFullYear() * 12 + todayDate.getMonth())
-                      - (taskDate.getFullYear() * 12 + taskDate.getMonth());
-      return sameDay && monthDiff >= 0 && monthDiff % 2 === 0;
+    if (t.recurrence === 'monthly' && t.date) {
+      return new Date(t.date + 'T00:00:00').getDate() === todayDate.getDate();
     }
     return false;
-  };
+  });
 
-  const recurringAll = tasks.filter(t => isRecurring(t) && !t.completed);
+  // 通常タスク（未完了のみ）
   const onceOnly = tasks.filter(t => !isRecurring(t) && !t.completed);
   const todayTasks = onceOnly.filter(t => t.date === td);
   const overdue    = onceOnly.filter(t => t.date && t.date < td);
@@ -942,84 +710,44 @@ function TodayTab({ tasks, clients, onToggle, onToggleStep, onEdit, onDelete, sa
   const undated    = onceOnly.filter(t => !t.date);
 
   const RecurBadge = ({ t }) => {
-    const base = {fontSize:11, borderRadius:4, padding:'1px 5px', fontWeight:600, border:'1px solid'};
-    const due = isDueToday(t);
-    const TodayBadge = () => due
-      ? <span style={{...base, background:'#059669', color:'#fff', borderColor:'#059669', marginLeft:3}}>今日</span>
-      : null;
     if (t.recurrence === 'daily') return (
-      <><span style={{...base, background:'#ECFDF5', color:'#059669', borderColor:'#A7F3D0'}}>🔁 毎日</span><TodayBadge/></>
+      <span style={{fontSize:11, background:'#ECFDF5', color:'#059669',
+        border:'1px solid #A7F3D0', borderRadius:4, padding:'1px 5px', fontWeight:600}}>🔁 毎日</span>
     );
-    if (t.recurrence === 'weekly' && t.date) {
-      const dow = JP_DAY[new Date(t.date + 'T00:00:00').getDay()];
-      return <><span style={{...base, background:'#F5F3FF', color:'#7C3AED', borderColor:'#DDD6FE'}}>📆 毎週{dow}</span><TodayBadge/></>;
-    }
     if (t.recurrence === 'monthly' && t.date) {
       const day = new Date(t.date + 'T00:00:00').getDate();
-      return <><span style={{...base, background:'#EFF6FF', color:'#2563EB', borderColor:'#BFDBFE'}}>📅 毎月{day}日</span><TodayBadge/></>;
-    }
-    if (t.recurrence === 'bimonthly' && t.date) {
-      const day = new Date(t.date + 'T00:00:00').getDate();
-      return <><span style={{...base, background:'#FFF7ED', color:'#C2410C', borderColor:'#FED7AA'}}>🗓 隔月{day}日</span><TodayBadge/></>;
+      return (
+        <span style={{fontSize:11, background:'#EFF6FF', color:'#2563EB',
+          border:'1px solid #BFDBFE', borderRadius:4, padding:'1px 5px', fontWeight:600}}>📅 毎月{day}日</span>
+      );
     }
     return null;
   };
 
-  const TaskRow = ({ t, hideDate }) => {
-    const steps = t.steps || [];
-    const doneCount = steps.filter(st => st.done).length;
-    return (
-      <div className="task-item">
-        <div className="task-check" onClick={() => onToggle(t.id)} />
-        <div className="task-body" onClick={() => onEdit(t)}>
-          <div className="task-name">{t.title}</div>
-          <div className="task-tags">
-            {isRecurring(t)
-              ? <RecurBadge t={t} />
-              : (!hideDate && t.date && t.date !== td) && <span className="tag tag-date">{fmtDate(t.date)}</span>}
-            {t.importance === 1 && <span className="tag tag-imp">重要</span>}
-            {t.urgency === 1    && <span className="tag tag-urg">緊急</span>}
-            {clientName(t.clientId) && <span className="tag tag-client">{clientName(t.clientId)}</span>}
-            {t.axis && <AxisBadge axis={t.axis} />}
-            {steps.length > 0 && (
-              <span style={{fontSize:11, fontWeight:700, padding:'2px 7px', borderRadius:5,
-                background: doneCount===steps.length ? '#ECFDF5' : '#F0F0F5',
-                color: doneCount===steps.length ? '#059669' : '#555'}}>
-                {doneCount}/{steps.length}
-              </span>
-            )}
-          </div>
-          {steps.length > 0 && (
-            <div style={{marginTop:7, display:'flex', flexDirection:'column', gap:4}}>
-              {steps.map(st => (
-                <div key={st.id}
-                  onClick={e => { e.stopPropagation(); onToggleStep(t.id, st.id); }}
-                  style={{display:'flex', alignItems:'center', gap:7, cursor:'pointer'}}>
-                  <div style={{
-                    width:16, height:16, borderRadius:4, flexShrink:0,
-                    border: st.done ? 'none' : '2px solid #CCC',
-                    background: st.done ? 'var(--accent)' : 'transparent',
-                    display:'flex', alignItems:'center', justifyContent:'center',
-                  }}>
-                    {st.done && <span style={{color:'#fff', fontSize:10, fontWeight:800}}>✓</span>}
-                  </div>
-                  <span style={{
-                    fontSize:13, color: st.done ? 'var(--text-sub)' : 'var(--text)',
-                    textDecoration: st.done ? 'line-through' : 'none',
-                  }}>{st.text}</span>
-                </div>
-              ))}
-            </div>
-          )}
+  // 通常タスク行
+  const TaskRow = ({ t, hideDate }) => (
+    <div className="task-item">
+      <div className="task-check" onClick={() => onToggle(t.id)} />
+      <div className="task-body" onClick={() => onEdit(t)}>
+        <div className="task-name">{t.title}</div>
+        <div className="task-tags">
+          {isRecurring(t)
+            ? <RecurBadge t={t} />
+            : (!hideDate && t.date && t.date !== td) && <span className="tag tag-date">{fmtDate(t.date)}</span>}
+          {t.importance === 1 && <span className="tag tag-imp">重要</span>}
+          {t.urgency === 1    && <span className="tag tag-urg">緊急</span>}
+          {clientName(t.clientId) && <span className="tag tag-client">{clientName(t.clientId)}</span>}
+          {t.axis && <AxisBadge axis={t.axis} />}
         </div>
-        <a href={toGCalUrl(t)} target="_blank" rel="noreferrer"
-          style={{color:'#AAA', fontSize:16, padding:'4px 6px', textDecoration:'none', lineHeight:1}}
-          title="Googleカレンダーに追加">📅</a>
-        <button className="btn btn-ghost" style={{color:'#CCC',padding:'4px 6px'}} onClick={() => onDelete(t.id)}>×</button>
       </div>
-    );
-  };
+      <a href={toGCalUrl(t)} target="_blank" rel="noreferrer"
+        style={{color:'#AAA', fontSize:16, padding:'4px 6px', textDecoration:'none', lineHeight:1}}
+        title="Googleカレンダーに追加">📅</a>
+      <button className="btn btn-ghost" style={{color:'#CCC',padding:'4px 6px'}} onClick={() => onDelete(t.id)}>×</button>
+    </div>
+  );
 
+  // 完了フォルダー内のタスク行
   const DoneRow = ({ t }) => (
     <div style={{
       display:'flex', alignItems:'center', gap:8,
@@ -1044,7 +772,7 @@ function TodayTab({ tasks, clients, onToggle, onToggleStep, onEdit, onDelete, sa
           fontSize:12, fontWeight:700, padding:'5px 10px', borderRadius:8,
           border:'1.5px solid var(--danger)', background:'#FEF2F2',
           color:'var(--danger)', cursor:'pointer', whiteSpace:'nowrap', flexShrink:0,
-        }}>🗑</button>
+        }}>🗑 消去</button>
     </div>
   );
 
@@ -1052,13 +780,10 @@ function TodayTab({ tasks, clients, onToggle, onToggleStep, onEdit, onDelete, sa
     <div>
       <div style={{fontSize:13, color:'var(--text-sub)', fontWeight:500, marginBottom:12}}>{todayFull()}</div>
 
-      {/* 売上トラッカー */}
-      <SalesTracker sales={sales} onEdit={onSalesEdit} />
-
-      {recurringAll.length > 0 && (
+      {recurringToday.length > 0 && (
         <div className="card">
           <div className="card-title">🔁 定期タスク</div>
-          {recurringAll.map(t => <TaskRow key={t.id} t={t} hideDate />)}
+          {recurringToday.map(t => <TaskRow key={t.id} t={t} hideDate />)}
         </div>
       )}
 
@@ -1091,6 +816,7 @@ function TodayTab({ tasks, clients, onToggle, onToggleStep, onEdit, onDelete, sa
         </div>
       )}
 
+      {/* 完了フォルダー */}
       <div className="card" style={{marginTop:8}}>
         <div
           className="card-title"
@@ -1108,7 +834,9 @@ function TodayTab({ tasks, clients, onToggle, onToggleStep, onEdit, onDelete, sa
         </div>
         {showDone && (
           doneTasks.length === 0
-            ? <div className="empty" style={{padding:'16px 0'}}><div>完了済みタスクはありません</div></div>
+            ? <div className="empty" style={{padding:'16px 0'}}>
+                <div>完了済みタスクはありません</div>
+              </div>
             : doneTasks.map(t => <DoneRow key={t.id} t={t} />)
         )}
       </div>
@@ -1131,10 +859,12 @@ function MatrixTab({ tasks, clients }) {
   return (
     <div>
       <div className="section-title">タスクマトリクス</div>
+
       <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', marginBottom:6, paddingLeft:2}}>
         <div style={{textAlign:'center', fontSize:11, fontWeight:700, color:'#DC2626', padding:'4px 0'}}>← 緊急</div>
         <div style={{textAlign:'center', fontSize:11, fontWeight:700, color:'var(--text-sub)', padding:'4px 0'}}>非緊急 →</div>
       </div>
+
       <div className="matrix-grid">
         {quads.map(q => {
           const items = active.filter(t => t.importance===q.imp && t.urgency===q.urg);
@@ -1156,6 +886,7 @@ function MatrixTab({ tasks, clients }) {
           );
         })}
       </div>
+
       <div style={{marginTop:12, padding:'10px 12px', background:'var(--surface)', borderRadius:10, border:'1px solid var(--border)'}}>
         <div style={{fontSize:11, color:'var(--text-sub)', lineHeight:1.7}}>
           タスク追加時に重要度・緊急度を設定するとここに自動分類されます。
@@ -1166,164 +897,71 @@ function MatrixTab({ tasks, clients }) {
 }
 
 // ── Tab: Clients ──────────────────────────────────────────────
-function ClientsTab({ clients, tasks, onAdd, onEdit, onDelete, onArchive, onUnarchive, onDeleteArchived }) {
+function ClientsTab({ clients, tasks, onAdd, onEdit, onDelete }) {
   const [search, setSearch] = useState('');
-  const [showArchived, setShowArchived] = useState(false);
-
-  const activeClients   = clients.filter(c => !c.archived);
-  const archivedClients = clients.filter(c => c.archived);
 
   const openTasks = id => tasks.filter(t => t.clientId===id && !t.completed).length;
 
-  const filtered = activeClients.filter(c =>
+  const filtered = clients.filter(c =>
     c.name.includes(search) ||
     (c.helpWith||'').includes(search) ||
     (c.memo||'').includes(search) ||
     (c.prospectAC||'').includes(search)
   );
 
-  const filteredArchived = archivedClients.filter(c =>
-    c.name.includes(search) ||
-    (c.helpWith||'').includes(search) ||
-    (c.memo||'').includes(search)
-  );
-
-  // アクティブクライアントの見込みAC合計
-  const totalProspectAC = activeClients.reduce((sum, c) => sum + (parseFloat(c.prospectAC) || 0), 0);
-
-  const ClientRow = ({ c, archived }) => (
-    <div className="client-item">
-      <div className="client-top">
-        <div style={{display:'flex', alignItems:'center', gap:7}}>
-          {archived && <span style={{fontSize:11, background:'#F3F4F6', color:'#6B7280', padding:'1px 6px', borderRadius:5, fontWeight:700}}>完了</span>}
-          <span className="client-name" style={{color: archived ? 'var(--text-sub)' : 'var(--text)'}}>{c.name}</span>
-          {!archived && openTasks(c.id) > 0 &&
-            <span className="task-badge">{openTasks(c.id)}</span>}
-        </div>
-        <div className="client-right">
-          {c.axis && <AxisBadge axis={c.axis} />}
-          {!archived && <button className="btn btn-ghost btn-sm" onClick={() => onEdit(c)}>✎</button>}
-          {!archived && (
-            <button
-              onClick={() => onArchive(c.id)}
-              style={{
-                fontSize:11, fontWeight:700, padding:'4px 9px', borderRadius:7,
-                border:'1.5px solid #22C55E', background:'#F0FDF4',
-                color:'#16A34A', cursor:'pointer', whiteSpace:'nowrap',
-                WebkitTapHighlightColor:'transparent',
-              }}>完了</button>
-          )}
-          {archived && (
-            <>
-              <button
-                onClick={() => onUnarchive(c.id)}
-                style={{
-                  fontSize:11, fontWeight:700, padding:'4px 9px', borderRadius:7,
-                  border:'1.5px solid var(--accent)', background:'var(--accent-light)',
-                  color:'var(--accent)', cursor:'pointer', whiteSpace:'nowrap',
-                  WebkitTapHighlightColor:'transparent',
-                }}>↩ 戻す</button>
-              <button
-                onClick={() => onDeleteArchived(c.id)}
-                style={{
-                  fontSize:11, fontWeight:700, padding:'4px 9px', borderRadius:7,
-                  border:'1.5px solid var(--danger)', background:'#FEF2F2',
-                  color:'var(--danger)', cursor:'pointer', whiteSpace:'nowrap',
-                  WebkitTapHighlightColor:'transparent',
-                }}>🗑</button>
-            </>
-          )}
-        </div>
-      </div>
-      <div className="client-info-grid">
-        <div className="client-info-item">
-          <div className="client-info-label">何月の見込み</div>
-          <div className="client-info-value">{fmtProspect(c.prospectMonth, c.prospectYear)}</div>
-        </div>
-        <div className="client-info-item">
-          <div className="client-info-label">見込みAC</div>
-          <div className="client-info-value ac-value">
-            {c.prospectAC ? `${Number(c.prospectAC).toLocaleString()}万円` : '—'}
-          </div>
-        </div>
-        {c.helpWith && (
-          <div className="client-info-item client-info-full">
-            <div className="client-info-label">お役に立てること</div>
-            <div className="client-help">{c.helpWith}</div>
-          </div>
-        )}
-        {c.memo && (
-          <div className="client-info-item client-info-full">
-            <div className="client-info-label">メモ</div>
-            <div className="client-help">{c.memo}</div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-
   return (
     <div>
       <div className="section-title">クライアント</div>
 
-      {/* 見込みAC合計バナー */}
-      {totalProspectAC > 0 && (
-        <div style={{
-          background:'linear-gradient(135deg, #059669, #0891B2)',
-          borderRadius:12, padding:'10px 14px', marginBottom:10,
-          display:'flex', alignItems:'center', justifyContent:'space-between', color:'#fff',
-        }}>
-          <div style={{fontSize:11, fontWeight:700, opacity:0.85}}>💼 見込みAC合計</div>
-          <div style={{fontSize:20, fontWeight:900, letterSpacing:'-0.5px'}}>
-            {totalProspectAC.toLocaleString()}<span style={{fontSize:13, marginLeft:2}}>万円</span>
-          </div>
-        </div>
-      )}
-
       <input className="form-input" placeholder="🔍 検索..." value={search}
         onChange={e => setSearch(e.target.value)} style={{marginBottom:10}} />
 
-      {/* アクティブクライアント */}
+
       {filtered.length === 0
         ? <div className="empty"><div className="empty-icon">👤</div><div>クライアントなし</div></div>
         : <div className="card">
-            {filtered.map(c => <ClientRow key={c.id} c={c} archived={false} />)}
+            {filtered.map(c => (
+              <div key={c.id} className="client-item">
+                <div className="client-top">
+                  <div style={{display:'flex', alignItems:'center', gap:7}}>
+                    <span className="client-name">{c.name}</span>
+                    {openTasks(c.id) > 0 &&
+                      <span className="task-badge">{openTasks(c.id)}</span>}
+                  </div>
+                  <div className="client-right">
+                    {c.axis && <AxisBadge axis={c.axis} />}
+                    <button className="btn btn-ghost btn-sm" onClick={() => onEdit(c)}>✎</button>
+                    <button className="btn btn-ghost btn-sm" style={{color:'var(--danger)'}} onClick={() => onDelete(c.id)}>×</button>
+                  </div>
+                </div>
+                <div className="client-info-grid">
+                  <div className="client-info-item">
+                    <div className="client-info-label">何月の見込み</div>
+                    <div className="client-info-value">{c.prospectMonth || '未定'}</div>
+                  </div>
+                  <div className="client-info-item">
+                    <div className="client-info-label">見込みAC</div>
+                    <div className="client-info-value ac-value">
+                      {c.prospectAC ? `${Number(c.prospectAC).toLocaleString()}万円` : '—'}
+                    </div>
+                  </div>
+                  {c.helpWith && (
+                    <div className="client-info-item client-info-full">
+                      <div className="client-info-label">お役に立てること</div>
+                      <div className="client-help">{c.helpWith}</div>
+                    </div>
+                  )}
+                  {c.memo && (
+                    <div className="client-info-item client-info-full">
+                      <div className="client-info-label">メモ</div>
+                      <div className="client-help">{c.memo}</div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
       }
-
-      {/* 完了フォルダー */}
-      <div className="card" style={{marginTop:8}}>
-        <div
-          onClick={() => setShowArchived(v => !v)}
-          style={{
-            display:'flex', justifyContent:'space-between', alignItems:'center',
-            cursor:'pointer', userSelect:'none',
-          }}>
-          <div className="card-title" style={{
-            margin:0,
-            color: archivedClients.length > 0 ? 'var(--text)' : 'var(--text-sub)',
-          }}>
-            ✅ 完了フォルダー
-            {archivedClients.length > 0 && (
-              <span style={{
-                fontSize:12, background:'var(--success)', color:'#fff',
-                borderRadius:10, padding:'1px 7px', marginLeft:6, fontWeight:700,
-              }}>{archivedClients.length}</span>
-            )}
-          </div>
-          <span style={{fontSize:13, color:'var(--text-sub)'}}>{showArchived ? '▲' : '▼'}</span>
-        </div>
-
-        {showArchived && (
-          filteredArchived.length === 0
-            ? <div className="empty" style={{padding:'16px 0'}}>
-                <div>完了済みクライアントはありません</div>
-              </div>
-            : <div style={{marginTop:10}}>
-                {filteredArchived.map(c => <ClientRow key={c.id} c={c} archived={true} />)}
-              </div>
-        )}
-      </div>
     </div>
   );
 }
@@ -1331,28 +969,40 @@ function ClientsTab({ clients, tasks, onAdd, onEdit, onDelete, onArchive, onUnar
 // ── Tab: Vision（神メモ） ─────────────────────────────────────
 const KM_BANDS = [
   {
-    leftPeriod: '3年以内', rightPeriod: '6ヶ月以内', axisName: 'ロマン',
-    axisSub: 'ミッション・ビジョン・クレド', axisColor: '#7C3AED', axisBg: '#F5F3FF',
-    splitDays: 180,
-    centerWorkHint: '最終的に仕事上でどうなっていたいか',
+    leftPeriod:  '3年以内',
+    rightPeriod: '6ヶ月以内',
+    axisName:    'ロマン',
+    axisSub:     'ミッション・ビジョン・クレド',
+    axisColor:   '#7C3AED',
+    axisBg:      '#F5F3FF',
+    splitDays:   180, // 180日以内→右、それ以上→左
+    centerWorkHint:    '最終的に仕事上でどうなっていたいか',
     centerPrivateHint: 'プライベートでどうなっていたいか',
-    taskHint: '実現したいこと・しないといけないこと',
+    taskHint:          '実現したいこと・しないといけないこと',
   },
   {
-    leftPeriod: '2年以内', rightPeriod: '3ヶ月〜1ヶ月以内', axisName: 'ソロバン',
-    axisSub: '本業', axisColor: '#2563EB', axisBg: '#EFF6FF',
-    splitDays: 90,
-    centerWorkHint: '何でお金を頂いているのか',
+    leftPeriod:  '2年以内',
+    rightPeriod: '3ヶ月〜1ヶ月以内',
+    axisName:    'ソロバン',
+    axisSub:     '本業',
+    axisColor:   '#2563EB',
+    axisBg:      '#EFF6FF',
+    splitDays:   90,  // 90日以内→右、それ以上→左
+    centerWorkHint:    '何でお金を頂いているのか',
     centerPrivateHint: 'プライベートで何が中心になっているのか',
-    taskHint: '実現したいこと・しないといけないこと',
+    taskHint:          '実現したいこと・しないといけないこと',
   },
   {
-    leftPeriod: '1年以内', rightPeriod: '1週間〜本日', axisName: 'チャージ',
-    axisSub: '成長や喜び', axisColor: '#059669', axisBg: '#ECFDF5',
-    splitDays: 7,
-    centerWorkHint: '目標を叶えるためにどんな学習をするのか',
+    leftPeriod:  '1年以内',
+    rightPeriod: '1週間〜本日',
+    axisName:    'チャージ',
+    axisSub:     '成長や喜び',
+    axisColor:   '#059669',
+    axisBg:      '#ECFDF5',
+    splitDays:   7,   // 7日以内→右、それ以上→左
+    centerWorkHint:    '目標を叶えるためにどんな学習をするのか',
     centerPrivateHint: '自分や家族へのご褒美・してあげたいこと',
-    taskHint: '仕事で何をするのか',
+    taskHint:          '仕事で何をするのか',
   },
 ];
 
@@ -1373,6 +1023,8 @@ function VisionTab({ vision, onChange, tasks, clients }) {
         const isLast = bi === KM_BANDS.length - 1;
         return (
           <div key={bi} className="km-band">
+
+            {/* ヘッダー行 */}
             <div className="km-grid">
               <div className="km-head-cell" style={{background: 'var(--bg)'}}>
                 <div className="km-head-tag">タスク</div>
@@ -1389,6 +1041,7 @@ function VisionTab({ vision, onChange, tasks, clients }) {
               </div>
             </div>
 
+            {/* 仕事上・プライベート 行 */}
             {rows.map((row, ri) => {
               const lastRow = ri === rows.length - 1;
               const lKey = `km_${bi}_left_${row.key}`;
@@ -1396,13 +1049,23 @@ function VisionTab({ vision, onChange, tasks, clients }) {
               const rKey = `km_${bi}_right_${row.key}`;
               const centerHint = row.key === 'work' ? band.centerWorkHint : band.centerPrivateHint;
 
+              // 軸・区分で絞り、日付で左右を振り分け
               const rowType = row.key === 'work' ? 'work' : 'private';
-              const axTasks = (tasks||[]).filter(t =>
+              const axTasks    = (tasks||[]).filter(t =>
                 !t.completed && t.axis === band.axisName &&
                 (t.rowType || 'work') === rowType
               );
-              const leftTasks  = axTasks.filter(t => { const d = daysUntil(t.date); return d !== null && d > band.splitDays; });
-              const rightTasks = axTasks.filter(t => { const d = daysUntil(t.date); return d === null || d <= band.splitDays; });
+              // 日付なし or 期間内 → 右（短期アクション）
+              // 日付あり & 期間外 → 左（長期計画）
+              const leftTasks  = axTasks.filter(t => {
+                const d = daysUntil(t.date);
+                return d !== null && d > band.splitDays;
+              });
+              const rightTasks = axTasks.filter(t => {
+                const d = daysUntil(t.date);
+                return d === null || d <= band.splitDays;
+              });
+              // 関連クライアントはセンターに表示（軸＋区分でフィルタ）
               const relClients = (clients||[]).filter(c =>
                 c.axis === band.axisName && (c.rowType || 'work') === rowType
               );
@@ -1438,6 +1101,7 @@ function VisionTab({ vision, onChange, tasks, clients }) {
 
               return (
                 <div key={row.key} className="km-grid">
+                  {/* 左タスク */}
                   <div className={`km-data-cell ${lastRow ? 'km-last-row' : ''}`}>
                     <div className="km-data-label">{row.label}</div>
                     <textarea className="km-ta" placeholder={band.taskHint}
@@ -1445,6 +1109,7 @@ function VisionTab({ vision, onChange, tasks, clients }) {
                       onChange={e => onChange(lKey, e.target.value)} />
                     <TaskList items={leftTasks} color={band.axisColor} />
                   </div>
+                  {/* 神センター */}
                   <div className={`km-data-cell ${lastRow ? 'km-last-row' : ''}`}
                     style={{background: band.axisBg + '66'}}>
                     <div className="km-data-label" style={{color: band.axisColor}}>{row.label}</div>
@@ -1454,6 +1119,7 @@ function VisionTab({ vision, onChange, tasks, clients }) {
                       onChange={e => onChange(cKey, e.target.value)} />
                     <ClientList items={relClients} color={band.axisColor} />
                   </div>
+                  {/* 右タスク */}
                   <div className={`km-data-cell ${lastRow ? 'km-last-row' : ''}`}>
                     <div className="km-data-label">{row.label}</div>
                     <textarea className="km-ta" placeholder={band.taskHint}
@@ -1471,12 +1137,13 @@ function VisionTab({ vision, onChange, tasks, clients }) {
   );
 }
 
+
 // ── Tab: Gantt ────────────────────────────────────────────────
 function GanttTab({ tasks, clients }) {
-  const CELL_W    = 34;
-  const LABEL_W   = 108;
-  const DAYS_BEFORE = 4;
-  const DAYS_TOTAL  = 56;
+  const CELL_W    = 34;   // 1日あたりの幅(px)
+  const LABEL_W   = 108;  // 左ラベル幅(px)
+  const DAYS_BEFORE = 4;  // 今日より前を何日表示するか
+  const DAYS_TOTAL  = 56; // 合計8週間
 
   const todayD = new Date(); todayD.setHours(0,0,0,0);
   const startD = new Date(todayD); startD.setDate(startD.getDate() - DAYS_BEFORE);
@@ -1484,12 +1151,14 @@ function GanttTab({ tasks, clients }) {
   const toStr = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   const todaySt = toStr(todayD);
 
+  // 日付配列を生成
   const dates = Array.from({ length: DAYS_TOTAL }, (_, i) => {
     const d = new Date(startD);
     d.setDate(d.getDate() + i);
     return d;
   });
 
+  // 月ヘッダーグループ
   const monthGroups = [];
   dates.forEach((d, i) => {
     const label = `${d.getMonth()+1}月`;
@@ -1501,10 +1170,13 @@ function GanttTab({ tasks, clients }) {
   });
 
   const clientName = id => clients.find(c => c.id === id)?.name;
+
+  // 日付あり・非繰り返しタスクを日付順に
   const scheduled = [...tasks]
     .filter(t => t.date && (!t.recurrence || t.recurrence === 'none'))
     .sort((a, b) => a.date.localeCompare(b.date));
 
+  // ドットの色
   const dotColor = t => {
     if (t.completed) return '#D1D5DB';
     if (t.axis && KM_AXIS_MAP[t.axis]) return KM_AXIS_MAP[t.axis].color;
@@ -1512,12 +1184,15 @@ function GanttTab({ tasks, clients }) {
     return 'var(--accent)';
   };
 
-  const scrollRef = useRef(null);
-  useEffect(() => {
+  // 今日列へ自動スクロール
+  const scrollRef = React.useRef(null);
+  React.useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollLeft = DAYS_BEFORE * CELL_W - 8;
     }
   }, []);
+
+  const headerBg = '#FFFFFF';
 
   return (
     <div>
@@ -1534,7 +1209,9 @@ function GanttTab({ tasks, clients }) {
       ) : (
         <div style={{overflowX:'auto', WebkitOverflowScrolling:'touch', borderRadius:12, border:'1px solid var(--border)'}} ref={scrollRef}>
           <div style={{minWidth: LABEL_W + CELL_W * DAYS_TOTAL}}>
-            <div style={{display:'flex', background:'#FFFFFF', borderBottom:'1px solid var(--border)'}}>
+
+            {/* 月ヘッダー */}
+            <div style={{display:'flex', background: headerBg, borderBottom:'1px solid var(--border)'}}>
               <div style={{width:LABEL_W, flexShrink:0}} />
               {monthGroups.map((mg, i) => (
                 <div key={i} style={{
@@ -1546,7 +1223,8 @@ function GanttTab({ tasks, clients }) {
               ))}
             </div>
 
-            <div style={{display:'flex', background:'#FFFFFF', borderBottom:'2px solid var(--border)'}}>
+            {/* 日付ヘッダー */}
+            <div style={{display:'flex', background: headerBg, borderBottom:'2px solid var(--border)'}}>
               <div style={{
                 width:LABEL_W, flexShrink:0,
                 fontSize:10, fontWeight:600, color:'var(--text-sub)',
@@ -1573,12 +1251,14 @@ function GanttTab({ tasks, clients }) {
               })}
             </div>
 
+            {/* タスク行 */}
             {scheduled.map((t, ti) => (
               <div key={t.id} style={{
                 display:'flex', alignItems:'center',
                 borderBottom: ti < scheduled.length-1 ? '1px solid var(--border)' : 'none',
                 minHeight:44,
               }}>
+                {/* 左ラベル */}
                 <div style={{
                   width:LABEL_W, flexShrink:0, padding:'6px 8px',
                   borderRight:'1px solid var(--border)', alignSelf:'stretch',
@@ -1603,6 +1283,7 @@ function GanttTab({ tasks, clients }) {
                   )}
                 </div>
 
+                {/* グリッドセル */}
                 {dates.map((d, i) => {
                   const ds      = toStr(d);
                   const isToday = ds === todaySt;
@@ -1629,6 +1310,7 @@ function GanttTab({ tasks, clients }) {
                 })}
               </div>
             ))}
+
           </div>
         </div>
       )}
@@ -1636,112 +1318,133 @@ function GanttTab({ tasks, clients }) {
   );
 }
 
-// ── Log Drawer ────────────────────────────────────────────────
-function LogDrawer({ clients, editing, onSave, onClose }) {
-  const now = new Date();
-  const nowTime = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+// ── Suspect Drawer ────────────────────────────────────────────
+const SUSPECT_STATUS = ['未接触','接触済み','育成中'];
+const SUSPECT_STATUS_COLOR = { '未接触':'#6B7280', '接触済み':'#2563EB', '育成中':'#059669' };
+const SUSPECT_STATUS_BG   = { '未接触':'#F3F4F6', '接触済み':'#EFF6FF', '育成中':'#ECFDF5' };
+const LIFE_STAGES = ['未設定','独身','既婚(子なし)','子育て中','子独立後','定年前','定年後'];
+const RELATIONSHIPS = ['未設定','友人','職場','地域','家族・親族','SNS','その他'];
+const HELP_CATS = ['医療','生命','相続','損保','その他'];
+
+function SuspectDrawer({ editing, onSave, onClose }) {
+  const thisYear = new Date().getFullYear();
+  const years  = Array.from({length:6}, (_,i) => thisYear + i);
+  const months = Array.from({length:12}, (_,i) => i + 1);
+
   const [form, setForm] = useState({
-    title: '', category: 'call', duration: 30,
-    time: nowTime, date: todayStr(),
-    clientId: '', axis: '', memo: '',
+    name:'', status:'未接触', phone:'', occupation:'', jobType:'',
+    workplace:'', referrer:'', relationship:'未設定', helpCats:[],
+    lifeStage:'未設定', approachYear:'', approachMonth:'', memo:'',
     ...(editing || {}),
   });
-  const s = k => v => setForm(f => ({ ...f, [k]: v }));
+  const s = k => v => setForm(f => ({...f, [k]:v}));
+
+  const toggleHelpCat = cat => setForm(f => {
+    const cats = f.helpCats || [];
+    return {...f, helpCats: cats.includes(cat) ? cats.filter(c=>c!==cat) : [...cats, cat]};
+  });
 
   return (
-    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+    <div className="overlay" onClick={e => e.target===e.currentTarget && onClose()}>
       <div className="drawer">
         <div className="drawer-handle"/>
-        <div className="drawer-title">{editing ? 'ログ編集' : '業務ログ追加'}</div>
+        <div className="drawer-title">{editing ? 'サスペクト編集' : 'サスペクト追加'}</div>
 
         <div className="form-group">
-          <label className="form-label">内容</label>
-          <input className="form-input" placeholder="何をしましたか？" value={form.title}
-            onChange={e => s('title')(e.target.value)} autoFocus />
+          <label className="form-label">名前</label>
+          <input className="form-input" placeholder="氏名を入力..." value={form.name}
+            onChange={e => s('name')(e.target.value)} autoFocus />
         </div>
 
         <div className="form-group">
-          <label className="form-label">カテゴリ</label>
-          <div style={{display:'flex', flexWrap:'wrap', gap:6}}>
-            {LOG_CATS.map(c => (
-              <button key={c.id}
-                style={{
-                  padding:'7px 11px', borderRadius:8, border:'1.5px solid',
-                  fontSize:13, fontWeight:600, cursor:'pointer',
-                  borderColor: form.category===c.id ? c.color : 'var(--border)',
-                  background: form.category===c.id ? c.bg : 'var(--bg)',
-                  color: form.category===c.id ? c.color : 'var(--text-sub)',
-                  WebkitTapHighlightColor:'transparent',
-                }}
-                onClick={() => s('category')(c.id)}>{c.label}</button>
+          <label className="form-label">ステータス</label>
+          <div className="toggle-group">
+            {SUSPECT_STATUS.map(st => (
+              <button key={st} className="toggle-btn"
+                style={form.status===st ? {borderColor:SUSPECT_STATUS_COLOR[st], background:SUSPECT_STATUS_BG[st], color:SUSPECT_STATUS_COLOR[st]} : {}}
+                onClick={() => s('status')(st)}>{st}</button>
             ))}
           </div>
         </div>
 
         <div className="form-group">
-          <label className="form-label">所要時間</label>
-          <div style={{display:'flex', gap:8, alignItems:'center'}}>
-            <select className="form-select" style={{flex:1, textAlign:'center'}}
-              value={Math.floor((form.duration||0) / 60)}
-              onChange={e => s('duration')(parseInt(e.target.value)*60 + ((form.duration||0)%60))}>
-              {Array.from({length:13},(_,i)=>i).map(h=>(
-                <option key={h} value={h}>{h}時間</option>
-              ))}
-            </select>
-            <select className="form-select" style={{flex:1, textAlign:'center'}}
-              value={(form.duration||0) % 60}
-              onChange={e => s('duration')(Math.floor((form.duration||0)/60)*60 + parseInt(e.target.value))}>
-              {[0,15,30,45].map(m=>(
-                <option key={m} value={m}>{m}分</option>
-              ))}
-            </select>
-          </div>
+          <label className="form-label">連絡先（電話番号など）</label>
+          <input className="form-input" placeholder="090-0000-0000" value={form.phone}
+            onChange={e => s('phone')(e.target.value)} />
         </div>
 
-        <div style={{display:'flex', gap:10}}>
-          <div className="form-group" style={{flex:1}}>
-            <label className="form-label">日付</label>
-            <input className="form-input" type="date" value={form.date}
-              onChange={e => s('date')(e.target.value)} />
+        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10}}>
+          <div className="form-group">
+            <label className="form-label">職業</label>
+            <input className="form-input" placeholder="会社員など" value={form.occupation}
+              onChange={e => s('occupation')(e.target.value)} />
           </div>
-          <div className="form-group" style={{width:105}}>
-            <label className="form-label">時刻</label>
-            <input className="form-input" type="time" value={form.time}
-              onChange={e => s('time')(e.target.value)} />
+          <div className="form-group">
+            <label className="form-label">職種</label>
+            <input className="form-input" placeholder="営業・ITなど" value={form.jobType}
+              onChange={e => s('jobType')(e.target.value)} />
           </div>
         </div>
 
         <div className="form-group">
-          <label className="form-label">クライアント（任意）</label>
-          <select className="form-select" value={form.clientId} onChange={e => s('clientId')(e.target.value)}>
-            <option value="">なし</option>
-            {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          <label className="form-label">勤務先</label>
+          <input className="form-input" placeholder="会社名" value={form.workplace}
+            onChange={e => s('workplace')(e.target.value)} />
+        </div>
+
+        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10}}>
+          <div className="form-group">
+            <label className="form-label">紹介者</label>
+            <input className="form-input" placeholder="紹介者名" value={form.referrer}
+              onChange={e => s('referrer')(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">関係性</label>
+            <select className="form-select" value={form.relationship} onChange={e => s('relationship')(e.target.value)}>
+              {RELATIONSHIPS.map(r => <option key={r} value={r}>{r}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">お役に立てる分類（複数可）</label>
+          <div className="toggle-group" style={{flexWrap:'wrap'}}>
+            {HELP_CATS.map(cat => (
+              <button key={cat} className={`toggle-btn ${(form.helpCats||[]).includes(cat) ? 'sel-blue' : ''}`}
+                onClick={() => toggleHelpCat(cat)}>{cat}</button>
+            ))}
+          </div>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">ライフステージ</label>
+          <select className="form-select" value={form.lifeStage} onChange={e => s('lifeStage')(e.target.value)}>
+            {LIFE_STAGES.map(l => <option key={l} value={l}>{l}</option>)}
           </select>
         </div>
 
         <div className="form-group">
-          <label className="form-label">神メモ軸（任意）</label>
-          <div className="toggle-group">
-            <button className={`toggle-btn ${!form.axis ? 'sel-blue' : ''}`} onClick={() => s('axis')('')}>なし</button>
-            {KM_AXES.map(ax => {
-              const a = KM_AXIS_MAP[ax];
-              return (
-                <button key={ax} className="toggle-btn"
-                  style={form.axis===ax ? {borderColor:a.color, background:a.bg, color:a.color} : {}}
-                  onClick={() => s('axis')(ax)}>{ax}</button>
-              );
-            })}
+          <label className="form-label">アプローチ時期</label>
+          <div style={{display:'flex', gap:8, alignItems:'center'}}>
+            <select className="form-select" style={{flex:1}} value={form.approachYear} onChange={e => s('approachYear')(e.target.value)}>
+              <option value="">年</option>
+              {years.map(y => <option key={y} value={y}>{y}年</option>)}
+            </select>
+            <select className="form-select" style={{flex:1}} value={form.approachMonth} onChange={e => s('approachMonth')(e.target.value)}>
+              <option value="">月</option>
+              {months.map(m => <option key={m} value={m}>{m}月</option>)}
+            </select>
           </div>
         </div>
 
         <div className="form-group">
-          <label className="form-label">メモ（任意）</label>
-          <textarea className="form-textarea" placeholder="備考..." value={form.memo}
-            onChange={e => s('memo')(e.target.value)} style={{minHeight:60}} />
+          <label className="form-label">メモ</label>
+          <textarea className="form-textarea" placeholder="気づいたこと・会話メモなど..."
+            value={form.memo} onChange={e => s('memo')(e.target.value)} />
         </div>
 
         <button className="btn btn-primary btn-full" style={{marginTop:4}}
-          onClick={() => { if (!form.title.trim()) return; onSave({...form, id: form.id || uid()}); onClose(); }}>
+          onClick={() => { if (!form.name.trim()) return; onSave({...form, id:form.id||uid()}); onClose(); }}>
           保存
         </button>
       </div>
@@ -1749,172 +1452,138 @@ function LogDrawer({ clients, editing, onSave, onClose }) {
   );
 }
 
-// ── Tab: Log ──────────────────────────────────────────────────
-function LogTab({ logs, clients, onEdit, onDelete }) {
-  const [viewDate, setViewDate] = useState(todayStr());
-  const [showWeekly, setShowWeekly] = useState(false);
-  const clientName = id => clients.find(c => c.id === id)?.name;
+// ── Tab: Suspects ─────────────────────────────────────────────
+function SuspectsTab({ suspects, onAdd, onEdit, onDelete }) {
+  const [filterStatus, setFilterStatus] = useState('すべて');
+  const [expandedId, setExpandedId]     = useState(null);
 
-  const dayEntries = [...logs]
-    .filter(l => l.date === viewDate)
-    .sort((a, b) => (b.time || '').localeCompare(a.time || ''));
+  const filtered = filterStatus === 'すべて'
+    ? suspects
+    : suspects.filter(s => s.status === filterStatus);
 
-  const totalMin = dayEntries.reduce((s, l) => s + (l.duration || 0), 0);
-  const today = todayStr();
-  const weekAgo = shiftDate(today, -6);
-  const weekLogs = logs.filter(l => l.date >= weekAgo && l.date <= today);
-  const weekTotal = weekLogs.reduce((s, l) => s + (l.duration || 0), 0);
-  const catTotals = LOG_CATS.map(c => ({
-    ...c,
-    total: weekLogs.filter(l => l.category === c.id).reduce((s, l) => s + (l.duration || 0), 0),
-  })).filter(c => c.total > 0).sort((a, b) => b.total - a.total);
-
-  const dateLabel = (() => {
-    if (viewDate === today) return `今日（${parseInt(today.slice(5,7))}/${parseInt(today.slice(8))}）`;
-    const yest = shiftDate(today, -1);
-    if (viewDate === yest) {
-      return `昨日（${parseInt(viewDate.slice(5,7))}/${parseInt(viewDate.slice(8))}）`;
-    }
-    const d = new Date(viewDate + 'T00:00:00');
-    return `${d.getMonth()+1}月${d.getDate()}日（${JP_DAY[d.getDay()]}）`;
-  })();
+  const approachStr = s => {
+    if (!s.approachYear && !s.approachMonth) return null;
+    return `${s.approachYear||''}年 ${s.approachMonth||''}月頃`;
+  };
 
   return (
     <div>
-      <div className="section-title">業務ログ</div>
-      <div style={{
-        display:'flex', alignItems:'center', justifyContent:'space-between',
-        background:'var(--surface)', borderRadius:12, border:'1px solid var(--border)',
-        padding:'8px 12px', marginBottom:12,
-      }}>
-        <button onClick={() => setViewDate(d => shiftDate(d, -1))}
-          style={{fontSize:22, fontWeight:700, padding:'2px 10px', border:'none',
-            background:'none', cursor:'pointer', color:'var(--text-sub)',
-            WebkitTapHighlightColor:'transparent'}}>‹</button>
-        <div style={{fontWeight:700, fontSize:15}}>{dateLabel}</div>
-        <button
-          onClick={() => viewDate < today && setViewDate(d => shiftDate(d, 1))}
-          style={{fontSize:22, fontWeight:700, padding:'2px 10px', border:'none',
-            background:'none', cursor: viewDate >= today ? 'default' : 'pointer',
-            color:'var(--text-sub)', opacity: viewDate >= today ? 0.25 : 1,
-            WebkitTapHighlightColor:'transparent'}}>›</button>
+      <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12}}>
+        <div className="section-title" style={{marginBottom:0}}>サスペクトリスト</div>
+        <button className="btn btn-primary" style={{padding:'6px 14px', fontSize:13}} onClick={onAdd}>＋ 追加</button>
       </div>
 
-      {dayEntries.length > 0 && (
-        <div style={{
-          display:'flex', gap:10, alignItems:'center',
-          marginBottom:10, fontSize:13, color:'var(--text-sub)', paddingLeft:2,
-        }}>
-          <span><span style={{fontWeight:700, color:'var(--text)'}}>{dayEntries.length}</span> 件</span>
-          <span>·</span>
-          <span>合計 <span style={{fontWeight:700, color:'var(--text)'}}>{fmtDur(totalMin)}</span></span>
-        </div>
-      )}
+      {/* ステータスフィルター */}
+      <div className="toggle-group" style={{marginBottom:14}}>
+        {['すべて', ...SUSPECT_STATUS].map(st => (
+          <button key={st} className={`toggle-btn`}
+            style={filterStatus===st ? (st==='すべて'
+              ? {borderColor:'var(--accent)', background:'var(--accent-light)', color:'var(--accent)'}
+              : {borderColor:SUSPECT_STATUS_COLOR[st], background:SUSPECT_STATUS_BG[st], color:SUSPECT_STATUS_COLOR[st]}) : {}}
+            onClick={() => setFilterStatus(st)}>{st}</button>
+        ))}
+      </div>
 
-      {dayEntries.length === 0 ? (
+      {filtered.length === 0 ? (
         <div className="empty">
-          <div className="empty-icon">📋</div>
-          <div>この日の記録はありません</div>
+          <div className="empty-icon">🎯</div>
+          <div>{filterStatus==='すべて' ? 'サスペクトを追加してください' : `${filterStatus}のサスペクトはいません`}</div>
         </div>
       ) : (
-        <div className="card" style={{padding:'4px 14px'}}>
-          {dayEntries.map((l, i) => {
-            const c = logCat(l.category);
+        <div style={{display:'flex', flexDirection:'column', gap:10}}>
+          {filtered.map(s => {
+            const isOpen = expandedId === s.id;
+            const sc = SUSPECT_STATUS_COLOR[s.status];
+            const sb = SUSPECT_STATUS_BG[s.status];
             return (
-              <div key={l.id} style={{
-                display:'flex', gap:10, alignItems:'flex-start',
-                padding:'11px 0',
-                borderBottom: i < dayEntries.length-1 ? '1px solid var(--border)' : 'none',
-              }}>
-                <div style={{flexShrink:0, textAlign:'center', minWidth:40}}>
-                  {l.time && <div style={{fontSize:12, fontWeight:700, color:'var(--text)'}}>{l.time}</div>}
-                  <div style={{
-                    fontSize:11, fontWeight:700, marginTop:3,
-                    color: c.color, background: c.bg,
-                    borderRadius:4, padding:'1px 5px', display:'inline-block',
-                  }}>{fmtDur(l.duration)}</div>
-                </div>
-                <div style={{flex:1, minWidth:0}}>
-                  <div style={{fontSize:14, fontWeight:600}}>{l.title}</div>
-                  <div style={{display:'flex', flexWrap:'wrap', gap:4, marginTop:4}}>
-                    <span style={{
-                      fontSize:11, fontWeight:700, padding:'1px 7px', borderRadius:5,
-                      background: c.bg, color: c.color,
-                    }}>{c.label}</span>
-                    {clientName(l.clientId) && <span className="tag tag-client">{clientName(l.clientId)}</span>}
-                    {l.axis && <AxisBadge axis={l.axis} />}
+              <div key={s.id} className="card" style={{padding:0, overflow:'hidden'}}>
+                {/* ヘッダー行 */}
+                <div style={{display:'flex', alignItems:'center', gap:10, padding:'12px 14px', cursor:'pointer'}}
+                  onClick={() => setExpandedId(isOpen ? null : s.id)}>
+                  <div style={{flex:1, minWidth:0}}>
+                    <div style={{display:'flex', alignItems:'center', gap:7, flexWrap:'wrap'}}>
+                      <span style={{fontSize:15, fontWeight:700}}>{s.name}</span>
+                      <span style={{fontSize:11, fontWeight:700, padding:'2px 8px', borderRadius:10,
+                        color:sc, background:sb, border:`1px solid ${sc}33`}}>{s.status}</span>
+                    </div>
+                    <div style={{fontSize:12, color:'var(--text-sub)', marginTop:3, display:'flex', gap:8, flexWrap:'wrap'}}>
+                      {s.workplace && <span>🏢 {s.workplace}</span>}
+                      {approachStr(s) && <span>📅 {approachStr(s)}</span>}
+                      {s.referrer  && <span>👤 {s.referrer}紹介</span>}
+                    </div>
+                    {(s.helpCats||[]).length > 0 && (
+                      <div style={{display:'flex', gap:4, marginTop:5, flexWrap:'wrap'}}>
+                        {s.helpCats.map(c => (
+                          <span key={c} style={{fontSize:10, padding:'1px 6px', borderRadius:4,
+                            background:'var(--accent-light)', color:'var(--accent)', fontWeight:600}}>{c}</span>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                  {l.memo && <div style={{fontSize:12, color:'var(--text-sub)', marginTop:4, lineHeight:1.4}}>{l.memo}</div>}
+                  <span style={{color:'var(--text-sub)', fontSize:13}}>{isOpen ? '▲' : '▼'}</span>
                 </div>
-                <div style={{display:'flex', flexDirection:'column', gap:2, flexShrink:0}}>
-                  <button className="btn btn-ghost btn-sm" style={{fontSize:14, padding:'4px 7px'}} onClick={() => onEdit(l)}>✎</button>
-                  <button className="btn btn-ghost btn-sm" style={{color:'var(--danger)', fontSize:16, padding:'4px 7px'}} onClick={() => onDelete(l.id)}>×</button>
-                </div>
+
+                {/* 展開詳細 */}
+                {isOpen && (
+                  <div style={{borderTop:'1px solid var(--border)', padding:'12px 14px', background:'var(--bg)'}}>
+                    <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:10}}>
+                      {[
+                        ['連絡先', s.phone],
+                        ['職業',   s.occupation],
+                        ['職種',   s.jobType],
+                        ['関係性', s.relationship !== '未設定' ? s.relationship : null],
+                        ['ライフS', s.lifeStage !== '未設定' ? s.lifeStage : null],
+                      ].filter(([,v]) => v).map(([label, val]) => (
+                        <div key={label}>
+                          <div style={{fontSize:10, color:'var(--text-sub)', fontWeight:600}}>{label}</div>
+                          <div style={{fontSize:13, fontWeight:500, marginTop:1}}>{val}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {s.memo && (
+                      <div style={{marginBottom:10}}>
+                        <div style={{fontSize:10, color:'var(--text-sub)', fontWeight:600, marginBottom:2}}>メモ</div>
+                        <div style={{fontSize:13, lineHeight:1.6, color:'var(--text)'}}>{s.memo}</div>
+                      </div>
+                    )}
+                    <div style={{display:'flex', gap:8}}>
+                      <button className="btn btn-primary" style={{flex:1, fontSize:13}}
+                        onClick={() => onEdit(s)}>編集</button>
+                      <button className="btn btn-ghost" style={{flex:1, fontSize:13, color:'var(--danger)', borderColor:'var(--danger)'}}
+                        onClick={() => { if(window.confirm(`${s.name}を削除しますか？`)) { onDelete(s.id); setExpandedId(null); }}}>削除</button>
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}
         </div>
       )}
-
-      <div className="card" style={{marginTop:10}}>
-        <div style={{
-          display:'flex', justifyContent:'space-between', alignItems:'center',
-          cursor:'pointer', userSelect:'none',
-        }} onClick={() => setShowWeekly(v => !v)}>
-          <div className="card-title" style={{margin:0}}>📊 週次サマリ（7日間）</div>
-          <span style={{fontSize:13, color:'var(--text-sub)'}}>{showWeekly ? '▲' : '▼'}</span>
-        </div>
-        {showWeekly && (
-          weekTotal === 0
-            ? <div className="empty" style={{padding:'12px 0'}}>記録がありません</div>
-            : <div style={{marginTop:12}}>
-                <div style={{fontSize:12, color:'var(--text-sub)', marginBottom:10}}>
-                  合計 <span style={{fontWeight:700, color:'var(--text)'}}>{fmtDur(weekTotal)}</span> · {weekLogs.length}件
-                </div>
-                {catTotals.map(c => (
-                  <div key={c.id} style={{marginBottom:10}}>
-                    <div style={{display:'flex', justifyContent:'space-between', marginBottom:4}}>
-                      <span style={{fontSize:12, fontWeight:600, color:c.color}}>{c.label}</span>
-                      <span style={{fontSize:12, fontWeight:700}}>{fmtDur(c.total)}</span>
-                    </div>
-                    <div style={{height:6, borderRadius:3, background:'var(--border)', overflow:'hidden'}}>
-                      <div style={{
-                        height:'100%', borderRadius:3, background:c.color,
-                        width:`${Math.round(c.total / weekTotal * 100)}%`,
-                      }}/>
-                    </div>
-                  </div>
-                ))}
-              </div>
-        )}
-      </div>
     </div>
   );
 }
 
-// ── Bottom Nav ────────────────────────────────────────────────
+// ── Bottom Nav Config ─────────────────────────────────────────
 const TABS = [
-  { id:'today',    label:'今日',    icon:'✓' },
-  { id:'gantt',    label:'ガント',  icon:'📊' },
-  { id:'matrix',   label:'マトリクス',   icon:'▦' },
-  { id:'clients',  label:'クライアント', icon:'👥' },
-  { id:'vision',   label:'ビジョン',icon:'⭐' },
-  { id:'log',      label:'ログ',    icon:'📋' },
+  { id:'today',    label:'今日',   icon:'✓'  },
+  { id:'gantt',    label:'ガント', icon:'📊' },
+  { id:'matrix',   label:'行列',   icon:'▦'  },
+  { id:'clients',  label:'顧客',   icon:'👥' },
+  { id:'suspects', label:'候補',   icon:'🎯' },
+  { id:'vision',   label:'神メモ', icon:'⭐' },
 ];
 
 // ── App ───────────────────────────────────────────────────────
 function App() {
   const [tab, setTab]         = useState('today');
-  const [tasks, setTasks]     = useLS('ml_tasks_v1', []);
-  const [clients, setClients] = useLS('ml_clients_v1', []);
-  const [vision, setVision]   = useLS('ml_vision_v1', {});
-  const [logs, setLogs]       = useLS('ml_logs_v1', []);
-  const [sales, setSales]     = useLS('ml_sales_v1', { target: 0, current: 0, label: '今月' });
+  const [tasks,    setTasks]    = useLS('ml_tasks_v1', []);
+  const [clients,  setClients]  = useLS('ml_clients_v1', []);
+  const [suspects, setSuspects] = useLS('ml_suspects_v1', []);
+  const [vision,   setVision]   = useLS('ml_vision_v1', {});
 
-  const [taskDrawer,   setTaskDrawer]   = useState(null);
-  const [clientDrawer, setClientDrawer] = useState(null);
-  const [logDrawer,    setLogDrawer]    = useState(null);
-  const [salesDrawer,  setSalesDrawer]  = useState(false);
+  const [taskDrawer,    setTaskDrawer]    = useState(null);
+  const [clientDrawer,  setClientDrawer]  = useState(null);
+  const [suspectDrawer, setSuspectDrawer] = useState(null);
 
   // Task CRUD
   const upsertTask = t => setTasks(prev => {
@@ -1923,9 +1592,6 @@ function App() {
     return [t, ...prev];
   });
   const toggleTask = id => setTasks(prev => prev.map(t => t.id===id ? {...t, completed:!t.completed} : t));
-  const toggleStep = (taskId, stepId) => setTasks(prev => prev.map(t =>
-    t.id===taskId ? {...t, steps: (t.steps||[]).map(st => st.id===stepId ? {...st, done:!st.done} : st)} : t
-  ));
   const deleteTask = id => setTasks(prev => prev.filter(t => t.id!==id));
 
   // Client CRUD
@@ -1935,21 +1601,18 @@ function App() {
     return [c, ...prev];
   });
   const deleteClient = id => setClients(prev => prev.filter(c => c.id!==id));
-  // クライアント完了（アーカイブ）
-  const archiveClient   = id => setClients(prev => prev.map(c => c.id===id ? {...c, archived:true}  : c));
-  const unarchiveClient = id => setClients(prev => prev.map(c => c.id===id ? {...c, archived:false} : c));
+
+  // Suspect CRUD
+  const upsertSuspect = s => setSuspects(prev => {
+    const i = prev.findIndex(x => x.id===s.id);
+    if (i>=0) { const a=[...prev]; a[i]=s; return a; }
+    return [s, ...prev];
+  });
+  const deleteSuspect = id => setSuspects(prev => prev.filter(s => s.id!==id));
 
   const updateVision = (key, val) => setVision(prev => ({...prev, [key]: val}));
 
-  // Log CRUD
-  const upsertLog = l => setLogs(prev => {
-    const i = prev.findIndex(x => x.id === l.id);
-    if (i >= 0) { const a = [...prev]; a[i] = l; return a; }
-    return [l, ...prev];
-  });
-  const deleteLog = id => setLogs(prev => prev.filter(l => l.id !== id));
-
-  const showFab = tab==='today' || tab==='clients' || tab==='log';
+  const showFab = tab==='today' || tab==='clients';
 
   return (
     <>
@@ -1964,12 +1627,8 @@ function App() {
         {tab==='today' && (
           <TodayTab tasks={tasks} clients={clients}
             onToggle={toggleTask}
-            onToggleStep={toggleStep}
             onEdit={t => setTaskDrawer(t)}
-            onDelete={deleteTask}
-            sales={sales}
-            onSalesEdit={() => setSalesDrawer(true)}
-          />
+            onDelete={deleteTask} />
         )}
         {tab==='gantt'    && <GanttTab tasks={tasks} clients={clients} />}
         {tab==='matrix'   && <MatrixTab tasks={tasks} clients={clients} />}
@@ -1977,23 +1636,20 @@ function App() {
           <ClientsTab clients={clients} tasks={tasks}
             onAdd={() => setClientDrawer('new')}
             onEdit={c => setClientDrawer(c)}
-            onDelete={deleteClient}
-            onArchive={archiveClient}
-            onUnarchive={unarchiveClient}
-            onDeleteArchived={deleteClient}
-          />
+            onDelete={deleteClient} />
+        )}
+        {tab==='suspects' && (
+          <SuspectsTab suspects={suspects}
+            onAdd={() => setSuspectDrawer('new')}
+            onEdit={s => setSuspectDrawer(s)}
+            onDelete={deleteSuspect} />
         )}
         {tab==='vision'   && <VisionTab vision={vision} onChange={updateVision} tasks={tasks} clients={clients} />}
-        {tab==='log'      && <LogTab logs={logs} clients={clients} onEdit={l => setLogDrawer(l)} onDelete={deleteLog} />}
       </div>
 
       {showFab && (
         <button className="fab"
-          onClick={() => {
-            if (tab==='today') setTaskDrawer('new');
-            else if (tab==='clients') setClientDrawer('new');
-            else if (tab==='log') setLogDrawer('new');
-          }}>
+          onClick={() => tab==='today' ? setTaskDrawer('new') : setClientDrawer('new')}>
           +
         </button>
       )}
@@ -2026,21 +1682,11 @@ function App() {
           onClose={() => setClientDrawer(null)}
         />
       )}
-
-      {logDrawer && (
-        <LogDrawer
-          clients={clients}
-          editing={logDrawer==='new' ? null : logDrawer}
-          onSave={upsertLog}
-          onClose={() => setLogDrawer(null)}
-        />
-      )}
-
-      {salesDrawer && (
-        <SalesDrawer
-          sales={sales}
-          onSave={setSales}
-          onClose={() => setSalesDrawer(false)}
+      {suspectDrawer && (
+        <SuspectDrawer
+          editing={suspectDrawer==='new' ? null : suspectDrawer}
+          onSave={upsertSuspect}
+          onClose={() => setSuspectDrawer(null)}
         />
       )}
     </>
