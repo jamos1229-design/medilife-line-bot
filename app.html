@@ -684,8 +684,140 @@ function ClientDrawer({ editing, onSave, onClose }) {
   );
 }
 
+// ── Sales Tracker ─────────────────────────────────────────────
+function SalesTracker({ sales, onChange }) {
+  const [editing, setEditing] = React.useState(false);
+  const [form, setForm] = React.useState(sales);
+
+  const target  = Number(sales.target)  || 0;
+  const current = Number(sales.current) || 0;
+  const pct     = target > 0 ? Math.min(Math.round(current / target * 100), 999) : 0;
+  const achieved = target > 0 && current >= target;
+
+  const fmt = v => Number(v).toLocaleString('ja-JP');
+
+  const open = () => { setForm(sales); setEditing(true); };
+  const save = () => { onChange(form); setEditing(false); };
+
+  return (
+    <div className="card" style={{marginBottom:12, position:'relative', overflow:'hidden'}}>
+      {/* グラデーション背景バー */}
+      {target > 0 && (
+        <div style={{
+          position:'absolute', top:0, left:0, bottom:0,
+          width: `${Math.min(pct, 100)}%`,
+          background: achieved
+            ? 'linear-gradient(90deg, #D1FAE5, #A7F3D0)'
+            : 'linear-gradient(90deg, #EEF2FF, #C7D2FE)',
+          transition: 'width 0.6s ease',
+          zIndex:0,
+        }} />
+      )}
+      <div style={{position:'relative', zIndex:1}}>
+        <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:6}}>
+          <div style={{fontSize:13, fontWeight:700, color:'var(--text-sub)'}}>
+            💰 売上トラッカー
+            {sales.label && <span style={{marginLeft:6, color:'var(--text-sub)', fontWeight:500}}>（{sales.label}）</span>}
+          </div>
+          <button onClick={open} style={{
+            fontSize:11, padding:'3px 10px', borderRadius:6,
+            border:'1px solid var(--border)', background:'rgba(255,255,255,0.8)',
+            color:'var(--text-sub)', cursor:'pointer', fontWeight:600,
+          }}>設定</button>
+        </div>
+
+        {target === 0 ? (
+          <div style={{textAlign:'center', color:'var(--text-sub)', fontSize:13, padding:'8px 0'}}>
+            「設定」から目標額を入力してください
+          </div>
+        ) : (
+          <>
+            <div style={{display:'flex', alignItems:'baseline', gap:6, marginBottom:6}}>
+              <span style={{fontSize:26, fontWeight:800, color: achieved ? '#059669' : 'var(--accent)'}}>
+                ¥{fmt(current)}
+              </span>
+              <span style={{fontSize:13, color:'var(--text-sub)'}}>/ ¥{fmt(target)}</span>
+              {achieved && <span style={{fontSize:18, marginLeft:4}}>🎉</span>}
+            </div>
+
+            {/* プログレスバー */}
+            <div style={{background:'rgba(0,0,0,0.08)', borderRadius:6, height:8, overflow:'hidden', marginBottom:4}}>
+              <div style={{
+                height:'100%', borderRadius:6,
+                width:`${Math.min(pct, 100)}%`,
+                background: achieved ? '#10B981' : 'var(--accent)',
+                transition:'width 0.6s ease',
+              }} />
+            </div>
+
+            <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+              <span style={{fontSize:12, color:'var(--text-sub)'}}>
+                {achieved ? '🎉 目標達成！' : `残り ¥${fmt(Math.max(target - current, 0))}`}
+              </span>
+              <span style={{fontSize:13, fontWeight:700, color: achieved ? '#059669' : 'var(--accent)'}}>
+                {pct}%
+              </span>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* 設定ドロワー */}
+      {editing && (
+        <div style={{
+          position:'fixed', inset:0, background:'rgba(0,0,0,0.45)',
+          display:'flex', alignItems:'flex-end', justifyContent:'center',
+          zIndex:200,
+        }} onClick={() => setEditing(false)}>
+          <div style={{
+            background:'#fff', borderRadius:'16px 16px 0 0', padding:24,
+            width:'100%', maxWidth:430,
+          }} onClick={e => e.stopPropagation()}>
+            <div style={{fontSize:16, fontWeight:700, marginBottom:16}}>💰 売上トラッカー設定</div>
+
+            {[
+              { label:'期間ラベル（例：今月・6月）', key:'label', type:'text', placeholder:'今月' },
+              { label:'目標額（円）',   key:'target',  type:'number', placeholder:'例: 500000' },
+              { label:'現在の売上（円）', key:'current', type:'number', placeholder:'例: 320000' },
+            ].map(f => (
+              <div key={f.key} style={{marginBottom:14}}>
+                <label style={{fontSize:12, fontWeight:600, color:'var(--text-sub)', display:'block', marginBottom:4}}>
+                  {f.label}
+                </label>
+                <input
+                  type={f.type}
+                  inputMode={f.type === 'number' ? 'numeric' : 'text'}
+                  placeholder={f.placeholder}
+                  value={form[f.key] || ''}
+                  onChange={e => setForm(p => ({...p, [f.key]: e.target.value}))}
+                  style={{
+                    width:'100%', padding:'10px 12px', border:'1.5px solid var(--border)',
+                    borderRadius:8, fontSize:15,
+                  }}
+                />
+              </div>
+            ))}
+
+            <div style={{display:'flex', gap:8, marginTop:8}}>
+              <button onClick={() => setEditing(false)} style={{
+                flex:1, padding:'12px', border:'1px solid var(--border)',
+                borderRadius:10, background:'#fff', fontSize:15, cursor:'pointer',
+              }}>キャンセル</button>
+              <button onClick={save} style={{
+                flex:2, padding:'12px', border:'none',
+                borderRadius:10, background:'var(--accent)', color:'#fff',
+                fontSize:15, fontWeight:700, cursor:'pointer',
+              }}>保存</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Tab: Today ────────────────────────────────────────────────
-function TodayTab({ tasks, clients, onToggle, onEdit, onDelete }) {
+function TodayTab({ tasks, clients, onToggle, onEdit, onDelete, sales, onSalesChange }) {
   const td = todayStr();
   const todayDate = new Date();
   const clientName = id => clients.find(c => c.id === id)?.name;
@@ -783,6 +915,8 @@ function TodayTab({ tasks, clients, onToggle, onEdit, onDelete }) {
   return (
     <div>
       <div style={{fontSize:13, color:'var(--text-sub)', fontWeight:500, marginBottom:12}}>{todayFull()}</div>
+
+      <SalesTracker sales={sales} onChange={onSalesChange} />
 
       {recurringToday.length > 0 && (
         <div className="card">
@@ -1568,7 +1702,7 @@ function SuspectsTab({ suspects, onAdd, onEdit, onDelete }) {
 }
 
 // ── Tab: Log ───────────────────────────────────────────────────
-function LogTab({ tasks, clients, suspects, vision, onRestore }) {
+function LogTab({ tasks, clients, suspects, vision, sales, onRestore }) {
   const completedTasks = tasks.filter(t => t.completed);
   const activeTasks    = tasks.filter(t => !t.completed).length;
   const [restoreMsg, setRestoreMsg] = React.useState('');
@@ -1588,7 +1722,7 @@ function LogTab({ tasks, clients, suspects, vision, onRestore }) {
     const data = {
       exportedAt: new Date().toISOString(),
       version: 1,
-      tasks, clients, suspects, vision,
+      tasks, clients, suspects, vision, sales,
     };
     const json = JSON.stringify(data, null, 2);
     const blob = new Blob([json], { type: 'application/json' });
@@ -1777,6 +1911,7 @@ function App() {
   const [clients,  setClients]  = useLS('ml_clients_v1', []);
   const [suspects, setSuspects] = useLS('ml_suspects_v1', []);
   const [vision,   setVision]   = useLS('ml_vision_v1', {});
+  const [sales,    setSales]    = useLS('ml_sales_v1',  { target:0, current:0, label:'今月' });
 
   const [taskDrawer,    setTaskDrawer]    = useState(null);
   const [clientDrawer,  setClientDrawer]  = useState(null);
@@ -1825,7 +1960,8 @@ function App() {
           <TodayTab tasks={tasks} clients={clients}
             onToggle={toggleTask}
             onEdit={t => setTaskDrawer(t)}
-            onDelete={deleteTask} />
+            onDelete={deleteTask}
+            sales={sales} onSalesChange={setSales} />
         )}
         {tab==='gantt'    && <GanttTab tasks={tasks} clients={clients} />}
         {tab==='matrix'   && <MatrixTab tasks={tasks} clients={clients} />}
@@ -1842,12 +1978,13 @@ function App() {
             onDelete={deleteSuspect} />
         )}
         {tab==='vision'   && <VisionTab vision={vision} onChange={updateVision} tasks={tasks} clients={clients} />}
-        {tab==='log'      && <LogTab tasks={tasks} clients={clients} suspects={suspects} vision={vision}
+        {tab==='log'      && <LogTab tasks={tasks} clients={clients} suspects={suspects} vision={vision} sales={sales}
             onRestore={(data) => {
               if (data.tasks)    setTasks(data.tasks);
               if (data.clients)  setClients(data.clients);
               if (data.suspects) setSuspects(data.suspects);
               if (data.vision)   setVision(data.vision);
+              if (data.sales)    setSales(data.sales);
             }} />}
       </div>
 
