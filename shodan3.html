@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>商談記録</title>
+<style>
+:root{--bg:#0f0f13;--sur:#1a1a24;--sur2:#22222f;--bdr:#2e2e40;--acc:#6c63ff;--txt:#e8e8f0;--txt2:#888899;--ok:#4caf7d;--warn:#f5a623;--ng:#ff6b6b;}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+body{background:var(--bg);color:var(--txt);font-family:'Hiragino Kaku Gothic ProN',sans-serif;min-height:100vh;}
+/* NAV */
+.nav{position:sticky;top:0;z-index:100;background:var(--bg);border-bottom:1px solid var(--bdr);display:flex;align-items:center;padding:12px 16px;gap:10px;}
+.nav-title{font-size:17px;font-weight:700;flex:1;}
+.nav-btn{background:var(--acc);color:#fff;border:none;border-radius:20px;padding:8px 16px;font-size:14px;font-weight:700;cursor:pointer;}
+/* TABS */
+.tabs{display:flex;border-bottom:1px solid var(--bdr);background:var(--bg);}
+.tab{flex:1;padding:12px;text-align:center;font-size:13px;color:var(--txt2);cursor:pointer;border-bottom:2px solid transparent;transition:all .2s;}
+.tab.active{color:var(--acc);border-bottom-color:var(--acc);font-weight:700;}
+/* SEARCH */
+.search-wrap{padding:12px 12px 4px;}
+.search-input{width:100%;background:var(--sur);border:1px solid var(--bdr);border-radius:10px;padding:10px 13px;color:var(--txt);font-size:15px;outline:none;font-family:inherit;}
+/* LIST */
+#listView{padding:8px 12px 12px;}
+.card{background:var(--sur);border-radius:14px;padding:14px;border:1px solid var(--bdr);cursor:pointer;margin-bottom:10px;}
+.card:active{opacity:.8;}
+.card-top{display:flex;align-items:center;gap:10px;margin-bottom:6px;}
+.card-name{font-size:16px;font-weight:700;flex:1;}
+.badge{padding:3px 10px;border-radius:20px;font-size:12px;font-weight:700;}
+.bA{background:#1a3a2a;color:var(--ok);}
+.bB{background:#3a2a10;color:var(--warn);}
+.bC{background:#2a2a2a;color:var(--txt2);}
+.card-date{font-size:12px;color:var(--txt2);margin-bottom:6px;}
+.card-tags{display:flex;gap:6px;flex-wrap:wrap;}
+.tag{background:var(--sur2);border-radius:6px;padding:3px 8px;font-size:11px;color:var(--txt2);}
+.tag-ok{color:var(--ok);}
+.empty{text-align:center;color:var(--txt2);padding:60px 20px;font-size:15px;line-height:2;}
+/* FORM */
+#formView{padding:16px;display:none;}
+.form-back{background:none;border:none;color:var(--acc);font-size:15px;cursor:pointer;padding:0 0 16px;display:flex;align-items:center;gap:4px;}
+.form-title{font-size:18px;font-weight:700;margin-bottom:20px;}
+.sec{margin-bottom:20px;}
+.sec-title{font-size:11px;font-weight:700;color:var(--acc);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--bdr);}
+.row{margin-bottom:12px;}
+.lbl{font-size:12px;color:var(--txt2);margin-bottom:5px;display:block;}
+.inp{width:100%;background:var(--sur);border:1px solid var(--bdr);border-radius:10px;padding:11px 13px;color:var(--txt);font-size:15px;outline:none;font-family:inherit;transition:border-color .2s;}
+.inp:focus{border-color:var(--acc);}
+textarea.inp{min-height:80px;resize:none;line-height:1.5;}
+/* TEMP */
+.temp-row{display:flex;gap:10px;}
+.temp-btn{flex:1;padding:12px;border-radius:10px;border:2px solid var(--bdr);background:var(--sur);color:var(--txt2);font-size:15px;font-weight:700;cursor:pointer;text-align:center;}
+.tA{border-color:var(--ok);background:#1a3a2a;color:var(--ok);}
+.tB{border-color:var(--warn);background:#3a2a10;color:var(--warn);}
+.tC{border-color:var(--txt2);background:#2a2a2a;color:var(--txt2);}
+/* RESULT */
+.result-row{display:flex;gap:8px;flex-wrap:wrap;}
+.res-btn{padding:8px 14px;border-radius:8px;border:2px solid var(--bdr);background:var(--sur);color:var(--txt2);font-size:13px;font-weight:600;cursor:pointer;}
+.res-btn.sel{border-color:var(--ok);background:#1a3a2a;color:var(--ok);}
+/* PHOTO */
+.photo-area{border:2px dashed var(--bdr);border-radius:12px;padding:20px;text-align:center;cursor:pointer;}
+.photo-area:active{border-color:var(--acc);}
+.photo-preview{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;}
+.photo-thumb{width:80px;height:80px;object-fit:cover;border-radius:8px;}
+.photo-input{display:none;}
+/* SAVE */
+.save-btn{width:100%;padding:16px;background:var(--acc);border:none;border-radius:14px;color:#fff;font-size:17px;font-weight:700;cursor:pointer;margin-top:10px;}
+.save-btn:active{opacity:.8;}
+/* DETAIL */
+#detailView{padding:16px;display:none;}
+.det-back{background:none;border:none;color:var(--acc);font-size:15px;cursor:pointer;padding:0 0 16px;display:flex;align-items:center;gap:4px;}
+.det-name{font-size:24px;font-weight:700;margin-bottom:4px;}
+.det-date{font-size:13px;color:var(--txt2);margin-bottom:16px;}
+.det-sec{background:var(--sur);border-radius:12px;padding:14px;border:1px solid var(--bdr);margin-bottom:12px;}
+.det-sec-title{font-size:11px;color:var(--acc);font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;}
+.det-row{margin-bottom:8px;}
+.det-lbl{font-size:11px;color:var(--txt2);margin-bottom:2px;}
+.det-val{font-size:14px;line-height:1.6;}
+.det-photos{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;}
+.det-photo{width:100px;height:100px;object-fit:cover;border-radius:10px;}
+.edit-btn{background:none;border:1px solid var(--acc);border-radius:8px;color:var(--acc);padding:6px 14px;font-size:12px;cursor:pointer;margin-bottom:16px;}
+/* AI */
+.ai-btns{display:flex;flex-direction:column;gap:10px;margin-top:16px;}
+.ai-btn{padding:14px;border-radius:12px;border:1px solid var(--bdr);background:var(--sur2);color:var(--txt);font-size:14px;font-weight:600;cursor:pointer;text-align:left;}
+.ai-btn:active{opacity:.7;}
+.ai-loading{text-align:center;color:var(--txt2);padding:20px;display:none;}
+.ai-result{background:var(--sur);border:1px solid var(--acc);border-radius:12px;padding:14px;margin-top:10px;font-size:14px;line-height:1.7;white-space:pre-wrap;display:none;}
+.copy-btn{background:var(--sur2);border:1px solid var(--bdr);border-radius:8px;padding:8px 14px;color:var(--txt2);font-size:12px;cursor:pointer;margin-top:8px;display:none;}
+.del-btn{width:100%;padding:14px;background:none;border:1px solid var(--ng);border-radius:12px;color:var(--ng);font-size:15px;font-weight:600;cursor:pointer;margin-top:10px;}
+/* STATS */
+#statsView{padding:16px;display:none;}
+.stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;}
+.stat-card{background:var(--sur);border-radius:12px;padding:16px;border:1px solid var(--bdr);text-align:center;}
+.stat-num{font-size:32px;font-weight:700;color:var(--acc);}
+.stat-lbl{font-size:12px;color:var(--txt2);margin-top:4px;}
+.pb{height:40px;}
+</style>
+</head>
+<body>
+
+<div class="nav" id="mainNav">
+  <span class="nav-title">📋 商談記録</span>
+  <button style="background:none;border:1px solid var(--bdr);color:var(--txt2);border-radius:20px;padding:7px 12px;font-size:13px;cursor:pointer;" onclick="exportCSV()">💾 保存</button>
+  <button class="nav-btn" onclick="showForm()">＋ 新規</button>
+</div>
+<div class="tabs" id="mainTabs">
+  <div class="tab active" onclick="switchTab('list')">一覧</div>
+  <div class="tab" onclick="switchTab('stats')">集計</div>
+</div>
+
+<!-- LIST -->
+<div id="listView">
+  <div class="search-wrap">
+    <input class="search-input" type="text" placeholder="🔍 顧客名・メモで検索" oninput="renderList(this.value)">
+  </div>
+  <div id="cardContainer" style="padding:8px 0;"></div>
+</div>
+
+<!-- STATS -->
+<div id="statsView">
+  <div class="stat-grid">
+    <div class="stat-card"><div class="stat-num" id="stTotal">0</div><div class="stat-lbl">総商談数</div></div>
+    <div class="stat-card"><div class="stat-num" id="stSeiyaku">0</div><div class="stat-lbl">成約件数</div></div>
+    <div class="stat-card"><div class="stat-num" id="stA">0</div><div class="stat-lbl">温度感 A</div></div>
+    <div class="stat-card"><div class="stat-num" id="stRate">0%</div><div class="stat-lbl">成約率</div></div>
+  </div>
+</div>
+
+<!-- FORM -->
+<div id="formView">
+  <button class="form-back" onclick="showList()">← 戻る</button>
+  <div class="form-title" id="formTitle">新規商談</div>
+
+  <div class="sec">
+    <div class="sec-title">👤 基本情報</div>
+    <div class="row"><label class="lbl">顧客名 *</label><input class="inp" id="f_name" type="text" placeholder="例：山田 太郎"></div>
+    <div class="row"><label class="lbl">面談日</label><input class="inp" id="f_date" type="date"></div>
+    <div class="row"><label class="lbl">場所</label><input class="inp" id="f_place" type="text" placeholder="例：コメダ珈琲 鳥栖"></div>
+    <div class="row"><label class="lbl">職業・年収</label><input class="inp" id="f_job" type="text" placeholder="例：自衛隊・年収350万"></div>
+    <div class="row"><label class="lbl">家族構成</label><input class="inp" id="f_family" type="text" placeholder="例：独身・彼女なし"></div>
+  </div>
+
+  <div class="sec">
+    <div class="sec-title">💬 ニーズ</div>
+    <div class="row"><label class="lbl">きっかけ</label><textarea class="inp" id="f_trigger" placeholder="例：前回商談の続き"></textarea></div>
+    <div class="row"><label class="lbl">ニーズ・悩み</label><textarea class="inp" id="f_needs" placeholder="例：老後資金が不安"></textarea></div>
+    <div class="row"><label class="lbl">刺さったポイント</label><textarea class="inp" id="f_point" placeholder="例：積立との比較説明"></textarea></div>
+    <div class="row"><label class="lbl">使ったツール・例え話</label><textarea class="inp" id="f_tool" placeholder="例：gammaスライド使用"></textarea></div>
+  </div>
+
+  <div class="sec">
+    <div class="sec-title">📄 提案</div>
+    <div class="row"><label class="lbl">商品名・金額</label><textarea class="inp" id="f_product" placeholder="例：変額保険 月1万円 / NISA 1万円"></textarea></div>
+    <div class="row">
+      <label class="lbl">結果</label>
+      <div class="result-row">
+        <button class="res-btn" onclick="selResult(this,'成約')">✅ 成約</button>
+        <button class="res-btn" onclick="selResult(this,'継続')">🔄 継続</button>
+        <button class="res-btn" onclick="selResult(this,'見送り')">❌ 見送り</button>
+        <button class="res-btn" onclick="selResult(this,'検討中')">🤔 検討中</button>
+      </div>
+      <input type="hidden" id="f_result">
+    </div>
+    <div class="row"><label class="lbl">告知・注意事項</label><textarea class="inp" id="f_notice" placeholder="例：強直性脊椎炎の告知あり"></textarea></div>
+  </div>
+
+  <div class="sec">
+    <div class="sec-title">🎯 ネクストアクション</div>
+    <div class="row"><label class="lbl">次回アクション</label><textarea class="inp" id="f_next" placeholder="例：来週火曜にプレゼン"></textarea></div>
+    <div class="row">
+      <label class="lbl">温度感</label>
+      <div class="temp-row">
+        <button class="temp-btn" onclick="selTemp(this,'A')">🔥 A</button>
+        <button class="temp-btn" onclick="selTemp(this,'B')">😊 B</button>
+        <button class="temp-btn" onclick="selTemp(this,'C')">❄️ C</button>
+      </div>
+      <input type="hidden" id="f_temp">
+    </div>
+  </div>
+
+  <div class="sec">
+    <div class="sec-title">📝 メモ</div>
+    <div class="row"><label class="lbl">雑談メモ</label><textarea class="inp" id="f_chat" placeholder="例：寮住まい、将来独立したい"></textarea></div>
+    <div class="row"><label class="lbl">印象・気づき</label><textarea class="inp" id="f_impression" placeholder="例：相手の心理を読む重要性を実感"></textarea></div>
+  </div>
+
+  <div class="sec">
+    <div class="sec-title">📸 写真・お土産</div>
+    <div class="photo-area" onclick="document.getElementById('photoInput').click()">
+      <div style="font-size:24px;">📷</div>
+      <div style="font-size:13px;color:var(--txt2);margin-top:6px;">タップして写真を追加</div>
+    </div>
+    <input type="file" id="photoInput" class="photo-input" accept="image/*" multiple onchange="handlePhotos(this)">
+    <div class="photo-preview" id="photoPreview"></div>
+  </div>
+
+  <button class="save-btn" onclick="saveRecord()">💾 保存する</button>
+  <div class="pb"></div>
+</div>
+
+<!-- DETAIL -->
+<div id="detailView">
+  <button class="det-back" onclick="showList()">← 一覧に戻る</button>
+  <div id="detailContent"></div>
+  <div class="ai-btns">
+    <button class="ai-btn" onclick="genAI('紹介')">🤝 紹介獲得アドバイスを生成</button>
+    <button class="ai-btn" onclick="genAI('instagram')">📸 Instagram投稿文を生成</button>
+    <button class="ai-btn" onclick="genAI('次回')">🎯 次回商談の準備を生成</button>
+  </div>
+  <div class="ai-loading" id="aiLoading">⏳ AI生成中...</div>
+  <div class="ai-result" id="aiResult"></div>
+  <button class="copy-btn" id="copyBtn" onclick="copyAI()">📋 コピー</button>
+  <button class="del-btn" onclick="delRecord()">🗑 この商談を削除</button>
+  <div class="pb"></div>
+</div>
+
+<script>
+let records = [];
+let curId = null;
+let editId = null;
+let curTab = 'list';
+let photos = [];
+let db = null;
+
+// IndexedDB setup
+function initDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('shodanDB', 1);
+    req.onupgradeneeded = e => {
+      const d = e.target.result;
+      if (!d.objectStoreNames.contains('records')) {
+        d.createObjectStore('records', { keyPath: 'id' });
+      }
+    };
+    req.onsuccess = e => { db = e.target.result; resolve(); };
+    req.onerror = () => {
+      // fallback to localStorage
+      try { records = JSON.parse(localStorage.getItem('shodan_v2') || '[]'); } catch(e) {}
+      resolve();
+    };
+  });
+}
+
+function loadFromDB() {
+  return new Promise((resolve) => {
+    if (!db) { resolve(); return; }
+    const tx = db.transaction('records', 'readonly');
+    const store = tx.objectStore('records');
+    const req = store.getAll();
+    req.onsuccess = e => { records = e.target.result || []; resolve(); };
+    req.onerror = () => resolve();
+  });
+}
+
+function save() {
+  // Save to both IndexedDB and localStorage as backup
+  try { localStorage.setItem('shodan_v2', JSON.stringify(records)); } catch(e) {}
+  if (!db) return;
+  const tx = db.transaction('records', 'readwrite');
+  const store = tx.objectStore('records');
+  // Clear and re-add all
+  store.clear();
+  records.forEach(r => store.put(r));
+}
+
+function switchTab(t) {
+  curTab = t;
+  document.querySelectorAll('.tab').forEach((el,i)=>el.classList.toggle('active',['list','stats'][i]===t));
+  document.getElementById('listView').style.display = t==='list'?'block':'none';
+  document.getElementById('statsView').style.display = t==='stats'?'block':'none';
+  if(t==='stats') renderStats();
+}
+
+function showList() {
+  ['formView','detailView'].forEach(id=>document.getElementById(id).style.display='none');
+  document.getElementById('listView').style.display = curTab==='list'?'block':'none';
+  document.getElementById('statsView').style.display = curTab==='stats'?'block':'none';
+  document.getElementById('mainNav').style.display='flex';
+  document.getElementById('mainTabs').style.display='flex';
+  renderList();
+}
+
+function showForm(id) {
+  editId = id||null;
+  photos = [];
+  document.getElementById('photoPreview').innerHTML='';
+  ['listView','statsView','detailView'].forEach(i=>document.getElementById(i).style.display='none');
+  document.getElementById('formView').style.display='block';
+  document.getElementById('mainNav').style.display='none';
+  document.getElementById('mainTabs').style.display='none';
+  const fields = ['name','date','place','job','family','trigger','needs','point','tool','product','result','notice','next','temp','chat','impression'];
+  if(id) {
+    const r = records.find(x=>x.id===id);
+    document.getElementById('formTitle').textContent='商談を編集';
+    if(r){ fields.forEach(f=>{ const el=document.getElementById('f_'+f); if(el) el.value=r[f]||''; }); }
+    if(r&&r.temp){ document.querySelectorAll('.temp-btn').forEach(b=>{ b.className='temp-btn'+(b.textContent.includes(r.temp)?' t'+r.temp:''); }); }
+    if(r&&r.result){ document.querySelectorAll('.res-btn').forEach(b=>{ b.classList.toggle('sel',b.textContent.includes(r.result)); }); }
+    if(r&&r.photos){ photos=[...r.photos]; photos.forEach(s=>addThumb(s)); }
+  } else {
+    document.getElementById('formTitle').textContent='新規商談';
+    fields.forEach(f=>{ const el=document.getElementById('f_'+f); if(el) el.value=''; });
+    document.querySelectorAll('.temp-btn').forEach(b=>b.className='temp-btn');
+    document.querySelectorAll('.res-btn').forEach(b=>b.classList.remove('sel'));
+    document.getElementById('f_date').value=new Date().toISOString().split('T')[0];
+  }
+}
+
+function showDetail(id) {
+  curId = id;
+  const r = records.find(x=>x.id===id);
+  if(!r) return;
+  ['listView','statsView','formView'].forEach(i=>document.getElementById(i).style.display='none');
+  document.getElementById('detailView').style.display='block';
+  document.getElementById('mainNav').style.display='none';
+  document.getElementById('mainTabs').style.display='none';
+  document.getElementById('aiResult').style.display='none';
+  document.getElementById('aiLoading').style.display='none';
+  document.getElementById('copyBtn').style.display='none';
+
+  const photosHTML = r.photos&&r.photos.length
+    ? `<div class="det-sec"><div class="det-sec-title">📸 写真</div><div class="det-photos">${r.photos.map(p=>`<img class="det-photo" src="${p}">`).join('')}</div></div>` : '';
+
+  document.getElementById('detailContent').innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+      <div class="det-name">${r.name||'名前未入力'}</div>
+      ${r.temp?`<span class="badge b${r.temp}">${r.temp}</span>`:''}
+    </div>
+    <div class="det-date">${r.date||''}${r.place?' @ '+r.place:''}</div>
+    <button class="edit-btn" onclick="showForm('${r.id}')">✏️ 編集</button>
+    ${r.result?`<div class="det-sec"><div class="det-sec-title">結果</div><div style="font-size:18px;font-weight:700;color:var(--ok);">${r.result}</div></div>`:''}
+    <div class="det-sec">
+      <div class="det-sec-title">👤 プロフィール</div>
+      ${drow('職業・年収',r.job)}${drow('家族構成',r.family)}
+    </div>
+    <div class="det-sec">
+      <div class="det-sec-title">💬 ニーズ</div>
+      ${drow('きっかけ',r.trigger)}${drow('ニーズ・悩み',r.needs)}${drow('刺さったポイント',r.point)}${drow('ツール・例え話',r.tool)}
+    </div>
+    <div class="det-sec">
+      <div class="det-sec-title">📄 提案</div>
+      ${drow('商品名・金額',r.product)}${drow('告知・注意',r.notice)}
+    </div>
+    <div class="det-sec">
+      <div class="det-sec-title">🎯 ネクストアクション</div>
+      ${drow('次回アクション',r.next)}
+    </div>
+    <div class="det-sec">
+      <div class="det-sec-title">📝 メモ</div>
+      ${drow('雑談メモ',r.chat)}${drow('印象・気づき',r.impression)}
+    </div>
+    ${photosHTML}
+  `;
+}
+
+function drow(lbl,val){ return val?`<div class="det-row"><div class="det-lbl">${lbl}</div><div class="det-val">${val}</div></div>`:''; }
+
+function renderList(q) {
+  let list=[...records].sort((a,b)=>(b.date||'')>(a.date||'')?1:-1);
+  if(q){ const lq=q.toLowerCase(); list=list.filter(r=>[r.name,r.needs,r.chat,r.impression,r.place].some(v=>(v||'').toLowerCase().includes(lq))); }
+  const c=document.getElementById('cardContainer');
+  if(!list.length){ c.innerHTML='<div class="empty">商談記録がありません<br>右上の「＋ 新規」から追加できます</div>'; return; }
+  c.innerHTML=list.map(r=>`
+    <div class="card" onclick="showDetail('${r.id}')">
+      <div class="card-top"><div class="card-name">${r.name||'名前未入力'}</div>${r.temp?`<span class="badge b${r.temp}">${r.temp}</span>`:''}</div>
+      <div class="card-date">${r.date||''}${r.place?' @ '+r.place:''}</div>
+      <div class="card-tags">
+        ${r.result?`<span class="tag tag-ok">${r.result}</span>`:''}
+        ${r.job?`<span class="tag">${r.job}</span>`:''}
+        ${r.next?`<span class="tag">📌 ${r.next.slice(0,20)}</span>`:''}
+      </div>
+    </div>`).join('');
+}
+
+function renderStats(){
+  const t=records.length, s=records.filter(r=>r.result==='成約').length, a=records.filter(r=>r.temp==='A').length;
+  document.getElementById('stTotal').textContent=t;
+  document.getElementById('stSeiyaku').textContent=s;
+  document.getElementById('stA').textContent=a;
+  document.getElementById('stRate').textContent=t?Math.round(s/t*100)+'%':'0%';
+}
+
+function saveRecord(){
+  const name=document.getElementById('f_name').value.trim();
+  if(!name){alert('顧客名を入力してください');return;}
+  const fields=['name','date','place','job','family','trigger','needs','point','tool','product','result','notice','next','temp','chat','impression'];
+  const r={id:editId||Date.now().toString(),photos,updatedAt:new Date().toISOString()};
+  fields.forEach(f=>{ r[f]=document.getElementById('f_'+f)?.value||''; });
+  if(editId){ const i=records.findIndex(x=>x.id===editId); if(i>=0) records[i]=r; }
+  else records.unshift(r);
+  save(); showList();
+}
+
+function delRecord(){
+  if(!confirm('この商談を削除しますか？'))return;
+  records=records.filter(r=>r.id!==curId);
+  save(); showList();
+}
+
+function selTemp(btn,val){
+  document.querySelectorAll('.temp-btn').forEach(b=>b.className='temp-btn');
+  btn.className='temp-btn t'+val;
+  document.getElementById('f_temp').value=val;
+}
+
+function selResult(btn,val){
+  document.querySelectorAll('.res-btn').forEach(b=>b.classList.remove('sel'));
+  btn.classList.add('sel');
+  document.getElementById('f_result').value=val;
+}
+
+function handlePhotos(input){
+  Array.from(input.files).forEach(file=>{
+    const r=new FileReader();
+    r.onload=e=>{ photos.push(e.target.result); addThumb(e.target.result); };
+    r.readAsDataURL(file);
+  });
+}
+function addThumb(src){
+  const img=document.createElement('img');
+  img.className='photo-thumb'; img.src=src;
+  document.getElementById('photoPreview').appendChild(img);
+}
+
+async function genAI(type){
+  const r=records.find(x=>x.id===curId);
+  if(!r) return;
+  document.getElementById('aiLoading').style.display='block';
+  document.getElementById('aiResult').style.display='none';
+  document.getElementById('copyBtn').style.display='none';
+  const summary=`顧客名:${r.name} 日付:${r.date} 場所:${r.place} 職業:${r.job} 家族:${r.family} きっかけ:${r.trigger} ニーズ:${r.needs} 刺さった点:${r.point} ツール:${r.tool} 商品:${r.product} 結果:${r.result} 告知:${r.notice} 次回:${r.next} 温度感:${r.temp} 雑談:${r.chat} 印象:${r.impression}`;
+  const prompts={
+    '紹介':'以下の商談記録をもとに、この顧客から紹介をもらうための具体的なアドバイスをください。タイミング・セリフ例・ターゲット像を含めて日本語で出力してください。\n\n',
+    'instagram':'以下の商談記録をもとに、FP・保険営業のInstagram投稿文を作成してください。顧客が特定されないよう配慮しつつ共感を呼ぶ内容にしてください。ハッシュタグも含めてください。\n\n',
+    '次回':'以下の商談記録をもとに、次回商談の準備事項・確認すべきこと・提案内容のアドバイスを具体的に日本語で出力してください。\n\n'
+  };
+  try{
+    const res=await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1000,messages:[{role:'user',content:prompts[type]+summary}]})
+    });
+    const data=await res.json();
+    const text=data.content&&data.content[0]?data.content[0].text:'エラーが発生しました';
+    document.getElementById('aiResult').textContent=text;
+    document.getElementById('aiResult').style.display='block';
+    document.getElementById('copyBtn').style.display='block';
+  }catch(e){
+    document.getElementById('aiResult').textContent='エラーが発生しました。再度お試しください。';
+    document.getElementById('aiResult').style.display='block';
+  }
+  document.getElementById('aiLoading').style.display='none';
+}
+
+function copyAI(){
+  const text=document.getElementById('aiResult').textContent;
+  if(navigator.clipboard){ navigator.clipboard.writeText(text).then(()=>{ document.getElementById('copyBtn').textContent='✅ コピーしました'; setTimeout(()=>document.getElementById('copyBtn').textContent='📋 コピー',2000); }); }
+  else{ const el=document.createElement('textarea'); el.value=text; document.body.appendChild(el); el.select(); document.execCommand('copy'); document.body.removeChild(el); document.getElementById('copyBtn').textContent='✅ コピーしました'; setTimeout(()=>document.getElementById('copyBtn').textContent='📋 コピー',2000); }
+}
+
+function exportCSV(){
+  if(!records.length){alert('保存する商談記録がありません');return;}
+  const header=['ID','顧客名','面談日','場所','職業・年収','家族構成','きっかけ','ニーズ','刺さったポイント','ツール','商品・金額','結果','告知・注意','次回アクション','温度感','雑談メモ','印象・気づき','更新日時'];
+  const rows=records.map(r=>[r.id,r.name,r.date,r.place,r.job,r.family,r.trigger,r.needs,r.point,r.tool,r.product,r.result,r.notice,r.next,r.temp,r.chat,r.impression,r.updatedAt].map(v=>'"'+(v||'').replace(/"/g,'""')+'"').join(','));
+  const csv='﻿'+[header.join(','),...rows].join('\n');
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  const d=new Date().toISOString().slice(0,10);
+  a.download='商談記録_'+d+'.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+(async () => {
+  await initDB();
+  await loadFromDB();
+  // If IndexedDB empty, try localStorage fallback
+  if (!records.length) {
+    try { records = JSON.parse(localStorage.getItem('shodan_v2') || '[]'); } catch(e) {}
+    // Migrate to IndexedDB
+    if (records.length) save();
+  }
+  renderList();
+})();
+</script>
+</body>
+</html>
