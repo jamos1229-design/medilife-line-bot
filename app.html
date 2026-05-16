@@ -14,6 +14,7 @@
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -1721,11 +1722,103 @@ function SuspectsTab({ suspects, onAdd, onEdit, onDelete }) {
 }
 
 // ── Tab: Log ───────────────────────────────────────────────────
+const GCAL_CLIENT_ID = '1057473883392-jp2nn7u46gcdlkbf48037dsqlsgud0hn.apps.googleusercontent.com';
+const GCAL_SCOPE     = 'https://www.googleapis.com/auth/calendar.readonly';
+
 function LogTab({ tasks, clients, suspects, vision, sales, onRestore }) {
   const completedTasks = tasks.filter(t => t.completed);
   const activeTasks    = tasks.filter(t => !t.completed).length;
   const [restoreMsg, setRestoreMsg] = React.useState('');
-  const [confirmRestore, setConfirmRestore] = React.useState(null); // backup data waiting confirm
+  const [confirmRestore, setConfirmRestore] = React.useState(null);
+
+  // ── Google Calendar ──
+  const [gcalToken,   setGcalToken]   = React.useState(null);
+  const [gcalEvents,  setGcalEvents]  = React.useState([]);
+  const [gcalLoading, setGcalLoading] = React.useState(false);
+  const [gcalError,   setGcalError]   = React.useState('');
+  const [gcalDays,    setGcalDays]    = React.useState(7); // 何日分表示するか
+
+  const fetchCalendarEvents = async (token, days) => {
+    setGcalLoading(true);
+    setGcalError('');
+    try {
+      const now  = new Date();
+      const from = new Date(now - days * 24 * 60 * 60 * 1000);
+      const url  = `https://www.googleapis.com/calendar/v3/calendars/primary/events?` +
+        `timeMin=${from.toISOString()}&timeMax=${now.toISOString()}` +
+        `&maxResults=200&singleEvents=true&orderBy=startTime`;
+      const res  = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) { setGcalError('再度ログインしてください'); setGcalToken(null); setGcalLoading(false); return; }
+      const data = await res.json();
+      setGcalEvents(data.items || []);
+    } catch(e) {
+      setGcalError('取得に失敗しました');
+    }
+    setGcalLoading(false);
+  };
+
+  const signIn = () => {
+    if (!window.google) { setGcalError('Googleライブラリ読み込み中…少し待ってから再度タップ'); return; }
+    const client = window.google.accounts.oauth2.initTokenClient({
+      client_id: GCAL_CLIENT_ID,
+      scope: GCAL_SCOPE,
+      callback: (resp) => {
+        if (resp.access_token) {
+          setGcalToken(resp.access_token);
+          fetchCalendarEvents(resp.access_token, gcalDays);
+        } else {
+          setGcalError('ログインに失敗しました');
+        }
+      },
+    });
+    client.requestAccessToken({ prompt: 'consent' });
+  };
+
+  const signOut = () => { setGcalToken(null); setGcalEvents([]); };
+
+  const changeDays = (d) => {
+    setGcalDays(d);
+    if (gcalToken) fetchCalendarEvents(gcalToken, d);
+  };
+
+  // イベントを日付ごとにグループ化
+  const groupByDay = (events) => {
+    const groups = {};
+    events.forEach(ev => {
+      const start = ev.start?.dateTime || ev.start?.date;
+      if (!start) return;
+      const day = start.slice(0, 10);
+      if (!groups[day]) groups[day] = [];
+      // 時間計算
+      let mins = 0;
+      if (ev.start?.dateTime && ev.end?.dateTime) {
+        mins = Math.round((new Date(ev.end.dateTime) - new Date(ev.start.dateTime)) / 60000);
+      } else {
+        mins = 0; // 終日イベント
+      }
+      groups[day].push({ title: ev.summary || '（タイトルなし）', mins, allDay: !ev.start?.dateTime });
+    });
+    return Object.entries(groups).sort((a, b) => b[0].localeCompare(a[0]));
+  };
+
+  const fmtMins = (m) => {
+    if (!m) return '終日';
+    const h = Math.floor(m / 60), min = m % 60;
+    return h > 0 ? `${h}時間${min > 0 ? min + '分' : ''}` : `${min}分`;
+  };
+
+  const fmtDay = (dateStr) => {
+    const d = new Date(dateStr + 'T00:00:00');
+    const days = ['日','月','火','水','木','金','土'];
+    return `${d.getMonth()+1}/${d.getDate()}（${days[d.getDay()]}）`;
+  };
+
+  const grouped = groupByDay(gcalEvents);
+  const totalMins = gcalEvents.reduce((s, ev) => {
+    if (ev.start?.dateTime && ev.end?.dateTime)
+      return s + Math.round((new Date(ev.end.dateTime) - new Date(ev.start.dateTime)) / 60000);
+    return s;
+  }, 0);
 
   const clientName = (id) => {
     const c = clients.find(c => c.id === id);
@@ -1786,6 +1879,109 @@ function LogTab({ tasks, clients, suspects, vision, sales, onRestore }) {
   return (
     <div>
       <h2 style={{fontSize:18, fontWeight:700, marginBottom:16}}>📝 ログ</h2>
+
+      {/* ── Googleカレンダー振り返り ── */}
+      <div className="card" style={{marginBottom:16}}>
+        <div style={{fontSize:15, fontWeight:700, marginBottom:4}}>📅 Googleカレンダー振り返り</div>
+        <div style={{fontSize:12, color:'var(--text-sub)', marginBottom:12, lineHeight:1.6}}>
+          Googleカレンダーと連携して、何に時間を使ったかを確認できます。
+        </div>
+
+        {!gcalToken ? (
+          <>
+            <button onClick={signIn} style={{
+              display:'flex', alignItems:'center', justifyContent:'center', gap:8,
+              width:'100%', padding:'13px', borderRadius:10, border:'none',
+              background:'#4285F4', color:'#fff', fontSize:15, fontWeight:700, cursor:'pointer',
+            }}>
+              <span style={{fontSize:18}}>G</span> Googleでログインして連携する
+            </button>
+            {gcalError && <div style={{marginTop:8, fontSize:12, color:'var(--danger)', textAlign:'center'}}>{gcalError}</div>}
+          </>
+        ) : (
+          <>
+            {/* 期間選択 */}
+            <div style={{display:'flex', gap:6, marginBottom:12, flexWrap:'wrap'}}>
+              {[
+                {label:'3日', days:3}, {label:'1週間', days:7},
+                {label:'2週間', days:14}, {label:'1ヶ月', days:30},
+              ].map(o => (
+                <button key={o.days} onClick={() => changeDays(o.days)} style={{
+                  padding:'6px 12px', borderRadius:8, border:'none', cursor:'pointer',
+                  background: gcalDays === o.days ? 'var(--accent)' : 'var(--bg)',
+                  color: gcalDays === o.days ? '#fff' : 'var(--text-sub)',
+                  fontSize:13, fontWeight:600,
+                }}>{o.label}</button>
+              ))}
+              <button onClick={signOut} style={{
+                marginLeft:'auto', padding:'6px 12px', borderRadius:8,
+                border:'1px solid var(--border)', background:'none',
+                color:'var(--text-sub)', fontSize:12, cursor:'pointer',
+              }}>ログアウト</button>
+            </div>
+
+            {gcalLoading && (
+              <div style={{textAlign:'center', color:'var(--text-sub)', padding:'20px 0'}}>
+                ⏳ 読み込み中...
+              </div>
+            )}
+
+            {!gcalLoading && gcalEvents.length === 0 && (
+              <div style={{textAlign:'center', color:'var(--text-sub)', padding:'16px 0', fontSize:13}}>
+                この期間にイベントはありません
+              </div>
+            )}
+
+            {!gcalLoading && gcalEvents.length > 0 && (
+              <>
+                {/* 合計サマリー */}
+                <div style={{
+                  background:'var(--accent-light)', borderRadius:10, padding:'10px 14px',
+                  marginBottom:12, display:'flex', justifyContent:'space-between', alignItems:'center',
+                }}>
+                  <span style={{fontSize:13, color:'var(--accent)', fontWeight:600}}>
+                    {gcalDays}日間の合計
+                  </span>
+                  <span style={{fontSize:18, fontWeight:800, color:'var(--accent)'}}>
+                    {fmtMins(totalMins)} / {gcalEvents.length}件
+                  </span>
+                </div>
+
+                {/* 日別リスト */}
+                {grouped.map(([day, evs]) => {
+                  const dayTotal = evs.reduce((s, e) => s + (e.mins || 0), 0);
+                  return (
+                    <div key={day} style={{marginBottom:12}}>
+                      <div style={{
+                        display:'flex', justifyContent:'space-between',
+                        fontSize:12, fontWeight:700, color:'var(--text-sub)',
+                        marginBottom:6, paddingBottom:4, borderBottom:'1px solid var(--border)',
+                      }}>
+                        <span>{fmtDay(day)}</span>
+                        {dayTotal > 0 && <span style={{color:'var(--accent)'}}>{fmtMins(dayTotal)}</span>}
+                      </div>
+                      {evs.map((ev, i) => (
+                        <div key={i} style={{
+                          display:'flex', justifyContent:'space-between',
+                          alignItems:'center', padding:'5px 0',
+                          borderBottom:'1px solid var(--border)',
+                        }}>
+                          <span style={{fontSize:13, flex:1, marginRight:8}}>{ev.title}</span>
+                          <span style={{
+                            fontSize:11, color:'var(--text-sub)',
+                            background:'var(--bg)', borderRadius:6,
+                            padding:'2px 7px', whiteSpace:'nowrap',
+                          }}>{fmtMins(ev.mins)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })}
+              </>
+            )}
+          </>
+        )}
+      </div>
 
       {/* サマリーカード */}
       <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:20}}>
