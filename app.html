@@ -1725,11 +1725,45 @@ function SuspectsTab({ suspects, onAdd, onEdit, onDelete }) {
 const GCAL_CLIENT_ID = '1057473883392-jp2nn7u46gcdlkbf48037dsqlsgud0hn.apps.googleusercontent.com';
 const GCAL_SCOPE     = 'https://www.googleapis.com/auth/calendar.readonly';
 
-function LogTab({ tasks, clients, suspects, vision, sales, onRestore }) {
+// カテゴリ定義
+const LOG_CATS = [
+  { key:'商談',     icon:'🤝', keywords:['商談','面談','訪問','アポ','ミーティング','meeting','打ち合わせ','相談'] },
+  { key:'事務作業', icon:'📋', keywords:['事務','申請','手続き','書類','契約','更新','処理','入力','整理'] },
+  { key:'資料作成', icon:'📊', keywords:['資料','作成','プレゼン','スライド','提案書','報告書','作り'] },
+  { key:'移動',     icon:'🚗', keywords:['移動','電車','車','出張','通勤','往復','交通'] },
+  { key:'勉強',     icon:'📚', keywords:['勉強','研修','セミナー','学習','研究','読書'] },
+  { key:'その他',   icon:'📝', keywords:[] },
+];
+
+function detectCategory(title) {
+  const t = (title || '').toLowerCase();
+  for (const cat of LOG_CATS) {
+    if (cat.keywords.some(kw => t.includes(kw))) return cat.key;
+  }
+  return 'その他';
+}
+
+function LogTab({ tasks, clients, suspects, vision, sales, logs, onLogsChange, onRestore }) {
   const completedTasks = tasks.filter(t => t.completed);
   const activeTasks    = tasks.filter(t => !t.completed).length;
   const [restoreMsg, setRestoreMsg] = React.useState('');
   const [confirmRestore, setConfirmRestore] = React.useState(null);
+
+  // 手動ログ入力
+  const [showLogForm, setShowLogForm] = React.useState(false);
+  const [logForm, setLogForm] = React.useState({ date: '', cat: '商談', title: '', hours: '', mins: '', memo: '' });
+  const todayVal = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
+
+  const saveLog = () => {
+    if (!logForm.title) return;
+    const totalMins = (Number(logForm.hours)||0)*60 + (Number(logForm.mins)||0);
+    const entry = { id: Date.now().toString(), ...logForm, date: logForm.date || todayVal(), totalMins };
+    onLogsChange(prev => [entry, ...prev]);
+    setLogForm({ date: '', cat: '商談', title: '', hours: '', mins: '', memo: '' });
+    setShowLogForm(false);
+  };
+
+  const deleteLog = (id) => onLogsChange(prev => prev.filter(l => l.id !== id));
 
   // ── Google Calendar ──
   const [gcalToken,   setGcalToken]   = React.useState(null);
@@ -1781,6 +1815,36 @@ function LogTab({ tasks, clients, suspects, vision, sales, onRestore }) {
     if (gcalToken) fetchCalendarEvents(gcalToken, d);
   };
 
+  // カテゴリ別集計（カレンダー + 手動ログ）
+  const [viewMode, setViewMode] = React.useState('category'); // 'category' | 'day'
+
+  const groupByCategory = (events, manualLogs, days) => {
+    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const result = {};
+    LOG_CATS.forEach(c => result[c.key] = { mins: 0, items: [] });
+
+    // カレンダーイベント
+    events.forEach(ev => {
+      const title = ev.summary || '（タイトルなし）';
+      const cat   = detectCategory(title);
+      let mins = 0;
+      if (ev.start?.dateTime && ev.end?.dateTime)
+        mins = Math.round((new Date(ev.end.dateTime) - new Date(ev.start.dateTime)) / 60000);
+      result[cat].mins += mins;
+      result[cat].items.push({ title, mins, src: 'gcal' });
+    });
+
+    // 手動ログ
+    manualLogs.filter(l => new Date(l.date + 'T00:00:00') >= cutoff).forEach(l => {
+      const cat = l.cat || 'その他';
+      if (!result[cat]) result[cat] = { mins: 0, items: [] };
+      result[cat].mins += l.totalMins || 0;
+      result[cat].items.push({ title: l.title, mins: l.totalMins || 0, src: 'manual', id: l.id, memo: l.memo });
+    });
+
+    return LOG_CATS.map(c => ({ ...c, ...result[c.key] })).filter(c => c.items.length > 0);
+  };
+
   // イベントを日付ごとにグループ化
   const groupByDay = (events) => {
     const groups = {};
@@ -1789,14 +1853,10 @@ function LogTab({ tasks, clients, suspects, vision, sales, onRestore }) {
       if (!start) return;
       const day = start.slice(0, 10);
       if (!groups[day]) groups[day] = [];
-      // 時間計算
       let mins = 0;
-      if (ev.start?.dateTime && ev.end?.dateTime) {
+      if (ev.start?.dateTime && ev.end?.dateTime)
         mins = Math.round((new Date(ev.end.dateTime) - new Date(ev.start.dateTime)) / 60000);
-      } else {
-        mins = 0; // 終日イベント
-      }
-      groups[day].push({ title: ev.summary || '（タイトルなし）', mins, allDay: !ev.start?.dateTime });
+      groups[day].push({ title: ev.summary || '（タイトルなし）', mins, cat: detectCategory(ev.summary), allDay: !ev.start?.dateTime });
     });
     return Object.entries(groups).sort((a, b) => b[0].localeCompare(a[0]));
   };
@@ -1813,12 +1873,17 @@ function LogTab({ tasks, clients, suspects, vision, sales, onRestore }) {
     return `${d.getMonth()+1}/${d.getDate()}（${days[d.getDay()]}）`;
   };
 
-  const grouped = groupByDay(gcalEvents);
-  const totalMins = gcalEvents.reduce((s, ev) => {
+  const catGrouped  = groupByCategory(gcalEvents, logs, gcalDays);
+  const dayGrouped  = groupByDay(gcalEvents);
+  const totalMins   = gcalEvents.reduce((s, ev) => {
     if (ev.start?.dateTime && ev.end?.dateTime)
       return s + Math.round((new Date(ev.end.dateTime) - new Date(ev.start.dateTime)) / 60000);
     return s;
   }, 0);
+  const manualInRange = logs.filter(l => {
+    const cutoff = new Date(Date.now() - gcalDays * 24 * 60 * 60 * 1000);
+    return new Date(l.date + 'T00:00:00') >= cutoff;
+  });
 
   const clientName = (id) => {
     const c = clients.find(c => c.id === id);
@@ -1834,7 +1899,7 @@ function LogTab({ tasks, clients, suspects, vision, sales, onRestore }) {
     const data = {
       exportedAt: new Date().toISOString(),
       version: 1,
-      tasks, clients, suspects, vision, sales,
+      tasks, clients, suspects, vision, sales, logs,
     };
     const json = JSON.stringify(data, null, 2);
     const blob = new Blob([json], { type: 'application/json' });
@@ -1928,50 +1993,68 @@ function LogTab({ tasks, clients, suspects, vision, sales, onRestore }) {
 
             {!gcalLoading && gcalEvents.length === 0 && (
               <div style={{textAlign:'center', color:'var(--text-sub)', padding:'16px 0', fontSize:13}}>
-                この期間にイベントはありません
+                この期間にカレンダーイベントはありません
               </div>
             )}
 
             {!gcalLoading && gcalEvents.length > 0 && (
               <>
-                {/* 合計サマリー */}
+                {/* 合計 + 表示切替 */}
                 <div style={{
                   background:'var(--accent-light)', borderRadius:10, padding:'10px 14px',
-                  marginBottom:12, display:'flex', justifyContent:'space-between', alignItems:'center',
+                  marginBottom:10, display:'flex', justifyContent:'space-between', alignItems:'center',
                 }}>
-                  <span style={{fontSize:13, color:'var(--accent)', fontWeight:600}}>
-                    {gcalDays}日間の合計
-                  </span>
-                  <span style={{fontSize:18, fontWeight:800, color:'var(--accent)'}}>
-                    {fmtMins(totalMins)} / {gcalEvents.length}件
-                  </span>
+                  <span style={{fontSize:13, color:'var(--accent)', fontWeight:600}}>{gcalDays}日間合計</span>
+                  <span style={{fontSize:16, fontWeight:800, color:'var(--accent)'}}>{fmtMins(totalMins)}</span>
                 </div>
 
-                {/* 日別リスト */}
-                {grouped.map(([day, evs]) => {
+                {/* カテゴリ / 日別 切替 */}
+                <div style={{display:'flex', gap:6, marginBottom:12}}>
+                  {[['category','📊 カテゴリ別'],['day','📅 日別']].map(([m,l]) => (
+                    <button key={m} onClick={() => setViewMode(m)} style={{
+                      flex:1, padding:'7px', borderRadius:8, border:'none', cursor:'pointer',
+                      background: viewMode===m ? 'var(--accent)' : 'var(--bg)',
+                      color: viewMode===m ? '#fff' : 'var(--text-sub)',
+                      fontSize:13, fontWeight:600,
+                    }}>{l}</button>
+                  ))}
+                </div>
+
+                {/* カテゴリ別ビュー */}
+                {viewMode === 'category' && catGrouped.map(cat => (
+                  <div key={cat.key} style={{marginBottom:10, background:'var(--bg)', borderRadius:10, padding:'10px 12px'}}>
+                    <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6}}>
+                      <span style={{fontSize:14, fontWeight:700}}>{cat.icon} {cat.key}</span>
+                      <span style={{fontSize:14, fontWeight:800, color:'var(--accent)'}}>{fmtMins(cat.mins)}</span>
+                    </div>
+                    {cat.items.map((it, i) => (
+                      <div key={i} style={{display:'flex', alignItems:'center', gap:6, padding:'4px 0', borderTop:'1px solid var(--border)'}}>
+                        <span style={{fontSize:11, color: it.src==='manual' ? 'var(--warning)' : 'var(--text-sub)', flexShrink:0}}>
+                          {it.src==='manual' ? '✏️' : '📅'}
+                        </span>
+                        <span style={{fontSize:12, flex:1}}>{it.title}</span>
+                        {it.memo && <span style={{fontSize:11, color:'var(--text-sub)'}}>{it.memo}</span>}
+                        <span style={{fontSize:11, color:'var(--text-sub)', whiteSpace:'nowrap'}}>{fmtMins(it.mins)}</span>
+                        {it.src==='manual' && <button onClick={() => deleteLog(it.id)} style={{background:'none',border:'none',color:'#CCC',cursor:'pointer',fontSize:13,padding:'0 2px'}}>×</button>}
+                      </div>
+                    ))}
+                  </div>
+                ))}
+
+                {/* 日別ビュー */}
+                {viewMode === 'day' && dayGrouped.map(([day, evs]) => {
                   const dayTotal = evs.reduce((s, e) => s + (e.mins || 0), 0);
                   return (
-                    <div key={day} style={{marginBottom:12}}>
-                      <div style={{
-                        display:'flex', justifyContent:'space-between',
-                        fontSize:12, fontWeight:700, color:'var(--text-sub)',
-                        marginBottom:6, paddingBottom:4, borderBottom:'1px solid var(--border)',
-                      }}>
+                    <div key={day} style={{marginBottom:10}}>
+                      <div style={{display:'flex', justifyContent:'space-between', fontSize:12, fontWeight:700, color:'var(--text-sub)', marginBottom:4, paddingBottom:4, borderBottom:'1px solid var(--border)'}}>
                         <span>{fmtDay(day)}</span>
                         {dayTotal > 0 && <span style={{color:'var(--accent)'}}>{fmtMins(dayTotal)}</span>}
                       </div>
                       {evs.map((ev, i) => (
-                        <div key={i} style={{
-                          display:'flex', justifyContent:'space-between',
-                          alignItems:'center', padding:'5px 0',
-                          borderBottom:'1px solid var(--border)',
-                        }}>
-                          <span style={{fontSize:13, flex:1, marginRight:8}}>{ev.title}</span>
-                          <span style={{
-                            fontSize:11, color:'var(--text-sub)',
-                            background:'var(--bg)', borderRadius:6,
-                            padding:'2px 7px', whiteSpace:'nowrap',
-                          }}>{fmtMins(ev.mins)}</span>
+                        <div key={i} style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'4px 0', borderBottom:'1px solid var(--border)'}}>
+                          <span style={{fontSize:12, flex:1, marginRight:6}}>{ev.title}</span>
+                          <span style={{fontSize:10, color:'var(--text-sub)', background:'var(--bg)', borderRadius:4, padding:'1px 5px', marginRight:4}}>{ev.cat}</span>
+                          <span style={{fontSize:11, color:'var(--text-sub)', whiteSpace:'nowrap'}}>{fmtMins(ev.mins)}</span>
                         </div>
                       ))}
                     </div>
@@ -1982,6 +2065,98 @@ function LogTab({ tasks, clients, suspects, vision, sales, onRestore }) {
           </>
         )}
       </div>
+
+      {/* ── 手動ログ ── */}
+      <div className="card" style={{marginBottom:16}}>
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10}}>
+          <div style={{fontSize:15, fontWeight:700}}>✏️ 手動ログ</div>
+          <button onClick={() => { setLogForm({ date: todayVal(), cat:'商談', title:'', hours:'', mins:'', memo:'' }); setShowLogForm(true); }} style={{
+            padding:'6px 14px', borderRadius:8, border:'none',
+            background:'var(--accent)', color:'#fff', fontSize:13, fontWeight:700, cursor:'pointer',
+          }}>＋ 追加</button>
+        </div>
+        <div style={{fontSize:12, color:'var(--text-sub)', marginBottom:10, lineHeight:1.6}}>
+          カレンダーにない作業を手動で記録できます
+        </div>
+
+        {logs.length === 0 ? (
+          <div style={{textAlign:'center', color:'var(--text-sub)', fontSize:13, padding:'12px 0'}}>まだ記録がありません</div>
+        ) : (
+          logs.slice(0, 10).map(l => (
+            <div key={l.id} style={{display:'flex', alignItems:'center', gap:8, padding:'8px 0', borderBottom:'1px solid var(--border)'}}>
+              <div style={{fontSize:18, flexShrink:0}}>{LOG_CATS.find(c=>c.key===l.cat)?.icon || '📝'}</div>
+              <div style={{flex:1, minWidth:0}}>
+                <div style={{fontSize:13, fontWeight:600}}>{l.title}</div>
+                <div style={{fontSize:11, color:'var(--text-sub)'}}>{l.date} · {l.cat}{l.memo ? ' · ' + l.memo : ''}</div>
+              </div>
+              <div style={{fontSize:13, fontWeight:700, color:'var(--accent)', whiteSpace:'nowrap'}}>{fmtMins(l.totalMins)}</div>
+              <button onClick={() => deleteLog(l.id)} style={{background:'none', border:'none', color:'#CCC', cursor:'pointer', fontSize:16, padding:'0 4px'}}>×</button>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* 手動ログ入力フォーム */}
+      {showLogForm && (
+        <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', display:'flex', alignItems:'flex-end', justifyContent:'center', zIndex:200}}
+          onClick={() => setShowLogForm(false)}>
+          <div style={{background:'#fff', borderRadius:'16px 16px 0 0', padding:24, width:'100%', maxWidth:430, maxHeight:'90vh', overflowY:'auto'}}
+            onClick={e => e.stopPropagation()}>
+            <div style={{fontSize:16, fontWeight:700, marginBottom:16}}>✏️ 作業ログを追加</div>
+
+            {/* カテゴリ */}
+            <label style={{fontSize:12, fontWeight:600, color:'var(--text-sub)', display:'block', marginBottom:6}}>カテゴリ</label>
+            <div style={{display:'flex', gap:6, flexWrap:'wrap', marginBottom:14}}>
+              {LOG_CATS.map(c => (
+                <button key={c.key} onClick={() => setLogForm(f => ({...f, cat: c.key}))} style={{
+                  padding:'6px 12px', borderRadius:8, border:'2px solid',
+                  borderColor: logForm.cat===c.key ? 'var(--accent)' : 'var(--border)',
+                  background: logForm.cat===c.key ? 'var(--accent-light)' : '#fff',
+                  color: logForm.cat===c.key ? 'var(--accent)' : 'var(--text-sub)',
+                  fontSize:13, fontWeight:600, cursor:'pointer',
+                }}>{c.icon} {c.key}</button>
+              ))}
+            </div>
+
+            {/* 内容 */}
+            <label style={{fontSize:12, fontWeight:600, color:'var(--text-sub)', display:'block', marginBottom:4}}>内容 *</label>
+            <input value={logForm.title} onChange={e => setLogForm(f => ({...f, title: e.target.value}))}
+              placeholder="例：A社へ契約書を持参"
+              style={{width:'100%', padding:'10px 12px', border:'1.5px solid var(--border)', borderRadius:8, fontSize:15, marginBottom:14}} />
+
+            {/* 日付 */}
+            <label style={{fontSize:12, fontWeight:600, color:'var(--text-sub)', display:'block', marginBottom:4}}>日付</label>
+            <input type="date" value={logForm.date} onChange={e => setLogForm(f => ({...f, date: e.target.value}))}
+              style={{width:'100%', padding:'10px 12px', border:'1.5px solid var(--border)', borderRadius:8, fontSize:15, marginBottom:14}} />
+
+            {/* 時間 */}
+            <label style={{fontSize:12, fontWeight:600, color:'var(--text-sub)', display:'block', marginBottom:4}}>所要時間</label>
+            <div style={{display:'flex', gap:8, marginBottom:14}}>
+              <div style={{flex:1}}>
+                <input type="number" placeholder="0" value={logForm.hours} onChange={e => setLogForm(f => ({...f, hours: e.target.value}))}
+                  style={{width:'100%', padding:'10px 12px', border:'1.5px solid var(--border)', borderRadius:8, fontSize:15}} />
+                <div style={{fontSize:11, color:'var(--text-sub)', textAlign:'center', marginTop:2}}>時間</div>
+              </div>
+              <div style={{flex:1}}>
+                <input type="number" placeholder="0" value={logForm.mins} onChange={e => setLogForm(f => ({...f, mins: e.target.value}))}
+                  style={{width:'100%', padding:'10px 12px', border:'1.5px solid var(--border)', borderRadius:8, fontSize:15}} />
+                <div style={{fontSize:11, color:'var(--text-sub)', textAlign:'center', marginTop:2}}>分</div>
+              </div>
+            </div>
+
+            {/* メモ */}
+            <label style={{fontSize:12, fontWeight:600, color:'var(--text-sub)', display:'block', marginBottom:4}}>メモ</label>
+            <input value={logForm.memo} onChange={e => setLogForm(f => ({...f, memo: e.target.value}))}
+              placeholder="任意"
+              style={{width:'100%', padding:'10px 12px', border:'1.5px solid var(--border)', borderRadius:8, fontSize:15, marginBottom:20}} />
+
+            <div style={{display:'flex', gap:8}}>
+              <button onClick={() => setShowLogForm(false)} style={{flex:1, padding:'12px', border:'1px solid var(--border)', borderRadius:10, background:'#fff', fontSize:15, cursor:'pointer'}}>キャンセル</button>
+              <button onClick={saveLog} style={{flex:2, padding:'12px', border:'none', borderRadius:10, background:'var(--accent)', color:'#fff', fontSize:15, fontWeight:700, cursor:'pointer'}}>保存</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* サマリーカード */}
       <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:20}}>
@@ -2127,6 +2302,7 @@ function App() {
   const [suspects, setSuspects] = useLS('ml_suspects_v1', []);
   const [vision,   setVision]   = useLS('ml_vision_v1', {});
   const [sales,    setSales]    = useLS('ml_sales_v1',  { target:0, current:0, label:'今月' });
+  const [logs,     setLogs]     = useLS('ml_logs_v1',   []);
 
   const [taskDrawer,    setTaskDrawer]    = useState(null);
   const [clientDrawer,  setClientDrawer]  = useState(null);
@@ -2194,12 +2370,14 @@ function App() {
         )}
         {tab==='vision'   && <VisionTab vision={vision} onChange={updateVision} tasks={tasks} clients={clients} />}
         {tab==='log'      && <LogTab tasks={tasks} clients={clients} suspects={suspects} vision={vision} sales={sales}
+            logs={logs} onLogsChange={setLogs}
             onRestore={(data) => {
               if (data.tasks)    setTasks(data.tasks);
               if (data.clients)  setClients(data.clients);
               if (data.suspects) setSuspects(data.suspects);
               if (data.vision)   setVision(data.vision);
               if (data.sales)    setSales(data.sales);
+              if (data.logs)     setLogs(data.logs);
             }} />}
       </div>
 
