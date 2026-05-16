@@ -1726,13 +1726,24 @@ const GCAL_CLIENT_ID = '1057473883392-jp2nn7u46gcdlkbf48037dsqlsgud0hn.apps.goog
 const GCAL_SCOPE     = 'https://www.googleapis.com/auth/calendar.readonly';
 
 // カテゴリ定義
+// ai: 'high'=Claude自動化◎ / 'mid'=部分的に可 / 'low'=対人必須 / 'check'=要確認
 const LOG_CATS = [
-  { key:'商談',     icon:'🤝', keywords:['商談','面談','訪問','アポ','ミーティング','meeting','打ち合わせ','相談','申し込み','申込','成約','提案','営業','見込み','フォロー','紹介','面会','契約','クライアント','保険'] },
-  { key:'事務作業', icon:'📋', keywords:['事務','申請','手続き','書類','更新','処理','入力','整理','郵送','記入'] },
-  { key:'資料作成', icon:'📊', keywords:['資料','作成','プレゼン','スライド','提案書','報告書','ガンマ','gamma'] },
-  { key:'移動',     icon:'🚗', keywords:['移動','電車','車','出張','通勤','往復','交通','ドライブ'] },
-  { key:'勉強',     icon:'📚', keywords:['勉強','研修','セミナー','学習','研究','読書','FP','fp'] },
-  { key:'その他',   icon:'📝', keywords:[] },
+  { key:'商談・面談',    icon:'🤝', ai:'low',   aiLabel:'対人が必要',      aiColor:'#EF4444',
+    keywords:['商談','面談','訪問','アポ','ミーティング','meeting','打ち合わせ','相談','申し込み','申込','成約','提案','営業','見込み','フォロー','紹介','面会','契約','クライアント','保険'] },
+  { key:'メール・連絡',  icon:'📧', ai:'high',  aiLabel:'Claude自動化◎',   aiColor:'#22C55E',
+    keywords:['メール','mail','LINE','ライン','連絡','返信','電話','チャット','DM','メッセージ'] },
+  { key:'資料・文章作成',icon:'📝', ai:'high',  aiLabel:'Claude自動化◎',   aiColor:'#22C55E',
+    keywords:['資料','作成','プレゼン','スライド','提案書','報告書','ガンマ','gamma','文章','ライティング','原稿'] },
+  { key:'SNS・発信',    icon:'📱', ai:'high',  aiLabel:'Claude自動化◎',   aiColor:'#22C55E',
+    keywords:['SNS','instagram','インスタ','投稿','ブログ','Twitter','X','発信','コンテンツ'] },
+  { key:'事務・手続き',  icon:'📋', ai:'mid',   aiLabel:'部分的に自動化可', aiColor:'#F59E0B',
+    keywords:['事務','申請','手続き','書類','更新','処理','入力','整理','郵送','記入','データ'] },
+  { key:'勉強・研究',    icon:'📚', ai:'mid',   aiLabel:'AI活用で効率化',   aiColor:'#F59E0B',
+    keywords:['勉強','研修','セミナー','学習','研究','読書','FP','fp','ウェビナー'] },
+  { key:'移動',          icon:'🚗', ai:'low',   aiLabel:'自動化困難',       aiColor:'#6B7280',
+    keywords:['移動','電車','車','出張','通勤','往復','交通','ドライブ'] },
+  { key:'その他',        icon:'📌', ai:'check', aiLabel:'要確認',           aiColor:'#8B5CF6',
+    keywords:[] },
 ];
 
 function detectCategory(title) {
@@ -2021,25 +2032,63 @@ function LogTab({ tasks, clients, suspects, vision, sales, logs, onLogsChange, o
                 </div>
 
                 {/* カテゴリ別ビュー */}
-                {viewMode === 'category' && catGrouped.map(cat => (
-                  <div key={cat.key} style={{marginBottom:10, background:'var(--bg)', borderRadius:10, padding:'10px 12px'}}>
-                    <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6}}>
-                      <span style={{fontSize:14, fontWeight:700}}>{cat.icon} {cat.key}</span>
-                      <span style={{fontSize:14, fontWeight:800, color:'var(--accent)'}}>{fmtMins(cat.mins)}</span>
-                    </div>
-                    {cat.items.map((it, i) => (
-                      <div key={i} style={{display:'flex', alignItems:'center', gap:6, padding:'4px 0', borderTop:'1px solid var(--border)'}}>
-                        <span style={{fontSize:11, color: it.src==='manual' ? 'var(--warning)' : 'var(--text-sub)', flexShrink:0}}>
-                          {it.src==='manual' ? '✏️' : '📅'}
-                        </span>
-                        <span style={{fontSize:12, flex:1}}>{it.title}</span>
-                        {it.memo && <span style={{fontSize:11, color:'var(--text-sub)'}}>{it.memo}</span>}
-                        <span style={{fontSize:11, color:'var(--text-sub)', whiteSpace:'nowrap'}}>{fmtMins(it.mins)}</span>
-                        {it.src==='manual' && <button onClick={() => deleteLog(it.id)} style={{background:'none',border:'none',color:'#CCC',cursor:'pointer',fontSize:13,padding:'0 2px'}}>×</button>}
+                {viewMode === 'category' && (
+                  <>
+                    {/* AI自動化サマリー */}
+                    {(() => {
+                      const highMins  = catGrouped.filter(c=>c.ai==='high').reduce((s,c)=>s+c.mins,0);
+                      const midMins   = catGrouped.filter(c=>c.ai==='mid').reduce((s,c)=>s+c.mins,0);
+                      const lowMins   = catGrouped.filter(c=>c.ai==='low').reduce((s,c)=>s+c.mins,0);
+                      const checkMins = catGrouped.filter(c=>c.ai==='check').reduce((s,c)=>s+c.mins,0);
+                      const total = highMins + midMins + lowMins + checkMins || 1;
+                      return (
+                        <div style={{background:'#F0FDF4', border:'1px solid #BBF7D0', borderRadius:12, padding:'12px 14px', marginBottom:14}}>
+                          <div style={{fontSize:13, fontWeight:700, color:'#15803D', marginBottom:10}}>🤖 AI自動化ポテンシャル</div>
+                          {[
+                            { label:'Claude自動化◎', mins:highMins,  color:'#22C55E', bg:'#DCFCE7' },
+                            { label:'部分的に可',     mins:midMins,   color:'#F59E0B', bg:'#FEF9C3' },
+                            { label:'対人・移動',     mins:lowMins,   color:'#EF4444', bg:'#FEE2E2' },
+                            { label:'要確認',         mins:checkMins, color:'#8B5CF6', bg:'#EDE9FE' },
+                          ].filter(r=>r.mins>0).map(r => (
+                            <div key={r.label} style={{display:'flex', alignItems:'center', gap:8, marginBottom:6}}>
+                              <div style={{fontSize:11, fontWeight:600, color:r.color, width:110, flexShrink:0}}>{r.label}</div>
+                              <div style={{flex:1, background:'#E5E7EB', borderRadius:4, height:10, overflow:'hidden'}}>
+                                <div style={{height:'100%', width:`${Math.round(r.mins/total*100)}%`, background:r.color, borderRadius:4}} />
+                              </div>
+                              <div style={{fontSize:12, fontWeight:700, color:r.color, width:60, textAlign:'right', flexShrink:0}}>{fmtMins(r.mins)}</div>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
+
+                    {catGrouped.map(cat => (
+                      <div key={cat.key} style={{marginBottom:10, background:'var(--bg)', borderRadius:10, padding:'10px 12px'}}>
+                        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6}}>
+                          <div>
+                            <span style={{fontSize:14, fontWeight:700}}>{cat.icon} {cat.key}</span>
+                            <span style={{
+                              marginLeft:8, fontSize:10, fontWeight:700, padding:'2px 7px',
+                              borderRadius:10, background: cat.aiColor+'22', color: cat.aiColor,
+                            }}>{cat.aiLabel}</span>
+                          </div>
+                          <span style={{fontSize:14, fontWeight:800, color:'var(--accent)'}}>{fmtMins(cat.mins)}</span>
+                        </div>
+                        {cat.items.map((it, i) => (
+                          <div key={i} style={{display:'flex', alignItems:'center', gap:6, padding:'4px 0', borderTop:'1px solid var(--border)'}}>
+                            <span style={{fontSize:11, color: it.src==='manual' ? 'var(--warning)' : 'var(--text-sub)', flexShrink:0}}>
+                              {it.src==='manual' ? '✏️' : '📅'}
+                            </span>
+                            <span style={{fontSize:12, flex:1}}>{it.title}</span>
+                            {it.memo && <span style={{fontSize:11, color:'var(--text-sub)'}}>{it.memo}</span>}
+                            <span style={{fontSize:11, color:'var(--text-sub)', whiteSpace:'nowrap'}}>{fmtMins(it.mins)}</span>
+                            {it.src==='manual' && <button onClick={() => deleteLog(it.id)} style={{background:'none',border:'none',color:'#CCC',cursor:'pointer',fontSize:13,padding:'0 2px'}}>×</button>}
+                          </div>
+                        ))}
                       </div>
                     ))}
-                  </div>
-                ))}
+                  </>
+                )}
 
                 {/* 日別ビュー */}
                 {viewMode === 'day' && dayGrouped.map(([day, evs]) => {
