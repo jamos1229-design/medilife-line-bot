@@ -92,9 +92,35 @@ textarea.inp{min-height:80px;resize:none;line-height:1.5;}
 .stat-num{font-size:32px;font-weight:700;color:var(--acc);}
 .stat-lbl{font-size:12px;color:var(--txt2);margin-top:4px;}
 .pb{height:40px;}
+/* API KEY MODAL */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;}
+.modal-overlay.hidden{display:none;}
+.modal-box{background:var(--sur);border-radius:18px;padding:24px;width:100%;max-width:340px;border:1px solid var(--bdr);}
+.modal-title{font-size:17px;font-weight:700;margin-bottom:8px;}
+.modal-desc{font-size:13px;color:var(--txt2);line-height:1.6;margin-bottom:16px;}
+.modal-input{width:100%;background:var(--bg);border:1px solid var(--bdr);border-radius:10px;padding:12px 13px;color:var(--txt);font-size:14px;outline:none;font-family:inherit;margin-bottom:12px;}
+.modal-input:focus{border-color:var(--acc);}
+.modal-btns{display:flex;gap:8px;}
+.modal-ok{flex:1;padding:12px;background:var(--acc);border:none;border-radius:10px;color:#fff;font-size:15px;font-weight:700;cursor:pointer;}
+.modal-cancel{padding:12px 16px;background:none;border:1px solid var(--bdr);border-radius:10px;color:var(--txt2);font-size:15px;cursor:pointer;}
+.modal-status{font-size:12px;color:var(--ok);margin-bottom:12px;display:none;}
 </style>
 </head>
 <body>
+
+<!-- API KEY MODAL -->
+<div class="modal-overlay hidden" id="apiModal">
+  <div class="modal-box">
+    <div class="modal-title">🔑 APIキー設定</div>
+    <div class="modal-desc">AI機能を使うにはAnthropicのAPIキーが必要です。<br><a href="https://console.anthropic.com" target="_blank" style="color:var(--acc);">console.anthropic.com</a> でコピーできます。</div>
+    <div class="modal-status" id="apiModalStatus">✅ APIキー登録済み</div>
+    <input class="modal-input" id="apiKeyInput" type="password" placeholder="sk-ant-...">
+    <div class="modal-btns">
+      <button class="modal-cancel" onclick="closeApiModal()">キャンセル</button>
+      <button class="modal-ok" onclick="saveApiKey()">保存して使う</button>
+    </div>
+  </div>
+</div>
 
 <div class="nav" id="mainNav">
   <span class="nav-title">📋 商談記録</span>
@@ -422,7 +448,7 @@ function addThumb(src){
 }
 
 async function genAI(type){
-  if(!apiKey){ showApiKeyPrompt(); return; }
+  if(!apiKey){ showApiKeyPrompt(type); return; }
   const r=records.find(x=>x.id===curId);
   if(!r) return;
   document.getElementById('aiLoading').style.display='block';
@@ -458,24 +484,49 @@ async function genAI(type){
   document.getElementById('aiLoading').style.display='none';
 }
 
-function showApiKeyPrompt(){
-  const key = prompt('AnthropicのAPIキーを入力してください\n（sk-ant-...で始まる文字列）\n\nhttps://console.anthropic.com でコピーできます');
-  if(key && key.startsWith('sk-')){
-    apiKey = key.trim();
-    localStorage.setItem('shodan_apikey', apiKey);
+let _pendingAiType = null;
+
+function showApiKeyPrompt(pendingType){
+  _pendingAiType = pendingType || null;
+  const input = document.getElementById('apiKeyInput');
+  const status = document.getElementById('apiModalStatus');
+  input.value = '';
+  if(apiKey){
+    status.textContent = '✅ 登録済み (末尾: ...'+apiKey.slice(-6)+')  変更する場合は新しいキーを入力';
+    status.style.display = 'block';
+  } else {
+    status.style.display = 'none';
   }
+  document.getElementById('apiModal').classList.remove('hidden');
+  setTimeout(()=>input.focus(), 100);
+}
+
+function closeApiModal(){
+  document.getElementById('apiModal').classList.add('hidden');
+  _pendingAiType = null;
+}
+
+function saveApiKey(){
+  const val = document.getElementById('apiKeyInput').value.trim();
+  if(!val){
+    // キー未入力でもキャンセル（既存キーがあれば継続）
+    closeApiModal();
+    if(apiKey && _pendingAiType) genAI(_pendingAiType);
+    return;
+  }
+  if(!val.startsWith('sk-')){
+    document.getElementById('apiKeyInput').style.borderColor='var(--ng)';
+    document.getElementById('apiKeyInput').placeholder='sk-ant-... で始まるキーを入力';
+    return;
+  }
+  apiKey = val;
+  localStorage.setItem('shodan_apikey', apiKey);
+  closeApiModal();
+  if(_pendingAiType) genAI(_pendingAiType);
 }
 
 function changeApiKey(){
-  const current = apiKey ? 'APIキー登録済み (...'+apiKey.slice(-6)+')' : 'APIキー未設定';
-  const key = prompt(current+'\n\n新しいAPIキーを入力（変更しない場合はキャンセル）\nhttps://console.anthropic.com でコピーできます');
-  if(key && key.startsWith('sk-')){
-    apiKey = key.trim();
-    localStorage.setItem('shodan_apikey', apiKey);
-    alert('✅ APIキーを更新しました');
-  } else if(key !== null){
-    alert('⚠️ sk-ant-... で始まるキーを入力してください');
-  }
+  showApiKeyPrompt(null);
 }
 
 function copyAI(){
@@ -500,6 +551,15 @@ function exportCSV(){
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
+
+// Close modal on overlay click
+document.getElementById('apiModal').addEventListener('click', function(e){
+  if(e.target===this) closeApiModal();
+});
+// Close on Enter key in input
+document.getElementById('apiKeyInput').addEventListener('keydown', function(e){
+  if(e.key==='Enter') saveApiKey();
+});
 
 (async () => {
   await initDB();
