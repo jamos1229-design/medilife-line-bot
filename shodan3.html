@@ -92,41 +92,15 @@ textarea.inp{min-height:80px;resize:none;line-height:1.5;}
 .stat-num{font-size:32px;font-weight:700;color:var(--acc);}
 .stat-lbl{font-size:12px;color:var(--txt2);margin-top:4px;}
 .pb{height:40px;}
-/* API KEY MODAL */
-.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;}
-.modal-overlay.hidden{display:none;}
-.modal-box{background:var(--sur);border-radius:18px;padding:24px;width:100%;max-width:340px;border:1px solid var(--bdr);}
-.modal-title{font-size:17px;font-weight:700;margin-bottom:8px;}
-.modal-desc{font-size:13px;color:var(--txt2);line-height:1.6;margin-bottom:16px;}
-.modal-input{width:100%;background:var(--bg);border:1px solid var(--bdr);border-radius:10px;padding:12px 13px;color:var(--txt);font-size:14px;outline:none;font-family:inherit;margin-bottom:12px;}
-.modal-input:focus{border-color:var(--acc);}
-.modal-btns{display:flex;gap:8px;}
-.modal-ok{flex:1;padding:12px;background:var(--acc);border:none;border-radius:10px;color:#fff;font-size:15px;font-weight:700;cursor:pointer;}
-.modal-cancel{padding:12px 16px;background:none;border:1px solid var(--bdr);border-radius:10px;color:var(--txt2);font-size:15px;cursor:pointer;}
-.modal-status{font-size:12px;color:var(--ok);margin-bottom:12px;display:none;}
 </style>
 </head>
 <body>
 
-<!-- API KEY MODAL -->
-<div class="modal-overlay hidden" id="apiModal">
-  <div class="modal-box">
-    <div class="modal-title">🔑 APIキー設定</div>
-    <div class="modal-desc">AI機能を使うにはAnthropicのAPIキーが必要です。<br><a href="https://console.anthropic.com" target="_blank" style="color:var(--acc);">console.anthropic.com</a> でコピーできます。</div>
-    <div class="modal-status" id="apiModalStatus">✅ APIキー登録済み</div>
-    <input class="modal-input" id="apiKeyInput" type="password" placeholder="sk-ant-...">
-    <div class="modal-btns">
-      <button class="modal-cancel" onclick="closeApiModal()">キャンセル</button>
-      <button class="modal-ok" onclick="saveApiKey()">保存して使う</button>
-    </div>
-  </div>
-</div>
 
 <div class="nav" id="mainNav">
   <span class="nav-title">📋 商談記録</span>
   <button style="background:none;border:1px solid var(--bdr);color:var(--txt2);border-radius:20px;padding:7px 12px;font-size:13px;cursor:pointer;" onclick="exportCSV()">💾 保存</button>
-  <button style="background:none;border:1px solid var(--bdr);color:var(--txt2);border-radius:20px;padding:7px 12px;font-size:13px;cursor:pointer;" onclick="changeApiKey()" title="APIキー設定">⚙️</button>
-  <button class="nav-btn" onclick="showForm()">＋ 新規</button>
+<button class="nav-btn" onclick="showForm()">＋ 新規</button>
 </div>
 <div class="tabs" id="mainTabs">
   <div class="tab active" onclick="switchTab('list')">一覧</div>
@@ -228,13 +202,13 @@ textarea.inp{min-height:80px;resize:none;line-height:1.5;}
   <button class="det-back" onclick="showList()">← 一覧に戻る</button>
   <div id="detailContent"></div>
   <div class="ai-btns">
-    <button class="ai-btn" onclick="genAI('紹介')">🤝 紹介獲得アドバイスを生成</button>
-    <button class="ai-btn" onclick="genAI('instagram')">📸 Instagram投稿文を生成</button>
-    <button class="ai-btn" onclick="genAI('次回')">🎯 次回商談の準備を生成</button>
+    <div style="font-size:12px;color:var(--txt2);margin-bottom:10px;text-align:center;">💡 ボタンを押すとプロンプトがコピーされます<br>Claude.aiに貼り付けて使ってください</div>
+    <button class="ai-btn" onclick="copyPrompt('紹介')">🤝 紹介獲得アドバイスをコピー</button>
+    <button class="ai-btn" onclick="copyPrompt('instagram')">📸 Instagram投稿ネタをコピー</button>
+    <button class="ai-btn" onclick="copyPrompt('次回')">🎯 次回商談の準備をコピー</button>
+    <a href="https://claude.ai" target="_blank" style="display:block;text-align:center;margin-top:8px;padding:12px;background:var(--sur2);border-radius:10px;color:var(--acc);font-size:14px;font-weight:600;text-decoration:none;">✨ Claude.aiを開く →</a>
   </div>
-  <div class="ai-loading" id="aiLoading">⏳ AI生成中...</div>
-  <div class="ai-result" id="aiResult"></div>
-  <button class="copy-btn" id="copyBtn" onclick="copyAI()">📋 コピー</button>
+  <div id="copyToast" style="display:none;background:#22C55E;color:#fff;border-radius:10px;padding:12px;text-align:center;font-size:14px;margin-top:8px;">📋 コピーしました！Claude.aiに貼り付けてください</div>
   <button class="del-btn" onclick="delRecord()">🗑 この商談を削除</button>
   <div class="pb"></div>
 </div>
@@ -244,7 +218,6 @@ let records = [];
 let curId = null;
 let editId = null;
 let curTab = 'list';
-let apiKey = localStorage.getItem('shodan_apikey') || '';
 let photos = [];
 let db = null;
 
@@ -447,92 +420,44 @@ function addThumb(src){
   document.getElementById('photoPreview').appendChild(img);
 }
 
-async function genAI(type){
-  if(!apiKey){ showApiKeyPrompt(type); return; }
+function copyPrompt(type){
   const r=records.find(x=>x.id===curId);
   if(!r) return;
-  document.getElementById('aiLoading').style.display='block';
-  document.getElementById('aiResult').style.display='none';
-  document.getElementById('copyBtn').style.display='none';
-  const summary=`顧客名:${r.name} 日付:${r.date} 場所:${r.place} 職業:${r.job} 家族:${r.family} きっかけ:${r.trigger} ニーズ:${r.needs} 刺さった点:${r.point} ツール:${r.tool} 商品:${r.product} 結果:${r.result} 告知:${r.notice} 次回:${r.next} 温度感:${r.temp} 雑談:${r.chat} 印象:${r.impression}`;
+  const summary=`【商談記録】
+顧客名: ${r.name||''}
+面談日: ${r.date||''}  場所: ${r.place||''}
+職業・年収: ${r.job||''}  家族構成: ${r.family||''}
+きっかけ: ${r.trigger||''}
+ニーズ・悩み: ${r.needs||''}
+刺さったポイント: ${r.point||''}
+使ったツール: ${r.tool||''}
+提案商品・金額: ${r.product||''}
+結果: ${r.result||''}  温度感: ${r.temp||''}
+次回アクション: ${r.next||''}
+雑談メモ: ${r.chat||''}
+印象・気づき: ${r.impression||''}`;
+
   const prompts={
-    '紹介':'以下の商談記録をもとに、この顧客から紹介をもらうための具体的なアドバイスをください。タイミング・セリフ例・ターゲット像を含めて日本語で出力してください。\n\n',
-    'instagram':'以下の商談記録をもとに、FP・保険営業のInstagram投稿文を作成してください。顧客が特定されないよう配慮しつつ共感を呼ぶ内容にしてください。ハッシュタグも含めてください。\n\n',
-    '次回':'以下の商談記録をもとに、次回商談の準備事項・確認すべきこと・提案内容のアドバイスを具体的に日本語で出力してください。\n\n'
+    '紹介': `以下の商談記録をもとに、この顧客から紹介をもらうための具体的なアドバイスをください。タイミング・セリフ例・紹介してもらいやすいターゲット像を含めて日本語で出力してください。\n\n${summary}`,
+    'instagram': `以下の商談記録をもとに、FP・保険営業のInstagram投稿文を作成してください。顧客が特定されないよう配慮しつつ、フォロワーの共感を呼ぶ内容にしてください。ハッシュタグも含めてください。\n\n${summary}`,
+    '次回': `以下の商談記録をもとに、次回商談の準備事項・確認すべきこと・提案内容のアドバイスを具体的に日本語で出力してください。\n\n${summary}`
   };
-  try{
-    const res=await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST',
-      headers:{
-        'Content-Type':'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-allow-browser': 'true'
-      },
-      body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:1000,messages:[{role:'user',content:prompts[type]+summary}]})
+
+  const text = prompts[type];
+  const toast = document.getElementById('copyToast');
+
+  if(navigator.clipboard){
+    navigator.clipboard.writeText(text).then(()=>{
+      toast.style.display='block';
+      setTimeout(()=>toast.style.display='none', 3000);
     });
-    const data=await res.json();
-    if(data.error){ throw new Error(data.error.message); }
-    const text=data.content&&data.content[0]?data.content[0].text:'エラーが発生しました';
-    document.getElementById('aiResult').textContent=text;
-    document.getElementById('aiResult').style.display='block';
-    document.getElementById('copyBtn').style.display='block';
-  }catch(e){
-    document.getElementById('aiResult').textContent='エラー: '+e.message+'\nAPIキーを確認してください（右上の⚙️）';
-    document.getElementById('aiResult').style.display='block';
-  }
-  document.getElementById('aiLoading').style.display='none';
-}
-
-let _pendingAiType = null;
-
-function showApiKeyPrompt(pendingType){
-  _pendingAiType = pendingType || null;
-  const input = document.getElementById('apiKeyInput');
-  const status = document.getElementById('apiModalStatus');
-  input.value = '';
-  if(apiKey){
-    status.textContent = '✅ 登録済み (末尾: ...'+apiKey.slice(-6)+')  変更する場合は新しいキーを入力';
-    status.style.display = 'block';
   } else {
-    status.style.display = 'none';
+    const el=document.createElement('textarea');
+    el.value=text; document.body.appendChild(el); el.select();
+    document.execCommand('copy'); document.body.removeChild(el);
+    toast.style.display='block';
+    setTimeout(()=>toast.style.display='none', 3000);
   }
-  document.getElementById('apiModal').classList.remove('hidden');
-  setTimeout(()=>input.focus(), 100);
-}
-
-function closeApiModal(){
-  document.getElementById('apiModal').classList.add('hidden');
-  _pendingAiType = null;
-}
-
-function saveApiKey(){
-  const val = document.getElementById('apiKeyInput').value.trim();
-  if(!val){
-    // キー未入力でもキャンセル（既存キーがあれば継続）
-    closeApiModal();
-    if(apiKey && _pendingAiType) genAI(_pendingAiType);
-    return;
-  }
-  if(!val.startsWith('sk-')){
-    document.getElementById('apiKeyInput').style.borderColor='var(--ng)';
-    document.getElementById('apiKeyInput').placeholder='sk-ant-... で始まるキーを入力';
-    return;
-  }
-  apiKey = val;
-  localStorage.setItem('shodan_apikey', apiKey);
-  closeApiModal();
-  if(_pendingAiType) genAI(_pendingAiType);
-}
-
-function changeApiKey(){
-  showApiKeyPrompt(null);
-}
-
-function copyAI(){
-  const text=document.getElementById('aiResult').textContent;
-  if(navigator.clipboard){ navigator.clipboard.writeText(text).then(()=>{ document.getElementById('copyBtn').textContent='✅ コピーしました'; setTimeout(()=>document.getElementById('copyBtn').textContent='📋 コピー',2000); }); }
-  else{ const el=document.createElement('textarea'); el.value=text; document.body.appendChild(el); el.select(); document.execCommand('copy'); document.body.removeChild(el); document.getElementById('copyBtn').textContent='✅ コピーしました'; setTimeout(()=>document.getElementById('copyBtn').textContent='📋 コピー',2000); }
 }
 
 function exportCSV(){
@@ -552,14 +477,6 @@ function exportCSV(){
   URL.revokeObjectURL(url);
 }
 
-// Close modal on overlay click
-document.getElementById('apiModal').addEventListener('click', function(e){
-  if(e.target===this) closeApiModal();
-});
-// Close on Enter key in input
-document.getElementById('apiKeyInput').addEventListener('keydown', function(e){
-  if(e.key==='Enter') saveApiKey();
-});
 
 (async () => {
   await initDB();
