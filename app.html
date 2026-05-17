@@ -716,9 +716,17 @@ function TaskDrawer({ clients, editing, onSave, onClose }) {
 // ── Client Drawer ─────────────────────────────────────────────
 const MONTHS = ['未定','1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
 
+const CLIENT_STATUSES = [
+  { key: '進行中', color: '#3B82F6', bg: '#EFF6FF' },
+  { key: '成約',   color: '#16A34A', bg: '#DCFCE7' },
+  { key: '断り',   color: '#DC2626', bg: '#FEE2E2' },
+  { key: '完了',   color: '#9CA3AF', bg: '#F3F4F6' },
+];
+
 function ClientDrawer({ editing, onSave, onClose }) {
   const [form, setForm] = useState({
     name: '', prospectMonth: '未定', helpWith: '', prospectAC: '', memo: '', axis: '', rowType: 'work',
+    status: '進行中',
     ...(editing || {}),
   });
   const s = k => v => setForm(f => ({ ...f, [k]: v }));
@@ -728,6 +736,21 @@ function ClientDrawer({ editing, onSave, onClose }) {
       <div className="drawer">
         <div className="drawer-handle"/>
         <div className="drawer-title">{editing ? 'クライアント編集' : 'クライアント追加'}</div>
+
+        <div className="form-group">
+          <label className="form-label">ステータス</label>
+          <div style={{display:'flex', gap:6, flexWrap:'wrap'}}>
+            {CLIENT_STATUSES.map(st => (
+              <button key={st.key} onClick={() => s('status')(st.key)} style={{
+                padding:'7px 14px', borderRadius:20, border:'1.5px solid',
+                fontSize:13, fontWeight:700, cursor:'pointer',
+                borderColor: form.status===st.key ? st.color : 'var(--border)',
+                background: form.status===st.key ? st.bg : 'var(--bg)',
+                color: form.status===st.key ? st.color : 'var(--text-sub)',
+              }}>{st.key}</button>
+            ))}
+          </div>
+        </div>
 
         <div className="form-group">
           <label className="form-label">名前</label>
@@ -1226,11 +1249,13 @@ function MatrixTab({ tasks, clients }) {
 // ── Tab: Clients ──────────────────────────────────────────────
 function ClientsTab({ clients, tasks, onAdd, onEdit, onDelete }) {
   const [search, setSearch] = useState('');
-  const [sort, setSort]     = useState('name'); // 'name' | 'month' | 'ac'
+  const [sort, setSort]     = useState('name');
+  const [statusFilter, setStatusFilter] = useState('進行中');
 
   const openTasks = id => tasks.filter(t => t.clientId===id && !t.completed).length;
 
   const filtered = clients
+    .filter(c => statusFilter === 'すべて' ? true : (c.status || '進行中') === statusFilter)
     .filter(c =>
       c.name.includes(search) ||
       (c.helpWith||'').includes(search) ||
@@ -1246,11 +1271,34 @@ function ClientsTab({ clients, tasks, onAdd, onEdit, onDelete }) {
 
   return (
     <div>
-      {/* 検索バー（常に見える） */}
+      {/* ステータスフィルター */}
       <div style={{
         position:'sticky', top:0, zIndex:10,
-        background:'var(--bg)', paddingBottom:8, marginBottom:4,
+        background:'var(--bg)', paddingBottom:8,
       }}>
+        <div style={{display:'flex', gap:4, marginBottom:8, overflowX:'auto', paddingBottom:2}}>
+          {['進行中','成約','断り','完了','すべて'].map(st => {
+            const info = CLIENT_STATUSES.find(s => s.key===st);
+            const active = statusFilter === st;
+            return (
+              <button key={st} onClick={() => setStatusFilter(st)} style={{
+                flexShrink:0, padding:'6px 14px', borderRadius:20, border:'1.5px solid',
+                fontSize:12, fontWeight:700, cursor:'pointer',
+                borderColor: active ? (info?.color||'var(--accent)') : 'var(--border)',
+                background: active ? (info?.bg||'var(--accent-light)') : 'var(--bg)',
+                color: active ? (info?.color||'var(--accent)') : 'var(--text-sub)',
+              }}>
+                {st}
+                <span style={{marginLeft:4, fontSize:11}}>
+                  {st==='すべて' ? clients.length : clients.filter(c=>(c.status||'進行中')===st).length}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+      {/* 検索バー（常に見える） */}
+      <div style={{paddingBottom:8, marginBottom:4}}>
         <div style={{position:'relative', marginBottom:8}}>
           <span style={{position:'absolute', left:12, top:'50%', transform:'translateY(-50%)', fontSize:15}}>🔍</span>
           <input
@@ -1286,6 +1334,7 @@ function ClientsTab({ clients, tasks, onAdd, onEdit, onDelete }) {
           </div>
         </div>
       </div>
+      </div>
 
 
       {filtered.length === 0
@@ -1294,10 +1343,19 @@ function ClientsTab({ clients, tasks, onAdd, onEdit, onDelete }) {
             {filtered.map(c => (
               <div key={c.id} className="client-item">
                 <div className="client-top">
-                  <div style={{display:'flex', alignItems:'center', gap:7}}>
+                  <div style={{display:'flex', alignItems:'center', gap:7, flexWrap:'wrap'}}>
                     <span className="client-name">{c.name}</span>
                     {openTasks(c.id) > 0 &&
                       <span className="task-badge">{openTasks(c.id)}</span>}
+                    {(() => {
+                      const st = CLIENT_STATUSES.find(s => s.key===(c.status||'進行中'));
+                      return st ? (
+                        <span style={{
+                          fontSize:11, fontWeight:700, padding:'2px 8px', borderRadius:10,
+                          background: st.bg, color: st.color,
+                        }}>{st.key}</span>
+                      ) : null;
+                    })()}
                   </div>
                   <div className="client-right">
                     {c.axis && <AxisBadge axis={c.axis} />}
