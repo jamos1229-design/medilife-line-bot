@@ -1160,22 +1160,66 @@ function MatrixTab({ tasks, clients }) {
 // ── Tab: Clients ──────────────────────────────────────────────
 function ClientsTab({ clients, tasks, onAdd, onEdit, onDelete }) {
   const [search, setSearch] = useState('');
+  const [sort, setSort]     = useState('name'); // 'name' | 'month' | 'ac'
 
   const openTasks = id => tasks.filter(t => t.clientId===id && !t.completed).length;
 
-  const filtered = clients.filter(c =>
-    c.name.includes(search) ||
-    (c.helpWith||'').includes(search) ||
-    (c.memo||'').includes(search) ||
-    (c.prospectAC||'').includes(search)
-  );
+  const filtered = clients
+    .filter(c =>
+      c.name.includes(search) ||
+      (c.helpWith||'').includes(search) ||
+      (c.memo||'').includes(search) ||
+      (c.prospectAC||'').includes(search) ||
+      (c.prospectMonth||'').includes(search)
+    )
+    .sort((a, b) => {
+      if (sort === 'ac')    return (Number(b.prospectAC)||0) - (Number(a.prospectAC)||0);
+      if (sort === 'month') return (a.prospectMonth||'未定').localeCompare(b.prospectMonth||'未定');
+      return a.name.localeCompare(b.name, 'ja');
+    });
 
   return (
     <div>
-      <div className="section-title">クライアント</div>
-
-      <input className="form-input" placeholder="🔍 検索..." value={search}
-        onChange={e => setSearch(e.target.value)} style={{marginBottom:10}} />
+      {/* 検索バー（常に見える） */}
+      <div style={{
+        position:'sticky', top:0, zIndex:10,
+        background:'var(--bg)', paddingBottom:8, marginBottom:4,
+      }}>
+        <div style={{position:'relative', marginBottom:8}}>
+          <span style={{position:'absolute', left:12, top:'50%', transform:'translateY(-50%)', fontSize:15}}>🔍</span>
+          <input
+            style={{
+              width:'100%', padding:'10px 12px 10px 36px',
+              border:'1.5px solid var(--border)', borderRadius:10,
+              fontSize:15, background:'#fff', outline:'none',
+            }}
+            placeholder="名前・メモ・見込み月で検索..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+          {search && (
+            <button onClick={() => setSearch('')} style={{
+              position:'absolute', right:10, top:'50%', transform:'translateY(-50%)',
+              background:'none', border:'none', fontSize:16, color:'var(--text-sub)', cursor:'pointer',
+            }}>×</button>
+          )}
+        </div>
+        <div style={{display:'flex', gap:6, alignItems:'center'}}>
+          <span style={{fontSize:12, color:'var(--text-sub)'}}>
+            {filtered.length}件{search && ` / 全${clients.length}件`}
+          </span>
+          <div style={{marginLeft:'auto', display:'flex', gap:4}}>
+            {[['name','名前'],['month','見込み月'],['ac','AC順']].map(([k,l]) => (
+              <button key={k} onClick={() => setSort(k)} style={{
+                padding:'4px 10px', borderRadius:6, border:'none', cursor:'pointer', fontSize:11,
+                background: sort===k ? 'var(--accent)' : 'var(--bg)',
+                color: sort===k ? '#fff' : 'var(--text-sub)',
+                fontWeight: sort===k ? 700 : 400,
+              }}>{l}</button>
+            ))}
+          </div>
+        </div>
+      </div>
 
 
       {filtered.length === 0
