@@ -490,13 +490,32 @@ function useLS(key, init) {
 
 // ── Task Drawer ───────────────────────────────────────────────
 function TaskDrawer({ clients, editing, onSave, onClose }) {
-  // デフォルト値を先に設定し、editing で上書き（rowType など古いタスクに無いフィールドを補完）
   const [form, setForm] = useState({
     title: '', date: '', importance: 1, urgency: 1,
     clientId: '', rowType: 'work', axis: '', recurrence: 'none', completed: false,
+    steps: [],
     ...(editing || {}),
   });
   const s = k => v => setForm(f => ({ ...f, [k]: v }));
+
+  // ベビーステップ操作
+  const [stepInput, setStepInput] = useState('');
+  const addStep = () => {
+    const txt = stepInput.trim();
+    if (!txt) return;
+    setForm(f => ({ ...f, steps: [...(f.steps||[]), { id: Date.now().toString(), text: txt, done: false }] }));
+    setStepInput('');
+  };
+  const removeStep = (id) => setForm(f => ({ ...f, steps: (f.steps||[]).filter(s => s.id !== id) }));
+  const moveStep = (idx, dir) => {
+    setForm(f => {
+      const arr = [...(f.steps||[])];
+      const to = idx + dir;
+      if (to < 0 || to >= arr.length) return f;
+      [arr[idx], arr[to]] = [arr[to], arr[idx]];
+      return { ...f, steps: arr };
+    });
+  };
 
   return (
     <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -579,6 +598,44 @@ function TaskDrawer({ clients, editing, onSave, onClose }) {
             <option value="">なし</option>
             {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
+        </div>
+
+        {/* ── ベビーステップ ── */}
+        <div className="form-group">
+          <label className="form-label">🪜 ベビーステップ（任意）</label>
+          <div style={{fontSize:12, color:'var(--text-sub)', marginBottom:8}}>タスクを小さなステップに分けて書けます</div>
+
+          {/* 既存ステップ一覧 */}
+          {(form.steps||[]).map((step, idx) => (
+            <div key={step.id} style={{
+              display:'flex', alignItems:'center', gap:6,
+              padding:'7px 8px', marginBottom:4,
+              background:'var(--bg)', borderRadius:8,
+              border:'1px solid var(--border)',
+            }}>
+              <span style={{fontSize:13, color:'var(--text-sub)', flexShrink:0}}>・</span>
+              <span style={{flex:1, fontSize:13}}>{step.text}</span>
+              <button onClick={() => moveStep(idx, -1)} style={{background:'none',border:'none',color:'#BBB',cursor:'pointer',fontSize:12,padding:'0 2px'}}>↑</button>
+              <button onClick={() => moveStep(idx,  1)} style={{background:'none',border:'none',color:'#BBB',cursor:'pointer',fontSize:12,padding:'0 2px'}}>↓</button>
+              <button onClick={() => removeStep(step.id)} style={{background:'none',border:'none',color:'#CCC',cursor:'pointer',fontSize:15,padding:'0 2px'}}>×</button>
+            </div>
+          ))}
+
+          {/* 新規入力 */}
+          <div style={{display:'flex', gap:6, marginTop:4}}>
+            <input
+              className="form-input" style={{flex:1, marginBottom:0}}
+              placeholder="例：資料を印刷する"
+              value={stepInput}
+              onChange={e => setStepInput(e.target.value)}
+              onKeyDown={e => e.key==='Enter' && addStep()}
+            />
+            <button onClick={addStep} style={{
+              padding:'0 14px', borderRadius:8, border:'none',
+              background:'var(--accent)', color:'#fff',
+              fontSize:18, cursor:'pointer', flexShrink:0,
+            }}>＋</button>
+          </div>
         </div>
 
         <button className="btn btn-primary btn-full" style={{marginTop:4}}
@@ -880,28 +937,74 @@ function TodayTab({ tasks, clients, onToggle, onEdit, onDelete, sales, onSalesCh
     return null;
   };
 
+  // ステップのチェック切り替え
+  const toggleStep = (taskId, stepId) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return;
+    const newSteps = (task.steps||[]).map(s => s.id===stepId ? {...s, done:!s.done} : s);
+    onEdit({ ...task, steps: newSteps, _saveOnly: true });
+  };
+
   // 通常タスク行
-  const TaskRow = ({ t, hideDate }) => (
-    <div className="task-item">
-      <div className="task-check" onClick={() => onToggle(t.id)} />
-      <div className="task-body" onClick={() => onEdit(t)}>
-        <div className="task-name">{t.title}</div>
-        <div className="task-tags">
-          {isRecurring(t)
-            ? <RecurBadge t={t} />
-            : (!hideDate && t.date && t.date !== td) && <span className="tag tag-date">{fmtDate(t.date)}</span>}
-          {t.importance === 1 && <span className="tag tag-imp">重要</span>}
-          {t.urgency === 1    && <span className="tag tag-urg">緊急</span>}
-          {clientName(t.clientId) && <span className="tag tag-client">{clientName(t.clientId)}</span>}
-          {t.axis && <AxisBadge axis={t.axis} />}
+  const TaskRow = ({ t, hideDate }) => {
+    const steps = t.steps || [];
+    const doneCount = steps.filter(s => s.done).length;
+    return (
+      <div className="task-item" style={{flexDirection:'column', alignItems:'stretch', gap:0}}>
+        <div style={{display:'flex', alignItems:'center'}}>
+          <div className="task-check" onClick={() => onToggle(t.id)} />
+          <div className="task-body" onClick={() => onEdit(t)}>
+            <div className="task-name">{t.title}</div>
+            <div className="task-tags">
+              {isRecurring(t)
+                ? <RecurBadge t={t} />
+                : (!hideDate && t.date && t.date !== td) && <span className="tag tag-date">{fmtDate(t.date)}</span>}
+              {t.importance === 1 && <span className="tag tag-imp">重要</span>}
+              {t.urgency === 1    && <span className="tag tag-urg">緊急</span>}
+              {clientName(t.clientId) && <span className="tag tag-client">{clientName(t.clientId)}</span>}
+              {t.axis && <AxisBadge axis={t.axis} />}
+              {steps.length > 0 && (
+                <span style={{fontSize:11, background:'#EEF2FF', color:'var(--accent)',
+                  borderRadius:4, padding:'1px 6px', fontWeight:600}}>
+                  🪜 {doneCount}/{steps.length}
+                </span>
+              )}
+            </div>
+          </div>
+          <a href={toGCalUrl(t)} target="_blank" rel="noreferrer"
+            style={{color:'#AAA', fontSize:16, padding:'4px 6px', textDecoration:'none', lineHeight:1}}
+            title="Googleカレンダーに追加">📅</a>
+          <button className="btn btn-ghost" style={{color:'#CCC',padding:'4px 6px'}} onClick={() => onDelete(t.id)}>×</button>
         </div>
+
+        {/* ベビーステップ一覧 */}
+        {steps.length > 0 && (
+          <div style={{paddingLeft:36, paddingBottom:8}}>
+            {steps.map(step => (
+              <div key={step.id} onClick={() => toggleStep(t.id, step.id)}
+                style={{
+                  display:'flex', alignItems:'center', gap:7, padding:'4px 0',
+                  cursor:'pointer', borderTop:'1px solid var(--border)',
+                }}>
+                <div style={{
+                  width:14, height:14, borderRadius:3, flexShrink:0,
+                  border: step.done ? 'none' : '2px solid var(--border)',
+                  background: step.done ? 'var(--success)' : 'transparent',
+                  display:'flex', alignItems:'center', justifyContent:'center',
+                }}>
+                  {step.done && <span style={{color:'#fff', fontSize:10, lineHeight:1}}>✓</span>}
+                </div>
+                <span style={{
+                  fontSize:12, color: step.done ? 'var(--text-sub)' : 'var(--text)',
+                  textDecoration: step.done ? 'line-through' : 'none',
+                }}>{step.text}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
-      <a href={toGCalUrl(t)} target="_blank" rel="noreferrer"
-        style={{color:'#AAA', fontSize:16, padding:'4px 6px', textDecoration:'none', lineHeight:1}}
-        title="Googleカレンダーに追加">📅</a>
-      <button className="btn btn-ghost" style={{color:'#CCC',padding:'4px 6px'}} onClick={() => onDelete(t.id)}>×</button>
-    </div>
-  );
+    );
+  };
 
   // 完了フォルダー内のタスク行
   const DoneRow = ({ t }) => (
@@ -2399,7 +2502,15 @@ function App() {
         {tab==='today' && (
           <TodayTab tasks={tasks} clients={clients}
             onToggle={toggleTask}
-            onEdit={t => setTaskDrawer(t)}
+            onEdit={t => {
+              if (t._saveOnly) {
+                // ステップのチェックだけ保存してドロワーを開かない
+                const {_saveOnly, ...taskData} = t;
+                setTasks(prev => prev.map(p => p.id===taskData.id ? taskData : p));
+              } else {
+                setTaskDrawer(t);
+              }
+            }}
             onDelete={deleteTask}
             sales={sales} onSalesChange={setSales} />
         )}
