@@ -312,9 +312,7 @@ function showDetail(id) {
   document.getElementById('detailView').style.display='block';
   document.getElementById('mainNav').style.display='none';
   document.getElementById('mainTabs').style.display='none';
-  document.getElementById('aiResult').style.display='none';
-  document.getElementById('aiLoading').style.display='none';
-  document.getElementById('copyBtn').style.display='none';
+  document.getElementById('copyToast').style.display='none';
 
   const photosHTML = r.photos&&r.photos.length
     ? `<div class="det-sec"><div class="det-sec-title">📸 写真</div><div class="det-photos">${r.photos.map(p=>`<img class="det-photo" src="${p}">`).join('')}</div></div>` : '';
