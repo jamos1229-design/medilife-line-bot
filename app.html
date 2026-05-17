@@ -488,6 +488,75 @@ function useLS(key, init) {
   return [val, set];
 }
 
+// ── Client Picker（検索付きドロップダウン）────────────────────
+function ClientPicker({ clients, value, onChange }) {
+  const [open, setOpen]   = React.useState(false);
+  const [query, setQuery] = React.useState('');
+
+  const selected = clients.find(c => c.id === value);
+  const filtered = clients.filter(c =>
+    !query || c.name.includes(query)
+  );
+
+  const select = (id) => { onChange(id); setOpen(false); setQuery(''); };
+
+  return (
+    <div style={{position:'relative'}}>
+      {/* 選択表示ボタン */}
+      <button type="button" onClick={() => setOpen(o => !o)} style={{
+        width:'100%', padding:'10px 12px', border:'1.5px solid var(--border)',
+        borderRadius:8, background:'#fff', textAlign:'left', fontSize:15,
+        color: selected ? 'var(--text)' : 'var(--text-sub)', cursor:'pointer',
+        display:'flex', justifyContent:'space-between', alignItems:'center',
+      }}>
+        <span>{selected ? selected.name : 'なし'}</span>
+        <span style={{fontSize:11, color:'var(--text-sub)'}}>▼</span>
+      </button>
+
+      {/* ドロップダウン */}
+      {open && (
+        <div style={{
+          position:'absolute', top:'calc(100% + 4px)', left:0, right:0,
+          background:'#fff', border:'1.5px solid var(--border)', borderRadius:10,
+          zIndex:50, boxShadow:'0 4px 16px rgba(0,0,0,0.12)', maxHeight:260, display:'flex', flexDirection:'column',
+        }}>
+          {/* 検索 */}
+          <div style={{padding:'8px 10px', borderBottom:'1px solid var(--border)'}}>
+            <input
+              autoFocus
+              placeholder="🔍 名前で検索..."
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              style={{width:'100%', padding:'7px 10px', border:'1px solid var(--border)', borderRadius:7, fontSize:14}}
+            />
+          </div>
+          {/* リスト */}
+          <div style={{overflowY:'auto', flex:1}}>
+            <div onClick={() => select('')} style={{
+              padding:'10px 14px', cursor:'pointer', fontSize:14,
+              color:'var(--text-sub)', borderBottom:'1px solid var(--border)',
+            }}>なし</div>
+            {filtered.length === 0 ? (
+              <div style={{padding:'12px', textAlign:'center', color:'var(--text-sub)', fontSize:13}}>見つかりません</div>
+            ) : filtered.map(c => (
+              <div key={c.id} onClick={() => select(c.id)} style={{
+                padding:'10px 14px', cursor:'pointer', fontSize:14,
+                background: c.id===value ? 'var(--accent-light)' : '#fff',
+                color: c.id===value ? 'var(--accent)' : 'var(--text)',
+                borderBottom:'1px solid var(--border)',
+                fontWeight: c.id===value ? 700 : 400,
+              }}>{c.name}</div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 外クリックで閉じる */}
+      {open && <div style={{position:'fixed', inset:0, zIndex:49}} onClick={() => { setOpen(false); setQuery(''); }} />}
+    </div>
+  );
+}
+
 // ── Task Drawer ───────────────────────────────────────────────
 function TaskDrawer({ clients, editing, onSave, onClose }) {
   const [form, setForm] = useState({
@@ -594,10 +663,7 @@ function TaskDrawer({ clients, editing, onSave, onClose }) {
 
         <div className="form-group">
           <label className="form-label">クライアント（任意）</label>
-          <select className="form-select" value={form.clientId} onChange={e => s('clientId')(e.target.value)}>
-            <option value="">なし</option>
-            {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
+          <ClientPicker clients={clients} value={form.clientId} onChange={s('clientId')} />
         </div>
 
         {/* ── ベビーステップ ── */}
