@@ -99,6 +99,7 @@ textarea.inp{min-height:80px;resize:none;line-height:1.5;}
 <div class="nav" id="mainNav">
   <span class="nav-title">📋 商談記録</span>
   <button style="background:none;border:1px solid var(--bdr);color:var(--txt2);border-radius:20px;padding:7px 12px;font-size:13px;cursor:pointer;" onclick="exportCSV()">💾 保存</button>
+  <button style="background:none;border:1px solid var(--bdr);color:var(--txt2);border-radius:20px;padding:7px 12px;font-size:13px;cursor:pointer;" onclick="changeApiKey()" title="APIキー設定">⚙️</button>
   <button class="nav-btn" onclick="showForm()">＋ 新規</button>
 </div>
 <div class="tabs" id="mainTabs">
@@ -217,6 +218,7 @@ let records = [];
 let curId = null;
 let editId = null;
 let curTab = 'list';
+let apiKey = localStorage.getItem('shodan_apikey') || '';
 let photos = [];
 let db = null;
 
@@ -420,6 +422,7 @@ function addThumb(src){
 }
 
 async function genAI(type){
+  if(!apiKey){ showApiKeyPrompt(); return; }
   const r=records.find(x=>x.id===curId);
   if(!r) return;
   document.getElementById('aiLoading').style.display='block';
@@ -434,19 +437,45 @@ async function genAI(type){
   try{
     const res=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1000,messages:[{role:'user',content:prompts[type]+summary}]})
+      headers:{
+        'Content-Type':'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-allow-browser': 'true'
+      },
+      body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:1000,messages:[{role:'user',content:prompts[type]+summary}]})
     });
     const data=await res.json();
+    if(data.error){ throw new Error(data.error.message); }
     const text=data.content&&data.content[0]?data.content[0].text:'エラーが発生しました';
     document.getElementById('aiResult').textContent=text;
     document.getElementById('aiResult').style.display='block';
     document.getElementById('copyBtn').style.display='block';
   }catch(e){
-    document.getElementById('aiResult').textContent='エラーが発生しました。再度お試しください。';
+    document.getElementById('aiResult').textContent='エラー: '+e.message+'\nAPIキーを確認してください（右上の⚙️）';
     document.getElementById('aiResult').style.display='block';
   }
   document.getElementById('aiLoading').style.display='none';
+}
+
+function showApiKeyPrompt(){
+  const key = prompt('AnthropicのAPIキーを入力してください\n（sk-ant-...で始まる文字列）\n\nhttps://console.anthropic.com でコピーできます');
+  if(key && key.startsWith('sk-')){
+    apiKey = key.trim();
+    localStorage.setItem('shodan_apikey', apiKey);
+  }
+}
+
+function changeApiKey(){
+  const current = apiKey ? 'APIキー登録済み (...'+apiKey.slice(-6)+')' : 'APIキー未設定';
+  const key = prompt(current+'\n\n新しいAPIキーを入力（変更しない場合はキャンセル）\nhttps://console.anthropic.com でコピーできます');
+  if(key && key.startsWith('sk-')){
+    apiKey = key.trim();
+    localStorage.setItem('shodan_apikey', apiKey);
+    alert('✅ APIキーを更新しました');
+  } else if(key !== null){
+    alert('⚠️ sk-ant-... で始まるキーを入力してください');
+  }
 }
 
 function copyAI(){
