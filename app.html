@@ -843,9 +843,10 @@ function SalesTracker({ sales, onChange, clients }) {
 
   const fmt = v => Number(v).toLocaleString('ja-JP');
 
-  // 見込みAC合計（クライアント全員の prospectAC の合計・万円単位）
-  const totalAC = (clients || []).reduce((sum, c) => sum + (Number(c.prospectAC) || 0), 0);
-  const acClients = (clients || []).filter(c => Number(c.prospectAC) > 0).length;
+  // 見込みAC合計（進行中のクライアントのみ）
+  const activeClients = (clients || []).filter(c => (c.status || '進行中') === '進行中');
+  const totalAC = activeClients.reduce((sum, c) => sum + (Number(c.prospectAC) || 0), 0);
+  const acClients = activeClients.filter(c => Number(c.prospectAC) > 0).length;
 
   const open = () => { setForm(sales); setEditing(true); };
   const save = () => { onChange(form); setEditing(false); };

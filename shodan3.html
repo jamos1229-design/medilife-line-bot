@@ -181,6 +181,16 @@ textarea.inp{min-height:80px;resize:none;line-height:1.5;}
     <div class="sec-title">📝 メモ</div>
     <div class="row"><label class="lbl">雑談メモ</label><textarea class="inp" id="f_chat" placeholder="例：寮住まい、将来独立したい"></textarea></div>
     <div class="row"><label class="lbl">印象・気づき</label><textarea class="inp" id="f_impression" placeholder="例：相手の心理を読む重要性を実感"></textarea></div>
+    <div class="row">
+      <label class="lbl">Google Keep メモURL（任意）</label>
+      <input class="inp" id="f_keepUrl" type="url" placeholder="https://keep.google.com/...">
+      <div style="margin-top:8px;display:flex;gap:8px;">
+        <a href="https://keep.google.com" target="_blank"
+          style="flex:1;display:block;text-align:center;padding:10px;background:var(--sur2);border:1px solid var(--bdr);border-radius:10px;color:var(--warn);font-size:13px;font-weight:600;text-decoration:none;">
+          📒 Google Keepを開く
+        </a>
+      </div>
+    </div>
   </div>
 
   <div class="sec">
@@ -287,7 +297,7 @@ function showForm(id) {
   document.getElementById('formView').style.display='block';
   document.getElementById('mainNav').style.display='none';
   document.getElementById('mainTabs').style.display='none';
-  const fields = ['name','date','place','job','family','trigger','needs','point','tool','product','result','notice','next','temp','chat','impression'];
+  const fields = ['name','date','place','job','family','trigger','needs','point','tool','product','result','notice','next','temp','chat','impression','keepUrl'];
   if(id) {
     const r = records.find(x=>x.id===id);
     document.getElementById('formTitle').textContent='商談を編集';
@@ -344,6 +354,7 @@ function showDetail(id) {
     <div class="det-sec">
       <div class="det-sec-title">📝 メモ</div>
       ${drow('雑談メモ',r.chat)}${drow('印象・気づき',r.impression)}
+      ${r.keepUrl?`<div class="det-row"><div class="det-lbl">Google Keep</div><div class="det-val"><a href="${r.keepUrl}" target="_blank" style="color:var(--warn);font-weight:600;">📒 Keepメモを開く →</a></div></div>`:''}
     </div>
     ${photosHTML}
   `;
@@ -379,7 +390,7 @@ function renderStats(){
 function saveRecord(){
   const name=document.getElementById('f_name').value.trim();
   if(!name){alert('顧客名を入力してください');return;}
-  const fields=['name','date','place','job','family','trigger','needs','point','tool','product','result','notice','next','temp','chat','impression'];
+  const fields=['name','date','place','job','family','trigger','needs','point','tool','product','result','notice','next','temp','chat','impression','keepUrl'];
   const r={id:editId||Date.now().toString(),photos,updatedAt:new Date().toISOString()};
   fields.forEach(f=>{ r[f]=document.getElementById('f_'+f)?.value||''; });
   if(editId){ const i=records.findIndex(x=>x.id===editId); if(i>=0) records[i]=r; }
