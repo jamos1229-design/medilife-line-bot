@@ -386,6 +386,10 @@ function ContractBlock({ contract, onChange, onRemove, index }) {
           <input className="form-input" placeholder="例：〇〇生命" value={contract.company || ''} onChange={s('company')} />
         </div>
       </div>
+      <div className="form-group" style={{ marginBottom: 8 }}>
+        <label className="form-label">証券番号</label>
+        <input className="form-input" placeholder="例：AB-1234567" value={contract.policyNum || ''} onChange={s('policyNum')} />
+      </div>
       <div className="form-row">
         <div>
           <label className="form-label">保険料（月額）</label>
@@ -671,6 +675,7 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose }) {
                 <div className="customer-info-row">
                   {ct.type && <div className="info-item"><div className="info-label">保険種類</div><div className="info-value">{ct.type}</div></div>}
                   {ct.company && <div className="info-item"><div className="info-label">保険会社</div><div className="info-value">{ct.company}</div></div>}
+                  {ct.policyNum && <div className="info-item" style={{gridColumn:'1 / -1'}}><div className="info-label">証券番号</div><div className="info-value">{ct.policyNum}</div></div>}
                   {ct.premium && <div className="info-item"><div className="info-label">保険料（月額）</div><div className="info-value">¥{Number(ct.premium).toLocaleString()}</div></div>}
                   {ct.date && <div className="info-item"><div className="info-label">契約日</div><div className="info-value">{fmtDate(ct.date)}</div></div>}
                 </div>
@@ -1027,7 +1032,7 @@ function AppointmentTab({ customers, onSelect }) {
 
 // ── CSV Export ────────────────────────────────────────────────
 function exportCSV(customers) {
-  const headers = ['氏名', '年齢', '電話番号', 'メールアドレス', 'LINE登録', 'ステータス', '接触方法', '最終接触日', '次回アポイント', '契約数', '面談メモ'];
+  const headers = ['氏名', '年齢', '電話番号', 'メールアドレス', 'LINE登録', 'ステータス', '接触方法', '最終接触日', '次回アポイント', '契約数', '証券番号一覧', '面談メモ'];
   const rows = customers.map(c => [
     c.name, c.age || '', c.phone || '', c.email || '',
     c.lineRegistered ? '登録済' : '未登録',
@@ -1036,6 +1041,7 @@ function exportCSV(customers) {
     c.lastContact || '',
     c.nextAppt || '',
     (c.contracts || []).length,
+    (c.contracts || []).map(ct => ct.policyNum || '').filter(Boolean).join(' / '),
     (c.memo || '').replace(/\n/g, '　'),
   ]);
   const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
