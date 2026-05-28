@@ -1,0 +1,1158 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>既契約管理</title>
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="既契約管理">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#5B5BD6">
+  <link rel="manifest" href="data:application/json,%7B%22name%22%3A%22%E6%97%A2%E5%A5%91%E7%B4%84%E7%AE%A1%E7%90%86%22%2C%22short_name%22%3A%22%E6%97%A2%E5%A5%91%E7%B4%84%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%23F6F6F8%22%2C%22theme_color%22%3A%22%235B5BD6%22%7D">
+  <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%235B5BD6'/><text y='68' x='50' text-anchor='middle' font-size='55'>👥</text></svg>">
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --accent: #5B5BD6;
+      --accent-light: #EEEEFF;
+      --bg: #F6F6F8;
+      --surface: #FFFFFF;
+      --border: #E4E4E8;
+      --text: #18181B;
+      --text-sub: #71717A;
+      --danger: #EF4444;
+      --warning: #F59E0B;
+      --success: #22C55E;
+      --nav-h: 64px;
+      --safe-b: env(safe-area-inset-bottom, 0px);
+      --safe-t: env(safe-area-inset-top, 0px);
+    }
+    html, body { height: 100%; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'Hiragino Sans', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
+      font-size: 15px;
+      line-height: 1.5;
+      overscroll-behavior: none;
+    }
+    #root { min-height: 100vh; max-width: 430px; margin: 0 auto; }
+
+    .header {
+      position: sticky; top: 0; z-index: 10;
+      background: rgba(255,255,255,0.92);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 16px 12px;
+      padding-top: calc(14px + var(--safe-t));
+    }
+    .header-row { display: flex; align-items: center; justify-content: space-between; }
+    .header h1 { font-size: 20px; font-weight: 800; letter-spacing: -0.5px; color: var(--accent); }
+    .header-sub { font-size: 12px; color: var(--text-sub); font-weight: 500; }
+
+    .content {
+      padding: 14px;
+      padding-bottom: calc(var(--nav-h) + var(--safe-b) + 72px);
+    }
+
+    .bottom-nav {
+      position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
+      width: 100%; max-width: 430px;
+      background: rgba(255,255,255,0.95);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-top: 1px solid var(--border);
+      display: flex;
+      padding-bottom: var(--safe-b);
+      z-index: 20;
+      height: calc(var(--nav-h) + var(--safe-b));
+    }
+    .nav-item {
+      flex: 1;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 6px 2px 4px;
+      cursor: pointer; border: none; background: none; gap: 2px;
+      -webkit-tap-highlight-color: transparent;
+      transition: opacity 0.1s;
+    }
+    .nav-item:active { opacity: 0.5; }
+    .nav-icon {
+      width: 28px; height: 28px;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 8px; font-size: 17px;
+      transition: background 0.15s;
+    }
+    .nav-item.active .nav-icon { background: var(--accent-light); }
+    .nav-label { font-size: 9px; font-weight: 600; color: var(--text-sub); white-space: nowrap; }
+    .nav-item.active .nav-label { color: var(--accent); }
+
+    .card {
+      background: var(--surface);
+      border-radius: 14px; padding: 14px; margin-bottom: 10px;
+      border: 1px solid var(--border);
+    }
+    .card-title {
+      font-size: 11px; font-weight: 700; color: var(--text-sub);
+      text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 10px;
+    }
+    .section-title { font-size: 20px; font-weight: 800; margin-bottom: 14px; letter-spacing: -0.4px; }
+
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+      padding: 10px 16px; border-radius: 10px;
+      font-size: 14px; font-weight: 600;
+      cursor: pointer; border: none;
+      transition: opacity 0.1s, transform 0.1s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .btn:active { opacity: 0.7; transform: scale(0.97); }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-ghost { background: transparent; color: var(--text-sub); padding: 6px 8px; font-size: 16px; }
+    .btn-danger { color: var(--danger); background: #FEF2F2; }
+    .btn-sm { padding: 6px 10px; font-size: 13px; border-radius: 8px; }
+    .btn-full { width: 100%; }
+    .btn-outline { background: transparent; border: 1.5px solid var(--border); color: var(--text-sub); }
+
+    .form-group { margin-bottom: 14px; }
+    .form-label { font-size: 13px; font-weight: 600; color: var(--text-sub); margin-bottom: 6px; display: block; }
+    .form-input, .form-select, .form-textarea {
+      width: 100%; padding: 11px 12px;
+      border: 1.5px solid var(--border); border-radius: 10px;
+      font-size: 15px; font-family: inherit;
+      background: var(--bg); color: var(--text); outline: none;
+      transition: border-color 0.15s, background 0.15s;
+      -webkit-appearance: none;
+    }
+    .form-input:focus, .form-select:focus, .form-textarea:focus {
+      border-color: var(--accent); background: var(--surface);
+    }
+    .form-textarea { resize: vertical; min-height: 80px; line-height: 1.5; }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+    .toggle-group { display: flex; gap: 6px; flex-wrap: wrap; }
+    .toggle-btn {
+      flex: 1; padding: 9px 6px; border-radius: 9px;
+      border: 1.5px solid var(--border); background: var(--bg);
+      font-size: 13px; font-weight: 600; cursor: pointer; text-align: center;
+      transition: all 0.15s; -webkit-tap-highlight-color: transparent;
+      min-width: 60px;
+    }
+    .toggle-btn.sel { border-color: var(--accent); background: var(--accent-light); color: var(--accent); }
+
+    .overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.45);
+      z-index: 50; display: flex; align-items: flex-end; justify-content: center;
+    }
+    .drawer {
+      background: var(--surface); border-radius: 22px 22px 0 0;
+      padding: 18px 16px;
+      padding-bottom: calc(24px + var(--safe-b));
+      width: 100%; max-width: 430px;
+      max-height: 92vh; overflow-y: auto;
+    }
+    .drawer-handle {
+      width: 38px; height: 4px; background: var(--border);
+      border-radius: 2px; margin: 0 auto 18px;
+    }
+    .drawer-title { font-size: 19px; font-weight: 800; margin-bottom: 18px; letter-spacing: -0.4px; }
+
+    .full-screen {
+      position: fixed; inset: 0; background: var(--bg);
+      z-index: 40; overflow-y: auto;
+      max-width: 430px; left: 50%; transform: translateX(-50%);
+    }
+    .full-header {
+      position: sticky; top: 0; z-index: 10;
+      background: rgba(255,255,255,0.92);
+      backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 16px 12px;
+      padding-top: calc(14px + var(--safe-t));
+      display: flex; align-items: center; gap: 10px;
+    }
+    .full-content { padding: 14px; padding-bottom: 40px; }
+
+    .fab {
+      position: fixed;
+      bottom: calc(var(--nav-h) + var(--safe-b) + 14px);
+      right: calc(50% - 215px + 14px);
+      width: 54px; height: 54px; border-radius: 50%;
+      background: var(--accent); color: #fff;
+      border: none; font-size: 26px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 4px 16px rgba(91,91,214,0.45);
+      z-index: 30; -webkit-tap-highlight-color: transparent;
+      transition: transform 0.1s;
+    }
+    .fab:active { transform: scale(0.91); }
+
+    .empty { text-align: center; padding: 28px 16px; color: var(--text-sub); font-size: 13px; }
+    .empty-icon { font-size: 34px; margin-bottom: 8px; }
+
+    .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+    .stat-card {
+      background: var(--surface); border-radius: 14px; padding: 14px;
+      border: 1px solid var(--border); text-align: center;
+    }
+    .stat-num { font-size: 30px; font-weight: 800; color: var(--accent); line-height: 1.1; }
+    .stat-label { font-size: 11px; color: var(--text-sub); font-weight: 600; margin-top: 4px; }
+
+    .customer-card {
+      background: var(--surface); border-radius: 14px; padding: 14px;
+      margin-bottom: 8px; border: 1px solid var(--border);
+      cursor: pointer; -webkit-tap-highlight-color: transparent;
+      transition: border-color 0.15s;
+    }
+    .customer-card:active { border-color: var(--accent); }
+    .customer-card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+    .customer-name { font-size: 16px; font-weight: 700; }
+    .customer-meta { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 6px; }
+    .customer-info-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .info-item { background: var(--bg); border-radius: 8px; padding: 7px 10px; }
+    .info-label { font-size: 10px; font-weight: 700; color: var(--text-sub); margin-bottom: 2px; }
+    .info-value { font-size: 13px; font-weight: 600; }
+
+    .badge {
+      display: inline-flex; align-items: center;
+      padding: 2px 8px; border-radius: 6px;
+      font-size: 11px; font-weight: 700;
+    }
+    .badge-line { background: #DCFCE7; color: #16A34A; }
+    .badge-noline { background: #F3F4F6; color: #9CA3AF; }
+    .status-badge {
+      display: inline-flex; align-items: center;
+      padding: 3px 10px; border-radius: 20px;
+      font-size: 11px; font-weight: 700;
+    }
+
+    .appt-item {
+      padding: 12px 0; border-bottom: 1px solid var(--border);
+      display: flex; align-items: flex-start; gap: 12px;
+    }
+    .appt-item:last-child { border-bottom: none; }
+    .appt-date-box {
+      background: var(--accent-light); border-radius: 10px;
+      padding: 6px 10px; text-align: center; flex-shrink: 0; min-width: 48px;
+    }
+    .appt-date-month { font-size: 10px; font-weight: 700; color: var(--accent); }
+    .appt-date-day { font-size: 22px; font-weight: 800; color: var(--accent); line-height: 1; }
+    .appt-date-box.urgent { background: #FEF2F2; }
+    .appt-date-box.urgent .appt-date-month,
+    .appt-date-box.urgent .appt-date-day { color: var(--danger); }
+    .appt-body { flex: 1; min-width: 0; }
+    .appt-name { font-size: 15px; font-weight: 700; margin-bottom: 2px; }
+    .appt-sub { font-size: 12px; color: var(--text-sub); }
+
+    .contract-block {
+      background: var(--bg); border-radius: 10px; padding: 12px;
+      margin-bottom: 8px; border: 1px solid var(--border);
+      position: relative;
+    }
+    .contract-block-title { font-size: 13px; font-weight: 700; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+
+    .search-wrap { position: relative; margin-bottom: 10px; }
+    .search-wrap span { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); font-size: 15px; }
+    .search-input {
+      width: 100%; padding: 10px 36px 10px 36px;
+      border: 1.5px solid var(--border); border-radius: 10px;
+      font-size: 15px; background: #fff; outline: none;
+    }
+    .search-clear {
+      position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+      background: none; border: none; font-size: 16px; color: var(--text-sub); cursor: pointer;
+    }
+
+    .filter-chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 8px; }
+    .filter-chips::-webkit-scrollbar { display: none; }
+    .chip {
+      padding: 5px 12px; border-radius: 20px; border: 1.5px solid var(--border);
+      font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap;
+      background: var(--bg); color: var(--text-sub); flex-shrink: 0;
+      -webkit-tap-highlight-color: transparent; transition: all 0.15s;
+    }
+    .chip.active { border-color: var(--accent); background: var(--accent-light); color: var(--accent); }
+
+    .divider { height: 1px; background: var(--border); margin: 12px 0; }
+
+    .section-header {
+      font-size: 13px; font-weight: 700; color: var(--text-sub);
+      text-transform: uppercase; letter-spacing: 0.5px;
+      margin-bottom: 8px; margin-top: 4px;
+    }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useCallback, useMemo } = React;
+
+// ── Utils ─────────────────────────────────────────────────────
+const uid = () => Math.random().toString(36).slice(2, 9);
+const todayStr = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+};
+const thisMonthStr = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+};
+const fmtDate = s => {
+  if (!s) return '';
+  const [y, m, d] = s.split('-');
+  return `${parseInt(m)}/${parseInt(d)}`;
+};
+const fmtDateFull = s => {
+  if (!s) return '';
+  const [y, m, d] = s.split('-');
+  return `${y}年${parseInt(m)}月${parseInt(d)}日`;
+};
+const daysUntil = s => {
+  if (!s) return null;
+  const today = new Date(); today.setHours(0,0,0,0);
+  const [y,m,d] = s.split('-').map(Number);
+  return Math.ceil((new Date(y,m-1,d) - today) / 86400000);
+};
+
+// ── localStorage hook ────────────────────────────────────────
+function useLS(key, init) {
+  const [val, setVal] = useState(() => {
+    try { const s = localStorage.getItem(key); return s ? JSON.parse(s) : init; }
+    catch { return init; }
+  });
+  const set = useCallback(v => {
+    setVal(prev => {
+      const next = typeof v === 'function' ? v(prev) : v;
+      try { localStorage.setItem(key, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, [key]);
+  return [val, set];
+}
+
+// ── Status config ─────────────────────────────────────────────
+const STATUSES = [
+  { key: '未接触', color: '#9CA3AF', bg: '#F3F4F6' },
+  { key: 'アポ済', color: '#2563EB', bg: '#EFF6FF' },
+  { key: '面談済', color: '#7C3AED', bg: '#F5F3FF' },
+  { key: 'フォロー中', color: '#059669', bg: '#ECFDF5' },
+];
+const statusInfo = key => STATUSES.find(s => s.key === key) || STATUSES[0];
+
+const CONTACT_METHODS = ['電話', '個人LINE', 'その他'];
+
+// ── StatusBadge ───────────────────────────────────────────────
+const StatusBadge = ({ status }) => {
+  const s = statusInfo(status);
+  return (
+    <span className="status-badge" style={{ background: s.bg, color: s.color }}>
+      {status || '未接触'}
+    </span>
+  );
+};
+
+// ── Empty state ───────────────────────────────────────────────
+const EmptyState = ({ icon, text }) => (
+  <div className="empty">
+    <div className="empty-icon">{icon}</div>
+    <div>{text}</div>
+  </div>
+);
+
+// ── Contract Form Block ───────────────────────────────────────
+function ContractBlock({ contract, onChange, onRemove, index }) {
+  const s = k => e => onChange({ ...contract, [k]: e.target.value });
+  return (
+    <div className="contract-block">
+      <div className="contract-block-title">
+        <span>契約 {index + 1}</span>
+        <button onClick={onRemove} style={{
+          background: 'none', border: 'none', color: 'var(--danger)',
+          cursor: 'pointer', fontSize: 20, lineHeight: 1,
+        }}>×</button>
+      </div>
+      <div className="form-row" style={{ marginBottom: 8 }}>
+        <div>
+          <label className="form-label">保険種類</label>
+          <input className="form-input" placeholder="例：生命保険" value={contract.type || ''} onChange={s('type')} />
+        </div>
+        <div>
+          <label className="form-label">保険会社</label>
+          <input className="form-input" placeholder="例：〇〇生命" value={contract.company || ''} onChange={s('company')} />
+        </div>
+      </div>
+      <div className="form-row">
+        <div>
+          <label className="form-label">保険料（月額）</label>
+          <input className="form-input" type="number" placeholder="例：15000" value={contract.premium || ''} onChange={s('premium')} />
+        </div>
+        <div>
+          <label className="form-label">契約日</label>
+          <input className="form-input" type="date" value={contract.date || ''} onChange={s('date')} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Customer Form Drawer / Screen ─────────────────────────────
+function CustomerForm({ editing, onSave, onClose, customers }) {
+  const blank = {
+    name: '', age: '', phone: '', email: '',
+    status: '未接触',
+    contactMethod: '電話',
+    lastContact: '',
+    nextAppt: '',
+    memo: '',
+    lineRegistered: false,
+    contracts: [],
+    referredBy: '',
+    referredTo: '',
+  };
+  const [form, setForm] = useState({ ...blank, ...(editing || {}) });
+  const s = k => v => setForm(f => ({ ...f, [k]: v }));
+  const si = k => e => s(k)(e.target.value);
+
+  const addContract = () => s('contracts')([...form.contracts, { id: uid(), type: '', company: '', premium: '', date: '' }]);
+  const updateContract = (id, data) => s('contracts')(form.contracts.map(c => c.id === id ? data : c));
+  const removeContract = id => s('contracts')(form.contracts.filter(c => c.id !== id));
+
+  const otherCustomers = customers.filter(c => c.id !== form.id);
+
+  const save = () => {
+    if (!form.name.trim()) return;
+    onSave({ ...form, id: form.id || uid() });
+    onClose();
+  };
+
+  return (
+    <div className="full-screen">
+      <div className="full-header">
+        <button onClick={onClose} style={{
+          background: 'none', border: 'none', cursor: 'pointer',
+          fontSize: 15, color: 'var(--text-sub)', fontWeight: 600, padding: '4px 8px',
+        }}>← 戻る</button>
+        <div style={{ flex: 1, fontSize: 18, fontWeight: 800, letterSpacing: -0.4 }}>
+          {editing ? '顧客編集' : '新規顧客登録'}
+        </div>
+        <button className="btn btn-primary btn-sm" onClick={save}>保存</button>
+      </div>
+
+      <div className="full-content">
+        {/* 基本情報 */}
+        <div className="section-header">基本情報</div>
+        <div className="card">
+          <div className="form-group">
+            <label className="form-label">氏名 <span style={{ color: 'var(--danger)' }}>*</span></label>
+            <input className="form-input" placeholder="例：山田 太郎" value={form.name} onChange={si('name')} autoFocus />
+          </div>
+          <div className="form-row">
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">年齢</label>
+              <input className="form-input" type="number" placeholder="例：42" value={form.age} onChange={si('age')} />
+            </div>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">電話番号</label>
+              <input className="form-input" type="tel" placeholder="090-0000-0000" value={form.phone} onChange={si('phone')} />
+            </div>
+          </div>
+          <div className="form-group" style={{ marginTop: 14, marginBottom: 0 }}>
+            <label className="form-label">メールアドレス</label>
+            <input className="form-input" type="email" placeholder="example@email.com" value={form.email} onChange={si('email')} />
+          </div>
+        </div>
+
+        {/* LINE公式登録 */}
+        <div className="card">
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>LINE公式アカウント登録</div>
+              <div style={{ fontSize: 12, color: 'var(--text-sub)', marginTop: 2 }}>登録済みかどうかをON/OFFで管理</div>
+            </div>
+            <button
+              onClick={() => s('lineRegistered')(!form.lineRegistered)}
+              style={{
+                width: 52, height: 30, borderRadius: 15, border: 'none', cursor: 'pointer',
+                background: form.lineRegistered ? 'var(--success)' : '#D1D5DB',
+                transition: 'background 0.2s', position: 'relative', flexShrink: 0,
+              }}
+            >
+              <div style={{
+                position: 'absolute', top: 3, left: form.lineRegistered ? 24 : 3,
+                width: 24, height: 24, borderRadius: '50%', background: '#fff',
+                boxShadow: '0 1px 4px rgba(0,0,0,0.15)', transition: 'left 0.2s',
+              }} />
+            </button>
+          </div>
+        </div>
+
+        {/* 接触管理 */}
+        <div className="section-header">接触管理</div>
+        <div className="card">
+          <div className="form-group">
+            <label className="form-label">ステータス</label>
+            <div className="toggle-group">
+              {STATUSES.map(st => (
+                <button key={st.key} className={`toggle-btn ${form.status === st.key ? 'sel' : ''}`}
+                  style={form.status === st.key ? { borderColor: st.color, background: st.bg, color: st.color } : {}}
+                  onClick={() => s('status')(st.key)}>{st.key}</button>
+              ))}
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">接触方法</label>
+            <div className="toggle-group">
+              {CONTACT_METHODS.map(m => (
+                <button key={m} className={`toggle-btn ${form.contactMethod === m ? 'sel' : ''}`}
+                  onClick={() => s('contactMethod')(m)}>{m}</button>
+              ))}
+            </div>
+          </div>
+          <div className="form-row">
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">最終接触日</label>
+              <input className="form-input" type="date" value={form.lastContact} onChange={si('lastContact')} />
+            </div>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">次回アポイント</label>
+              <input className="form-input" type="date" value={form.nextAppt} onChange={si('nextAppt')} />
+            </div>
+          </div>
+          <div className="form-group" style={{ marginTop: 14, marginBottom: 0 }}>
+            <label className="form-label">面談メモ</label>
+            <textarea className="form-textarea" placeholder="面談内容・気づき・次回アクションなど..."
+              value={form.memo} onChange={si('memo')} />
+          </div>
+        </div>
+
+        {/* 契約情報 */}
+        <div className="section-header">契約情報</div>
+        {form.contracts.map((c, i) => (
+          <ContractBlock key={c.id} contract={c} index={i}
+            onChange={data => updateContract(c.id, data)}
+            onRemove={() => removeContract(c.id)} />
+        ))}
+        <button className="btn btn-outline btn-full" style={{ marginBottom: 10 }} onClick={addContract}>
+          ＋ 契約を追加
+        </button>
+
+        {/* 紹介管理 */}
+        <div className="section-header">紹介管理</div>
+        <div className="card">
+          <div className="form-group">
+            <label className="form-label">紹介元（誰から紹介されたか）</label>
+            <select className="form-select" value={form.referredBy} onChange={si('referredBy')}>
+              <option value="">— なし —</option>
+              {otherCustomers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">紹介先（この顧客が紹介した人）</label>
+            <select className="form-select" value={form.referredTo} onChange={si('referredTo')}>
+              <option value="">— なし —</option>
+              {otherCustomers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <button className="btn btn-primary btn-full" style={{ marginTop: 8 }} onClick={save}>保存する</button>
+      </div>
+    </div>
+  );
+}
+
+// ── Customer Detail Screen ────────────────────────────────────
+function CustomerDetail({ customer, customers, onEdit, onDelete, onClose }) {
+  const [confirmDel, setConfirmDel] = useState(false);
+  const c = customer;
+  const referredByCustomer = customers.find(x => x.id === c.referredBy);
+  const referredToCustomer = customers.find(x => x.id === c.referredTo);
+  const apptDays = daysUntil(c.nextAppt);
+
+  return (
+    <div className="full-screen">
+      <div className="full-header">
+        <button onClick={onClose} style={{
+          background: 'none', border: 'none', cursor: 'pointer',
+          fontSize: 15, color: 'var(--text-sub)', fontWeight: 600, padding: '4px 8px',
+        }}>← 戻る</button>
+        <div style={{ flex: 1 }} />
+        <button className="btn btn-primary btn-sm" onClick={onEdit}>編集</button>
+        <button className="btn btn-sm btn-danger" style={{ marginLeft: 6 }} onClick={() => setConfirmDel(true)}>削除</button>
+      </div>
+
+      <div className="full-content">
+        {/* 顧客ヘッダー */}
+        <div className="card" style={{ marginBottom: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 10 }}>
+            <div>
+              <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 4 }}>{c.name}</div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <StatusBadge status={c.status} />
+                <span className={`badge ${c.lineRegistered ? 'badge-line' : 'badge-noline'}`}>
+                  {c.lineRegistered ? '✓ LINE登録済' : 'LINE未登録'}
+                </span>
+              </div>
+            </div>
+            {c.age && (
+              <div style={{ textAlign: 'center', background: 'var(--accent-light)', borderRadius: 10, padding: '8px 14px' }}>
+                <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--accent)' }}>{c.age}</div>
+                <div style={{ fontSize: 10, color: 'var(--accent)', fontWeight: 700 }}>歳</div>
+              </div>
+            )}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {c.phone && (
+              <a href={`tel:${c.phone}`} style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none', color: 'var(--text)' }}>
+                <span style={{ fontSize: 16 }}>📞</span>
+                <span style={{ fontSize: 15, fontWeight: 600 }}>{c.phone}</span>
+              </a>
+            )}
+            {c.email && (
+              <a href={`mailto:${c.email}`} style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none', color: 'var(--text)' }}>
+                <span style={{ fontSize: 16 }}>✉️</span>
+                <span style={{ fontSize: 15, fontWeight: 600 }}>{c.email}</span>
+              </a>
+            )}
+          </div>
+        </div>
+
+        {/* 接触情報 */}
+        <div className="section-header">接触管理</div>
+        <div className="card">
+          <div className="customer-info-row">
+            <div className="info-item">
+              <div className="info-label">接触方法</div>
+              <div className="info-value">{c.contactMethod || '—'}</div>
+            </div>
+            <div className="info-item">
+              <div className="info-label">最終接触日</div>
+              <div className="info-value">{c.lastContact ? fmtDate(c.lastContact) : '—'}</div>
+            </div>
+            <div className="info-item" style={{ gridColumn: '1 / -1' }}>
+              <div className="info-label">次回アポイント</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div className="info-value" style={{ color: apptDays !== null && apptDays <= 3 ? 'var(--danger)' : apptDays !== null && apptDays <= 7 ? 'var(--warning)' : 'var(--text)' }}>
+                  {c.nextAppt ? fmtDateFull(c.nextAppt) : '—'}
+                </div>
+                {apptDays !== null && c.nextAppt && (
+                  <span style={{
+                    fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 6,
+                    background: apptDays <= 0 ? '#FEF2F2' : apptDays <= 3 ? '#FFF7ED' : 'var(--accent-light)',
+                    color: apptDays <= 0 ? 'var(--danger)' : apptDays <= 3 ? 'var(--warning)' : 'var(--accent)',
+                  }}>
+                    {apptDays <= 0 ? '期限切れ' : `あと${apptDays}日`}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+          {c.memo && (
+            <>
+              <div className="divider" />
+              <div className="info-label" style={{ marginBottom: 6 }}>面談メモ</div>
+              <div style={{ fontSize: 14, lineHeight: 1.6, whiteSpace: 'pre-wrap', color: 'var(--text)' }}>{c.memo}</div>
+            </>
+          )}
+        </div>
+
+        {/* 契約情報 */}
+        {c.contracts && c.contracts.length > 0 && (
+          <>
+            <div className="section-header">契約情報 ({c.contracts.length}件)</div>
+            {c.contracts.map((ct, i) => (
+              <div className="card" key={ct.id} style={{ marginBottom: 8 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--accent)', marginBottom: 8 }}>契約 {i + 1}</div>
+                <div className="customer-info-row">
+                  {ct.type && <div className="info-item"><div className="info-label">保険種類</div><div className="info-value">{ct.type}</div></div>}
+                  {ct.company && <div className="info-item"><div className="info-label">保険会社</div><div className="info-value">{ct.company}</div></div>}
+                  {ct.premium && <div className="info-item"><div className="info-label">保険料（月額）</div><div className="info-value">¥{Number(ct.premium).toLocaleString()}</div></div>}
+                  {ct.date && <div className="info-item"><div className="info-label">契約日</div><div className="info-value">{fmtDate(ct.date)}</div></div>}
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+
+        {/* 紹介管理 */}
+        {(referredByCustomer || referredToCustomer) && (
+          <>
+            <div className="section-header">紹介ネットワーク</div>
+            <div className="card">
+              {referredByCustomer && (
+                <div style={{ marginBottom: referredToCustomer ? 10 : 0 }}>
+                  <div className="info-label">紹介元</div>
+                  <div style={{ fontSize: 15, fontWeight: 700 }}>👤 {referredByCustomer.name}</div>
+                </div>
+              )}
+              {referredToCustomer && (
+                <div>
+                  <div className="info-label">紹介先</div>
+                  <div style={{ fontSize: 15, fontWeight: 700 }}>👤 {referredToCustomer.name}</div>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* 削除確認ダイアログ */}
+      {confirmDel && (
+        <div className="overlay" style={{ zIndex: 60 }} onClick={() => setConfirmDel(false)}>
+          <div className="drawer" onClick={e => e.stopPropagation()}>
+            <div className="drawer-handle" />
+            <div className="drawer-title" style={{ color: 'var(--danger)' }}>顧客を削除しますか？</div>
+            <div style={{ fontSize: 14, color: 'var(--text-sub)', marginBottom: 20 }}>
+              「{c.name}」のデータをすべて削除します。この操作は元に戻せません。
+            </div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button className="btn btn-outline btn-full" onClick={() => setConfirmDel(false)}>キャンセル</button>
+              <button className="btn btn-danger btn-full" onClick={() => { onDelete(c.id); onClose(); }}>削除する</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Tab: Dashboard ────────────────────────────────────────────
+function DashboardTab({ customers, onNavigate }) {
+  const total = customers.length;
+  const lineCount = customers.filter(c => c.lineRegistered).length;
+  const thisMonth = thisMonthStr();
+  const apptThisMonth = customers.filter(c => c.nextAppt && c.nextAppt.startsWith(thisMonth)).length;
+  const noContact = customers.filter(c => !c.status || c.status === '未接触').length;
+
+  const today = todayStr();
+  const upcoming = customers
+    .filter(c => c.nextAppt && c.nextAppt >= today)
+    .sort((a, b) => a.nextAppt.localeCompare(b.nextAppt))
+    .slice(0, 5);
+
+  const statusCounts = STATUSES.map(s => ({
+    ...s,
+    count: customers.filter(c => (c.status || '未接触') === s.key).length,
+  }));
+
+  return (
+    <div>
+      <div className="stat-grid">
+        <div className="stat-card">
+          <div className="stat-num">{total}</div>
+          <div className="stat-label">顧客総数</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-num" style={{ color: '#16A34A' }}>{lineCount}</div>
+          <div className="stat-label">LINE登録済み</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-num" style={{ color: '#2563EB' }}>{apptThisMonth}</div>
+          <div className="stat-label">今月のアポイント</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-num" style={{ color: 'var(--warning)' }}>{noContact}</div>
+          <div className="stat-label">未接触顧客</div>
+        </div>
+      </div>
+
+      {/* ステータス内訳 */}
+      <div className="card">
+        <div className="card-title">ステータス内訳</div>
+        {statusCounts.map(s => (
+          <div key={s.key} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+            <span className="status-badge" style={{ background: s.bg, color: s.color, minWidth: 72, justifyContent: 'center' }}>
+              {s.key}
+            </span>
+            <div style={{ flex: 1, background: '#F0F0F5', borderRadius: 4, height: 8, overflow: 'hidden' }}>
+              <div style={{
+                height: '100%', borderRadius: 4,
+                width: total > 0 ? `${(s.count / total * 100)}%` : '0%',
+                background: s.color, transition: 'width 0.4s',
+              }} />
+            </div>
+            <span style={{ fontSize: 14, fontWeight: 700, minWidth: 24, textAlign: 'right' }}>{s.count}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* 直近アポイント */}
+      <div className="card">
+        <div className="card-title">直近のアポイント</div>
+        {upcoming.length === 0
+          ? <EmptyState icon="📅" text="予定されているアポイントはありません" />
+          : upcoming.map(c => {
+            const days = daysUntil(c.nextAppt);
+            const urgent = days !== null && days <= 3;
+            const [, m, d] = c.nextAppt.split('-');
+            return (
+              <div key={c.id} className="appt-item">
+                <div className={`appt-date-box ${urgent ? 'urgent' : ''}`}>
+                  <div className="appt-date-month">{parseInt(m)}月</div>
+                  <div className="appt-date-day">{parseInt(d)}</div>
+                </div>
+                <div className="appt-body">
+                  <div className="appt-name">{c.name}</div>
+                  <div className="appt-sub">
+                    <StatusBadge status={c.status} />
+                    {days !== null && (
+                      <span style={{ marginLeft: 6, fontSize: 11, color: urgent ? 'var(--danger)' : 'var(--text-sub)', fontWeight: 600 }}>
+                        {days <= 0 ? '本日以前' : `あと${days}日`}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })
+        }
+        {upcoming.length > 0 && (
+          <button className="btn btn-outline btn-full" style={{ marginTop: 8, fontSize: 13 }}
+            onClick={() => onNavigate('appt')}>アポイント一覧を見る</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Tab: Customer List ────────────────────────────────────────
+function CustomerListTab({ customers, onSelect, onAdd }) {
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('すべて');
+  const [lineFilter, setLineFilter] = useState('すべて');
+
+  const filtered = useMemo(() => customers
+    .filter(c => statusFilter === 'すべて' || (c.status || '未接触') === statusFilter)
+    .filter(c => lineFilter === 'すべて' || (lineFilter === 'LINE登録' ? c.lineRegistered : !c.lineRegistered))
+    .filter(c => {
+      if (!search) return true;
+      const q = search.toLowerCase();
+      return c.name.includes(search) ||
+        (c.phone || '').includes(q) ||
+        (c.memo || '').includes(search) ||
+        (c.email || '').toLowerCase().includes(q);
+    })
+    .sort((a, b) => a.name.localeCompare(b.name, 'ja')),
+    [customers, search, statusFilter, lineFilter]
+  );
+
+  return (
+    <div>
+      <div style={{ position: 'sticky', top: 0, background: 'var(--bg)', zIndex: 5, paddingBottom: 4 }}>
+        <div className="search-wrap">
+          <span>🔍</span>
+          <input
+            className="search-input"
+            placeholder="名前・電話番号・メモで検索..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+          {search && <button className="search-clear" onClick={() => setSearch('')}>×</button>}
+        </div>
+        <div className="filter-chips">
+          {['すべて', ...STATUSES.map(s => s.key)].map(st => (
+            <button key={st} className={`chip ${statusFilter === st ? 'active' : ''}`}
+              onClick={() => setStatusFilter(st)}>
+              {st}
+              <span style={{ marginLeft: 4, fontSize: 10 }}>
+                {st === 'すべて' ? customers.length : customers.filter(c => (c.status || '未接触') === st).length}
+              </span>
+            </button>
+          ))}
+        </div>
+        <div className="filter-chips" style={{ marginBottom: 6 }}>
+          {['すべて', 'LINE登録', 'LINE未登録'].map(f => (
+            <button key={f} className={`chip ${lineFilter === f ? 'active' : ''}`}
+              onClick={() => setLineFilter(f)}>{f}</button>
+          ))}
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--text-sub)', marginBottom: 8 }}>
+          {filtered.length}件{search || statusFilter !== 'すべて' || lineFilter !== 'すべて' ? ` / 全${customers.length}件` : ''}
+        </div>
+      </div>
+
+      {filtered.length === 0
+        ? <EmptyState icon="👤" text={customers.length === 0 ? '顧客を追加してください' : '該当する顧客はいません'} />
+        : filtered.map(c => {
+          const apptDays = daysUntil(c.nextAppt);
+          return (
+            <div key={c.id} className="customer-card" onClick={() => onSelect(c)}>
+              <div className="customer-card-top">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                  <div className="customer-name">{c.name}</div>
+                  {c.age && <div style={{ fontSize: 12, color: 'var(--text-sub)', fontWeight: 500 }}>{c.age}歳</div>}
+                </div>
+                <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
+                  <StatusBadge status={c.status} />
+                </div>
+              </div>
+              <div className="customer-meta">
+                <span className={`badge ${c.lineRegistered ? 'badge-line' : 'badge-noline'}`}>
+                  {c.lineRegistered ? '✓ LINE' : 'LINE未'}
+                </span>
+                {c.contracts && c.contracts.length > 0 && (
+                  <span className="badge" style={{ background: '#F5F3FF', color: '#7C3AED' }}>
+                    📋 {c.contracts.length}件
+                  </span>
+                )}
+                {c.contactMethod && (
+                  <span className="badge" style={{ background: 'var(--bg)', color: 'var(--text-sub)' }}>
+                    {c.contactMethod}
+                  </span>
+                )}
+              </div>
+              {c.nextAppt && (
+                <div className="customer-info-row">
+                  <div className="info-item">
+                    <div className="info-label">次回アポイント</div>
+                    <div className="info-value" style={{
+                      color: apptDays !== null && apptDays <= 3 ? 'var(--danger)' : apptDays !== null && apptDays <= 7 ? 'var(--warning)' : 'var(--text)',
+                    }}>
+                      {fmtDate(c.nextAppt)}
+                      {apptDays !== null && (
+                        <span style={{ marginLeft: 4, fontSize: 11, fontWeight: 600 }}>
+                          ({apptDays <= 0 ? '期限切れ' : `あと${apptDays}日`})
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  {c.lastContact && (
+                    <div className="info-item">
+                      <div className="info-label">最終接触</div>
+                      <div className="info-value">{fmtDate(c.lastContact)}</div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })
+      }
+    </div>
+  );
+}
+
+// ── Tab: Appointments ─────────────────────────────────────────
+function AppointmentTab({ customers, onSelect }) {
+  const today = todayStr();
+  const [showPast, setShowPast] = useState(false);
+
+  const withAppt = customers
+    .filter(c => c.nextAppt)
+    .sort((a, b) => a.nextAppt.localeCompare(b.nextAppt));
+
+  const upcoming = withAppt.filter(c => c.nextAppt >= today);
+  const past = withAppt.filter(c => c.nextAppt < today);
+
+  const ApptCard = ({ c }) => {
+    const days = daysUntil(c.nextAppt);
+    const [, m, d] = c.nextAppt.split('-');
+    const urgent = days !== null && days <= 3;
+    const overdue = days !== null && days < 0;
+    return (
+      <div className="customer-card" onClick={() => onSelect(c)}
+        style={overdue ? { borderColor: '#FECACA', background: '#FEF2F2' } : urgent ? { borderColor: '#FDE68A', background: '#FFFBEB' } : {}}>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+          <div className={`appt-date-box ${overdue ? 'urgent' : ''}`}
+            style={urgent && !overdue ? { background: '#FFFBEB' } : {}}>
+            <div className="appt-date-month" style={urgent && !overdue ? { color: 'var(--warning)' } : {}}>{parseInt(m)}月</div>
+            <div className="appt-date-day" style={urgent && !overdue ? { color: 'var(--warning)' } : {}}>{parseInt(d)}</div>
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>{c.name}</div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+              <StatusBadge status={c.status} />
+              {days !== null && (
+                <span style={{
+                  fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 6,
+                  background: overdue ? '#FEF2F2' : urgent ? '#FFFBEB' : 'var(--accent-light)',
+                  color: overdue ? 'var(--danger)' : urgent ? 'var(--warning)' : 'var(--accent)',
+                }}>
+                  {days === 0 ? '今日！' : days < 0 ? `${Math.abs(days)}日前` : `あと${days}日`}
+                </span>
+              )}
+              {c.contactMethod && (
+                <span style={{ fontSize: 11, color: 'var(--text-sub)' }}>{c.contactMethod}</span>
+              )}
+            </div>
+            {c.memo && (
+              <div style={{ fontSize: 12, color: 'var(--text-sub)', marginTop: 4, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+                {c.memo}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      <div className="section-title">アポイント管理</div>
+
+      {upcoming.length === 0 && past.length === 0 ? (
+        <EmptyState icon="📅" text="アポイントが登録されている顧客はいません" />
+      ) : (
+        <>
+          {upcoming.length > 0 ? (
+            <>
+              <div className="section-header">今後のアポイント ({upcoming.length}件)</div>
+              {upcoming.map(c => <ApptCard key={c.id} c={c} />)}
+            </>
+          ) : (
+            <EmptyState icon="✅" text="今後のアポイントはありません" />
+          )}
+
+          {past.length > 0 && (
+            <>
+              <button
+                onClick={() => setShowPast(v => !v)}
+                className="btn btn-outline btn-full"
+                style={{ marginTop: 8, fontSize: 13 }}>
+                {showPast ? '▲ 過去のアポイントを隠す' : `▼ 過去のアポイントを表示 (${past.length}件)`}
+              </button>
+              {showPast && past.map(c => <ApptCard key={c.id} c={c} />)}
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── CSV Export ────────────────────────────────────────────────
+function exportCSV(customers) {
+  const headers = ['氏名', '年齢', '電話番号', 'メールアドレス', 'LINE登録', 'ステータス', '接触方法', '最終接触日', '次回アポイント', '契約数', '面談メモ'];
+  const rows = customers.map(c => [
+    c.name, c.age || '', c.phone || '', c.email || '',
+    c.lineRegistered ? '登録済' : '未登録',
+    c.status || '未接触',
+    c.contactMethod || '',
+    c.lastContact || '',
+    c.nextAppt || '',
+    (c.contracts || []).length,
+    (c.memo || '').replace(/\n/g, '　'),
+  ]);
+  const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url;
+  a.download = `既契約顧客_${todayStr()}.csv`;
+  a.click(); URL.revokeObjectURL(url);
+}
+
+// ── App ───────────────────────────────────────────────────────
+function App() {
+  const [customers, setCustomers] = useLS('customers_v1', []);
+  const [tab, setTab] = useState('dashboard');
+  const [selectedCustomer, setSelectedCustomer] = useState(null);
+  const [editingCustomer, setEditingCustomer] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+
+  const saveCustomer = c => {
+    setCustomers(prev => {
+      const idx = prev.findIndex(x => x.id === c.id);
+      if (idx >= 0) {
+        const next = [...prev]; next[idx] = c; return next;
+      }
+      return [...prev, c];
+    });
+  };
+
+  const deleteCustomer = id => setCustomers(prev => prev.filter(c => c.id !== id));
+
+  const openNew = () => { setEditingCustomer(null); setShowForm(true); };
+  const openEdit = (c) => { setEditingCustomer(c); setSelectedCustomer(null); setShowForm(true); };
+
+  const tabs = [
+    { key: 'dashboard', icon: '🏠', label: 'ホーム' },
+    { key: 'list',      icon: '👥', label: '顧客一覧' },
+    { key: 'appt',      icon: '📅', label: 'アポイント' },
+  ];
+
+  return (
+    <div>
+      {/* Header */}
+      <div className="header">
+        <div className="header-row">
+          <h1>既契約管理</h1>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <span className="header-sub">{customers.length}名</span>
+            <button
+              onClick={() => exportCSV(customers)}
+              style={{
+                fontSize: 11, padding: '5px 10px', borderRadius: 8,
+                border: '1px solid var(--border)', background: '#fff',
+                color: 'var(--text-sub)', cursor: 'pointer', fontWeight: 600,
+              }}>
+              CSV
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="content">
+        {tab === 'dashboard' && (
+          <DashboardTab customers={customers} onNavigate={t => setTab(t)} />
+        )}
+        {tab === 'list' && (
+          <CustomerListTab customers={customers} onSelect={setSelectedCustomer} onAdd={openNew} />
+        )}
+        {tab === 'appt' && (
+          <AppointmentTab customers={customers} onSelect={setSelectedCustomer} />
+        )}
+      </div>
+
+      {/* Bottom Nav */}
+      <nav className="bottom-nav">
+        {tabs.map(t => (
+          <button key={t.key} className={`nav-item ${tab === t.key ? 'active' : ''}`}
+            onClick={() => setTab(t.key)}>
+            <div className="nav-icon">{t.icon}</div>
+            <div className="nav-label">{t.label}</div>
+          </button>
+        ))}
+      </nav>
+
+      {/* FAB */}
+      {(tab === 'list' || tab === 'dashboard') && (
+        <button className="fab" onClick={openNew}>＋</button>
+      )}
+
+      {/* Customer Detail */}
+      {selectedCustomer && !showForm && (
+        <CustomerDetail
+          customer={selectedCustomer}
+          customers={customers}
+          onEdit={() => openEdit(selectedCustomer)}
+          onDelete={id => { deleteCustomer(id); setSelectedCustomer(null); }}
+          onClose={() => setSelectedCustomer(null)}
+        />
+      )}
+
+      {/* Customer Form */}
+      {showForm && (
+        <CustomerForm
+          editing={editingCustomer}
+          customers={customers}
+          onSave={c => {
+            saveCustomer(c);
+            if (editingCustomer) setSelectedCustomer(c);
+          }}
+          onClose={() => { setShowForm(false); setEditingCustomer(null); }}
+        />
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
