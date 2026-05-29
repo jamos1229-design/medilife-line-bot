@@ -648,56 +648,57 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose }) {
       <div className="full-content">
         {/* 顧客ヘッダー */}
         <div className="card" style={{ marginBottom: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 10 }}>
-            <div>
-              <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 4 }}>{c.name}</div>
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                <StatusBadge status={c.status} />
-                <span className={`badge ${c.lineRegistered ? 'badge-line' : 'badge-noline'}`}>
-                  {c.lineRegistered ? '✓ LINE登録済' : 'LINE未登録'}
-                </span>
-              </div>
-            </div>
+          {/* 名前 + 年齢 横並び */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+            <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: -0.5 }}>{c.name}</div>
             {c.age && (
-              <div style={{ textAlign: 'center', background: 'var(--accent-light)', borderRadius: 10, padding: '8px 14px' }}>
-                <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--accent)' }}>{c.age}</div>
-                <div style={{ fontSize: 10, color: 'var(--accent)', fontWeight: 700 }}>歳</div>
+              <div style={{ textAlign: 'center', background: 'var(--accent-light)', borderRadius: 12, padding: '6px 14px', flexShrink: 0, marginLeft: 10 }}>
+                <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--accent)', lineHeight: 1 }}>{c.age}</div>
+                <div style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 700 }}>歳</div>
               </div>
             )}
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {/* バッジ行 – 横並び固定 */}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'nowrap' }}>
+            <StatusBadge status={c.status} />
+            <span className={`badge ${c.lineRegistered ? 'badge-line' : 'badge-noline'}`} style={{ whiteSpace: 'nowrap' }}>
+              {c.lineRegistered ? '✓ LINE済' : 'LINE未登録'}
+            </span>
+          </div>
+          {/* 連絡先・属性情報 */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {c.phone && (
-              <a href={`tel:${c.phone}`} style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none', color: 'var(--text)' }}>
-                <span style={{ fontSize: 16 }}>📞</span>
-                <span style={{ fontSize: 15, fontWeight: 600 }}>{c.phone}</span>
+              <a href={`tel:${c.phone}`} style={{ display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none', color: 'var(--text)', background: 'var(--bg)', borderRadius: 10, padding: '10px 12px' }}>
+                <span style={{ fontSize: 17 }}>📞</span>
+                <span style={{ fontSize: 16, fontWeight: 700 }}>{c.phone}</span>
               </a>
             )}
             {c.email && (
-              <a href={`mailto:${c.email}`} style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none', color: 'var(--text)' }}>
-                <span style={{ fontSize: 16 }}>✉️</span>
+              <a href={`mailto:${c.email}`} style={{ display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none', color: 'var(--text)', background: 'var(--bg)', borderRadius: 10, padding: '10px 12px' }}>
+                <span style={{ fontSize: 17 }}>✉️</span>
                 <span style={{ fontSize: 15, fontWeight: 600 }}>{c.email}</span>
               </a>
             )}
             {c.birthdate && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 16 }}>🎂</span>
-                <span style={{ fontSize: 14, color: 'var(--text)' }}>{fmtDateFull(c.birthdate)}</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg)', borderRadius: 10, padding: '10px 12px' }}>
+                <span style={{ fontSize: 17 }}>🎂</span>
+                <span style={{ fontSize: 15, fontWeight: 600, whiteSpace: 'nowrap' }}>{fmtDateFull(c.birthdate)}</span>
               </div>
             )}
             {(c.postalCode || c.address) && (
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                <span style={{ fontSize: 16 }}>📍</span>
-                <span style={{ fontSize: 14, color: 'var(--text)', lineHeight: 1.5 }}>
-                  {c.postalCode && <span style={{ color: 'var(--text-sub)', marginRight: 4 }}>〒{c.postalCode}</span>}
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, background: 'var(--bg)', borderRadius: 10, padding: '10px 12px' }}>
+                <span style={{ fontSize: 17, flexShrink: 0 }}>📍</span>
+                <span style={{ fontSize: 15, color: 'var(--text)', lineHeight: 1.5 }}>
+                  {c.postalCode && <span style={{ color: 'var(--text-sub)', fontSize: 13 }}>〒{c.postalCode}　</span>}
                   {c.address}
                 </span>
               </div>
             )}
             {(c.occupation || c.workplace) && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 16 }}>💼</span>
-                <span style={{ fontSize: 14, color: 'var(--text)' }}>
-                  {[c.occupation, c.workplace].filter(Boolean).join('・')}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg)', borderRadius: 10, padding: '10px 12px' }}>
+                <span style={{ fontSize: 17 }}>💼</span>
+                <span style={{ fontSize: 15, fontWeight: 600 }}>
+                  {[c.occupation, c.workplace].filter(Boolean).join('　')}
                 </span>
               </div>
             )}
@@ -749,13 +750,14 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose }) {
             <div className="section-header">契約情報 ({c.contracts.length}件)</div>
             {c.contracts.map((ct, i) => (
               <div className="card" key={ct.id} style={{ marginBottom: 8 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--accent)', marginBottom: 8 }}>契約 {i + 1}</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--accent)', marginBottom: 10 }}>契約 {i + 1}</div>
                 <div className="customer-info-row">
-                  {ct.type && <div className="info-item"><div className="info-label">保険種類</div><div className="info-value">{ct.type}</div></div>}
-                  {ct.company && <div className="info-item"><div className="info-label">保険会社</div><div className="info-value">{ct.company}</div></div>}
-                  {ct.policyNum && <div className="info-item" style={{gridColumn:'1 / -1'}}><div className="info-label">証券番号</div><div className="info-value">{ct.policyNum}</div></div>}
+                  {/* 保険種類・保険会社は常に2列セットで表示 */}
+                  <div className="info-item"><div className="info-label">保険種類</div><div className="info-value">{ct.type || '—'}</div></div>
+                  <div className="info-item"><div className="info-label">保険会社</div><div className="info-value">{ct.company || '—'}</div></div>
+                  {ct.policyNum && <div className="info-item" style={{gridColumn:'1 / -1'}}><div className="info-label">証券番号</div><div className="info-value" style={{fontSize:15,letterSpacing:0.5}}>{ct.policyNum}</div></div>}
                   {ct.premium && <div className="info-item"><div className="info-label">保険料（月額）</div><div className="info-value">¥{Number(ct.premium).toLocaleString()}</div></div>}
-                  {ct.date && <div className="info-item"><div className="info-label">契約日</div><div className="info-value">{fmtDate(ct.date)}</div></div>}
+                  {ct.date && <div className="info-item"><div className="info-label">契約日</div><div className="info-value">{fmtDateFull(ct.date)}</div></div>}
                 </div>
               </div>
             ))}
