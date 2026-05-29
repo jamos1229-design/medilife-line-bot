@@ -407,7 +407,8 @@ function ContractBlock({ contract, onChange, onRemove, index }) {
 // ── Customer Form Drawer / Screen ─────────────────────────────
 function CustomerForm({ editing, onSave, onClose, customers }) {
   const blank = {
-    name: '', age: '', phone: '', email: '',
+    name: '', age: '', birthdate: '', phone: '', email: '',
+    address: '', occupation: '', workplace: '',
     status: '未接触',
     contactMethod: '電話',
     lastContact: '',
@@ -468,6 +469,24 @@ function CustomerForm({ editing, onSave, onClose, customers }) {
           <div className="form-group" style={{ marginTop: 14, marginBottom: 0 }}>
             <label className="form-label">メールアドレス</label>
             <input className="form-input" type="email" placeholder="example@email.com" value={form.email} onChange={si('email')} />
+          </div>
+          <div className="form-group" style={{ marginTop: 14, marginBottom: 0 }}>
+            <label className="form-label">生年月日</label>
+            <input className="form-input" type="date" value={form.birthdate} onChange={si('birthdate')} />
+          </div>
+          <div className="form-group" style={{ marginTop: 14, marginBottom: 0 }}>
+            <label className="form-label">住所</label>
+            <input className="form-input" placeholder="例：大阪府大阪市北区..." value={form.address} onChange={si('address')} />
+          </div>
+          <div className="form-row" style={{ marginTop: 14 }}>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">職業</label>
+              <input className="form-input" placeholder="例：会社員" value={form.occupation} onChange={si('occupation')} />
+            </div>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">勤務先</label>
+              <input className="form-input" placeholder="例：株式会社○○" value={form.workplace} onChange={si('workplace')} />
+            </div>
           </div>
         </div>
 
@@ -622,6 +641,26 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose }) {
                 <span style={{ fontSize: 16 }}>✉️</span>
                 <span style={{ fontSize: 15, fontWeight: 600 }}>{c.email}</span>
               </a>
+            )}
+            {c.birthdate && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 16 }}>🎂</span>
+                <span style={{ fontSize: 14, color: 'var(--text)' }}>{fmtDate(c.birthdate)}</span>
+              </div>
+            )}
+            {c.address && (
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                <span style={{ fontSize: 16 }}>📍</span>
+                <span style={{ fontSize: 14, color: 'var(--text)' }}>{c.address}</span>
+              </div>
+            )}
+            {(c.occupation || c.workplace) && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 16 }}>💼</span>
+                <span style={{ fontSize: 14, color: 'var(--text)' }}>
+                  {[c.occupation, c.workplace].filter(Boolean).join('・')}
+                </span>
+              </div>
             )}
           </div>
         </div>
@@ -1032,9 +1071,10 @@ function AppointmentTab({ customers, onSelect }) {
 
 // ── CSV Export ────────────────────────────────────────────────
 function exportCSV(customers) {
-  const headers = ['氏名', '年齢', '電話番号', 'メールアドレス', 'LINE登録', 'ステータス', '接触方法', '最終接触日', '次回アポイント', '契約数', '証券番号一覧', '面談メモ'];
+  const headers = ['氏名', '年齢', '生年月日', '電話番号', 'メールアドレス', '住所', '職業', '勤務先', 'LINE登録', 'ステータス', '接触方法', '最終接触日', '次回アポイント', '契約数', '証券番号一覧', '面談メモ'];
   const rows = customers.map(c => [
-    c.name, c.age || '', c.phone || '', c.email || '',
+    c.name, c.age || '', c.birthdate || '', c.phone || '', c.email || '',
+    c.address || '', c.occupation || '', c.workplace || '',
     c.lineRegistered ? '登録済' : '未登録',
     c.status || '未接触',
     c.contactMethod || '',
