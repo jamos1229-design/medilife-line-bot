@@ -909,7 +909,7 @@ function DashboardTab({ customers, onNavigate }) {
                 </span>
               </div>
               {contractThisMonth.map(c => {
-                const monthContracts = (c.contracts || []).filter(ct => ct.date && ct.date.slice(5,7) === thisMonthNum);
+                const monthContracts = (c.contracts || []).filter(ct => ct.date && parseInt(ct.date.split('-')[1], 10) === nowM);
                 return (
                   <div key={c.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: '#F5F3FF', borderRadius: 10, marginBottom: 6 }}
                     onClick={() => onNavigate('customers', c)}>
