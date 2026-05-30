@@ -996,13 +996,22 @@ function DashboardTab({ customers, onNavigate }) {
     return parseInt(c.birthdate.split('-')[1], 10) === nowM;
   }).sort((a, b) => parseInt(a.birthdate.split('-')[2],10) - parseInt(b.birthdate.split('-')[2],10));
 
-  // 今月契約月（生保・整数比較）
+  // 月計算ヘルパー（1〜12の範囲で循環）
+  const addMonth = (m, n) => ((m - 1 + n) % 12) + 1;
+  const nextM1 = addMonth(nowM, 1); // 来月
+  const nextM2 = addMonth(nowM, 2); // 再来月
+
+  // 生保：今月・来月・再来月が契約月（2ヶ月前からアラート）
   const contractThisMonth = customers.filter(c =>
-    (c.contracts || []).some(ct => ct.category !== '損保' && ct.date && parseInt(ct.date.split('-')[1], 10) === nowM)
+    (c.contracts || []).some(ct => {
+      if (ct.category === '損保' || !ct.date) return false;
+      const m = parseInt(ct.date.split('-')[1], 10);
+      return m === nowM || m === nextM1 || m === nextM2;
+    })
   );
 
   // 損保：今月・来月満期
-  const nextM = nowM === 12 ? 1 : nowM + 1;
+  const nextM = nextM1;
   const expiryAlert = customers.filter(c =>
     (c.contracts || []).some(ct => {
       if (ct.category !== '損保' || !ct.expiryDate) return false;
@@ -1113,7 +1122,12 @@ function DashboardTab({ customers, onNavigate }) {
                 </span>
               </div>
               {contractThisMonth.map(c => {
-                const monthContracts = (c.contracts || []).filter(ct => ct.date && parseInt(ct.date.split('-')[1], 10) === nowM);
+                const monthContracts = (c.contracts || []).filter(ct => {
+                  if (ct.category === '損保' || !ct.date) return false;
+                  const m = parseInt(ct.date.split('-')[1], 10);
+                  return m === nowM || m === nextM1 || m === nextM2;
+                });
+                const getLabel = m => m === nowM ? '今月' : m === nextM1 ? '来月' : '再来月';
                 return (
                   <div key={c.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: '#F5F3FF', borderRadius: 10, marginBottom: 6 }}
                     onClick={() => onNavigate('customers', c)}>
@@ -1122,8 +1136,10 @@ function DashboardTab({ customers, onNavigate }) {
                       <div>
                         <div style={{ fontSize: 15, fontWeight: 700 }}>{c.name}</div>
                         <div style={{ fontSize: 12, color: 'var(--text-sub)' }}>
-                          {monthContracts.map(ct => ct.type || '契約').join('・')}
-                          {monthContracts[0]?.date && ` · ${fmtDateFull(monthContracts[0].date)}〜`}
+                          {monthContracts.map(ct => {
+                            const m = parseInt(ct.date.split('-')[1], 10);
+                            return `${getLabel(m)}契約月：${ct.type || '契約'}`;
+                          }).join(' / ')}
                         </div>
                       </div>
                     </div>
@@ -1256,8 +1272,14 @@ function CustomerListTab({ customers, onSelect, onAdd }) {
         : filtered.map(c => {
           const apptDays = daysUntil(c.nextAppt);
           const nowM2 = new Date().getMonth() + 1;
+          const nM1 = ((nowM2 - 1 + 1) % 12) + 1;
+          const nM2 = ((nowM2 - 1 + 2) % 12) + 1;
           const isBirthMonth = c.birthdate && parseInt(c.birthdate.split('-')[1], 10) === nowM2;
-          const isContractMonth = (c.contracts || []).some(ct => ct.date && parseInt(ct.date.split('-')[1], 10) === nowM2);
+          const isContractMonth = (c.contracts || []).some(ct => {
+            if (ct.category === '損保' || !ct.date) return false;
+            const m = parseInt(ct.date.split('-')[1], 10);
+            return m === nowM2 || m === nM1 || m === nM2;
+          });
           return (
             <div key={c.id} className="customer-card" onClick={() => onSelect(c)}
               style={ (isBirthMonth || isContractMonth) ? { borderLeft: '3px solid var(--warning)' } : {} }>
