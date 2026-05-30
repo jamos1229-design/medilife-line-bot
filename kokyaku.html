@@ -818,6 +818,7 @@ function DashboardTab({ customers, onNavigate }) {
   const total = customers.length;
   const lineCount = customers.filter(c => c.lineRegistered).length;
   const thisMonth = thisMonthStr();
+  const thisMonthNum = String(new Date().getMonth() + 1).padStart(2, '0'); // "MM"
   const apptThisMonth = customers.filter(c => c.nextAppt && c.nextAppt.startsWith(thisMonth)).length;
   const noContact = customers.filter(c => !c.status || c.status === '未接触').length;
 
@@ -826,6 +827,16 @@ function DashboardTab({ customers, onNavigate }) {
     .filter(c => c.nextAppt && c.nextAppt >= today)
     .sort((a, b) => a.nextAppt.localeCompare(b.nextAppt))
     .slice(0, 5);
+
+  // 今月誕生日
+  const birthdayThisMonth = customers.filter(c =>
+    c.birthdate && c.birthdate.slice(5, 7) === thisMonthNum
+  ).sort((a, b) => a.birthdate.slice(8, 10) - b.birthdate.slice(8, 10));
+
+  // 今月契約月（いずれかの契約の契約日の月が今月）
+  const contractThisMonth = customers.filter(c =>
+    (c.contracts || []).some(ct => ct.date && ct.date.slice(5, 7) === thisMonthNum)
+  );
 
   const statusCounts = STATUSES.map(s => ({
     ...s,
@@ -852,6 +863,72 @@ function DashboardTab({ customers, onNavigate }) {
           <div className="stat-label">未接触顧客</div>
         </div>
       </div>
+
+      {/* 今月のアラート */}
+      {(birthdayThisMonth.length > 0 || contractThisMonth.length > 0) && (
+        <div className="card" style={{ borderLeft: '4px solid var(--warning)', marginBottom: 10 }}>
+          <div className="card-title" style={{ color: 'var(--warning)' }}>🔔 今月のアラート</div>
+
+          {birthdayThisMonth.length > 0 && (
+            <div style={{ marginBottom: contractThisMonth.length > 0 ? 14 : 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>🎂</span>
+                <span>今月誕生日</span>
+                <span style={{ background: '#FEF3C7', color: '#D97706', borderRadius: 10, padding: '1px 8px', fontSize: 12 }}>
+                  {birthdayThisMonth.length}人
+                </span>
+              </div>
+              {birthdayThisMonth.map(c => (
+                <div key={c.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: '#FFFBEB', borderRadius: 10, marginBottom: 6 }}
+                  onClick={() => onNavigate('customers', c)}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 20 }}>🎂</span>
+                    <div>
+                      <div style={{ fontSize: 15, fontWeight: 700 }}>{c.name}</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-sub)' }}>
+                        {parseInt(c.birthdate.slice(5,7))}月{parseInt(c.birthdate.slice(8,10))}日
+                        {c.age && ` · ${c.age}歳`}
+                      </div>
+                    </div>
+                  </div>
+                  <span style={{ fontSize: 12, color: 'var(--text-sub)' }}>›</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {contractThisMonth.length > 0 && (
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>📋</span>
+                <span>今月契約月</span>
+                <span style={{ background: '#EDE9FE', color: '#7C3AED', borderRadius: 10, padding: '1px 8px', fontSize: 12 }}>
+                  {contractThisMonth.length}人
+                </span>
+              </div>
+              {contractThisMonth.map(c => {
+                const monthContracts = (c.contracts || []).filter(ct => ct.date && ct.date.slice(5,7) === thisMonthNum);
+                return (
+                  <div key={c.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: '#F5F3FF', borderRadius: 10, marginBottom: 6 }}
+                    onClick={() => onNavigate('customers', c)}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 20 }}>📋</span>
+                      <div>
+                        <div style={{ fontSize: 15, fontWeight: 700 }}>{c.name}</div>
+                        <div style={{ fontSize: 12, color: 'var(--text-sub)' }}>
+                          {monthContracts.map(ct => ct.type || '契約').join('・')}
+                          {monthContracts[0]?.date && ` · ${fmtDateFull(monthContracts[0].date)}〜`}
+                        </div>
+                      </div>
+                    </div>
+                    <span style={{ fontSize: 12, color: 'var(--text-sub)' }}>›</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ステータス内訳 */}
       <div className="card">
@@ -972,12 +1049,18 @@ function CustomerListTab({ customers, onSelect, onAdd }) {
         ? <EmptyState icon="👤" text={customers.length === 0 ? '顧客を追加してください' : '該当する顧客はいません'} />
         : filtered.map(c => {
           const apptDays = daysUntil(c.nextAppt);
+          const nowMonth = String(new Date().getMonth() + 1).padStart(2, '0');
+          const isBirthMonth = c.birthdate && c.birthdate.slice(5, 7) === nowMonth;
+          const isContractMonth = (c.contracts || []).some(ct => ct.date && ct.date.slice(5, 7) === nowMonth);
           return (
-            <div key={c.id} className="customer-card" onClick={() => onSelect(c)}>
+            <div key={c.id} className="customer-card" onClick={() => onSelect(c)}
+              style={ (isBirthMonth || isContractMonth) ? { borderLeft: '3px solid var(--warning)' } : {} }>
               <div className="customer-card-top">
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flexWrap: 'wrap' }}>
                   <div className="customer-name">{c.name}</div>
                   {c.age && <div style={{ fontSize: 12, color: 'var(--text-sub)', fontWeight: 500 }}>{c.age}歳</div>}
+                  {isBirthMonth && <span style={{ fontSize: 13 }}>🎂</span>}
+                  {isContractMonth && <span style={{ fontSize: 13 }}>📋🔔</span>}
                 </div>
                 <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
                   <StatusBadge status={c.status} />
@@ -1193,7 +1276,7 @@ function App() {
       {/* Content */}
       <div className="content">
         {tab === 'dashboard' && (
-          <DashboardTab customers={customers} onNavigate={t => setTab(t)} />
+          <DashboardTab customers={customers} onNavigate={(t, c) => { setTab(t === 'customers' ? 'list' : t); if (c) setSelectedCustomer(c); }} />
         )}
         {tab === 'list' && (
           <CustomerListTab customers={customers} onSelect={setSelectedCustomer} onAdd={openNew} />
