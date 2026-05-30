@@ -818,7 +818,8 @@ function DashboardTab({ customers, onNavigate }) {
   const total = customers.length;
   const lineCount = customers.filter(c => c.lineRegistered).length;
   const thisMonth = thisMonthStr();
-  const thisMonthNum = String(new Date().getMonth() + 1).padStart(2, '0'); // "MM"
+  // 今月の月番号（整数で比較してゼロ埋め問題を回避）
+  const nowM = new Date().getMonth() + 1; // 1〜12の整数
   const apptThisMonth = customers.filter(c => c.nextAppt && c.nextAppt.startsWith(thisMonth)).length;
   const noContact = customers.filter(c => !c.status || c.status === '未接触').length;
 
@@ -828,14 +829,15 @@ function DashboardTab({ customers, onNavigate }) {
     .sort((a, b) => a.nextAppt.localeCompare(b.nextAppt))
     .slice(0, 5);
 
-  // 今月誕生日
-  const birthdayThisMonth = customers.filter(c =>
-    c.birthdate && c.birthdate.slice(5, 7) === thisMonthNum
-  ).sort((a, b) => a.birthdate.slice(8, 10) - b.birthdate.slice(8, 10));
+  // 今月誕生日（整数比較）
+  const birthdayThisMonth = customers.filter(c => {
+    if (!c.birthdate) return false;
+    return parseInt(c.birthdate.split('-')[1], 10) === nowM;
+  }).sort((a, b) => parseInt(a.birthdate.split('-')[2],10) - parseInt(b.birthdate.split('-')[2],10));
 
-  // 今月契約月（いずれかの契約の契約日の月が今月）
+  // 今月契約月（整数比較）
   const contractThisMonth = customers.filter(c =>
-    (c.contracts || []).some(ct => ct.date && ct.date.slice(5, 7) === thisMonthNum)
+    (c.contracts || []).some(ct => ct.date && parseInt(ct.date.split('-')[1], 10) === nowM)
   );
 
   const statusCounts = STATUSES.map(s => ({
@@ -1049,9 +1051,9 @@ function CustomerListTab({ customers, onSelect, onAdd }) {
         ? <EmptyState icon="👤" text={customers.length === 0 ? '顧客を追加してください' : '該当する顧客はいません'} />
         : filtered.map(c => {
           const apptDays = daysUntil(c.nextAppt);
-          const nowMonth = String(new Date().getMonth() + 1).padStart(2, '0');
-          const isBirthMonth = c.birthdate && c.birthdate.slice(5, 7) === nowMonth;
-          const isContractMonth = (c.contracts || []).some(ct => ct.date && ct.date.slice(5, 7) === nowMonth);
+          const nowM2 = new Date().getMonth() + 1;
+          const isBirthMonth = c.birthdate && parseInt(c.birthdate.split('-')[1], 10) === nowM2;
+          const isContractMonth = (c.contracts || []).some(ct => ct.date && parseInt(ct.date.split('-')[1], 10) === nowM2);
           return (
             <div key={c.id} className="customer-card" onClick={() => onSelect(c)}
               style={ (isBirthMonth || isContractMonth) ? { borderLeft: '3px solid var(--warning)' } : {} }>
