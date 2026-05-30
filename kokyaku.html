@@ -383,8 +383,12 @@ const EmptyState = ({ icon, text }) => (
 );
 
 // ── Contract Form Block ───────────────────────────────────────
+const PAYMENT_CYCLES = ['月払', '年払', '一時払'];
+const CURRENCIES     = ['円', 'ドル'];
+
 function ContractBlock({ contract, onChange, onRemove, index }) {
-  const s = k => e => onChange({ ...contract, [k]: e.target.value });
+  const s  = k => e => onChange({ ...contract, [k]: e.target.value });
+  const sv = k => v => onChange({ ...contract, [k]: v });
   return (
     <div className="contract-block">
       <div className="contract-block-title">
@@ -408,10 +412,47 @@ function ContractBlock({ contract, onChange, onRemove, index }) {
         <label className="form-label">証券番号</label>
         <input className="form-input" placeholder="例：AB-1234567" value={contract.policyNum || ''} onChange={s('policyNum')} />
       </div>
+      {/* 払込方法 */}
+      <div className="form-group" style={{ marginBottom: 8 }}>
+        <label className="form-label">払込方法</label>
+        <div className="toggle-group">
+          {PAYMENT_CYCLES.map(p => (
+            <button key={p} type="button"
+              className={`toggle-btn ${(contract.paymentCycle || '月払') === p ? 'sel' : ''}`}
+              onClick={() => sv('paymentCycle')(p)}>{p}</button>
+          ))}
+        </div>
+      </div>
+      {/* 通貨 */}
+      <div className="form-group" style={{ marginBottom: 8 }}>
+        <label className="form-label">通貨</label>
+        <div className="toggle-group">
+          {CURRENCIES.map(cur => (
+            <button key={cur} type="button"
+              className={`toggle-btn ${(contract.currency || '円') === cur ? 'sel' : ''}`}
+              onClick={() => sv('currency')(cur)}>{cur}</button>
+          ))}
+        </div>
+      </div>
+      {/* 保険料 */}
       <div className="form-row">
         <div>
-          <label className="form-label">保険料（月額）</label>
-          <input className="form-input" type="number" placeholder="例：15000" value={contract.premium || ''} onChange={s('premium')} />
+          <label className="form-label">
+            保険料
+            {(contract.paymentCycle || '月払') === '一時払'
+              ? '（一時払総額）'
+              : (contract.paymentCycle || '月払') === '年払'
+              ? '（年額）'
+              : '（月額）'}
+          </label>
+          <div style={{ position: 'relative' }}>
+            <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', fontSize: 15, color: 'var(--text-sub)', pointerEvents: 'none' }}>
+              {(contract.currency || '円') === 'ドル' ? '$' : '¥'}
+            </span>
+            <input className="form-input" type="number" placeholder="例：15000"
+              style={{ paddingLeft: 28 }}
+              value={contract.premium || ''} onChange={s('premium')} />
+          </div>
         </div>
         <div>
           <label className="form-label">契約日</label>
@@ -763,7 +804,27 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose }) {
                   <div className="info-item"><div className="info-label">保険種類</div><div className="info-value">{ct.type || '—'}</div></div>
                   <div className="info-item"><div className="info-label">保険会社</div><div className="info-value">{ct.company || '—'}</div></div>
                   {ct.policyNum && <div className="info-item" style={{gridColumn:'1 / -1'}}><div className="info-label">証券番号</div><div className="info-value" style={{fontSize:15,letterSpacing:0.5}}>{ct.policyNum}</div></div>}
-                  {ct.premium && <div className="info-item"><div className="info-label">保険料（月額）</div><div className="info-value">¥{Number(ct.premium).toLocaleString()}</div></div>}
+                  {ct.premium && (
+                    <div className="info-item">
+                      <div className="info-label">
+                        保険料
+                        {ct.paymentCycle === '一時払' ? '（一時払）' : ct.paymentCycle === '年払' ? '（年払）' : '（月払）'}
+                      </div>
+                      <div className="info-value">
+                        {(ct.currency || '円') === 'ドル' ? '$' : '¥'}{Number(ct.premium).toLocaleString()}
+                        {ct.paymentCycle && ct.paymentCycle !== '月払' && (
+                          <span style={{ fontSize: 11, color: 'var(--accent)', background: 'var(--accent-light)', borderRadius: 5, padding: '1px 6px', marginLeft: 5 }}>
+                            {ct.paymentCycle}
+                          </span>
+                        )}
+                        {(ct.currency || '円') === 'ドル' && (
+                          <span style={{ fontSize: 11, color: '#059669', background: '#ECFDF5', borderRadius: 5, padding: '1px 6px', marginLeft: 4 }}>
+                            ドル建
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
                   {ct.date && <div className="info-item"><div className="info-label">契約日</div><div className="info-value">{fmtDateFull(ct.date)}</div></div>}
                 </div>
               </div>
@@ -1204,7 +1265,7 @@ function AppointmentTab({ customers, onSelect }) {
 
 // ── CSV Export ────────────────────────────────────────────────
 function exportCSV(customers) {
-  const headers = ['氏名', '年齢', '生年月日', '電話番号', 'メールアドレス', '郵便番号', '住所', '職業', '勤務先', 'LINE登録', 'ステータス', '接触方法', '最終接触日', '次回アポイント', '契約数', '証券番号一覧', '面談メモ'];
+  const headers = ['氏名', '年齢', '生年月日', '電話番号', 'メールアドレス', '郵便番号', '住所', '職業', '勤務先', 'LINE登録', 'ステータス', '接触方法', '最終接触日', '次回アポイント', '契約数', '証券番号一覧', '払込方法一覧', '通貨一覧', '面談メモ'];
   const rows = customers.map(c => [
     c.name, c.age || '', c.birthdate || '', c.phone || '', c.email || '',
     c.postalCode || '', c.address || '', c.occupation || '', c.workplace || '',
@@ -1215,6 +1276,8 @@ function exportCSV(customers) {
     c.nextAppt || '',
     (c.contracts || []).length,
     (c.contracts || []).map(ct => ct.policyNum || '').filter(Boolean).join(' / '),
+    (c.contracts || []).map(ct => ct.paymentCycle || '月払').join(' / '),
+    (c.contracts || []).map(ct => ct.currency || '円').join(' / '),
     (c.memo || '').replace(/\n/g, '　'),
   ]);
   const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
