@@ -383,119 +383,149 @@ const EmptyState = ({ icon, text }) => (
 );
 
 // ── Contract Form Block ───────────────────────────────────────
-const PAYMENT_CYCLES = ['月払', '年払', '一時払'];
-const CURRENCIES     = ['円', 'ドル'];
+const PAYMENT_CYCLES  = ['月払', '年払', '一時払'];
+const CURRENCIES      = ['円', 'ドル'];
+const INS_CATEGORIES  = ['生保', '損保'];
+
+// 金額入力ヘルパー
+function AmountInput({ prefix, prefixColor, value, onChange, placeholder }) {
+  return (
+    <div style={{ position: 'relative' }}>
+      <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', fontSize: 15, color: prefixColor || 'var(--text-sub)', fontWeight: 700, pointerEvents: 'none' }}>{prefix}</span>
+      <input className="form-input" type="number" placeholder={placeholder} style={{ paddingLeft: 28 }} value={value} onChange={onChange} />
+    </div>
+  );
+}
 
 function ContractBlock({ contract, onChange, onRemove, index }) {
   const s  = k => e => onChange({ ...contract, [k]: e.target.value });
   const sv = k => v => onChange({ ...contract, [k]: v });
+  const cat = contract.category || '生保';
+  const cycle = contract.paymentCycle || '月払';
+  const cur   = contract.currency || '円';
+
   return (
-    <div className="contract-block">
+    <div className="contract-block" style={{ borderTop: `3px solid ${cat === '損保' ? '#F59E0B' : 'var(--accent)'}` }}>
       <div className="contract-block-title">
         <span>契約 {index + 1}</span>
-        <button onClick={onRemove} style={{
-          background: 'none', border: 'none', color: 'var(--danger)',
-          cursor: 'pointer', fontSize: 20, lineHeight: 1,
-        }}>×</button>
+        <button onClick={onRemove} style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', fontSize: 20, lineHeight: 1 }}>×</button>
       </div>
+
+      {/* 生保 / 損保 切り替え */}
+      <div className="form-group" style={{ marginBottom: 10 }}>
+        <label className="form-label">保険区分</label>
+        <div className="toggle-group">
+          {INS_CATEGORIES.map(c => (
+            <button key={c} type="button"
+              className={`toggle-btn ${cat === c ? 'sel' : ''}`}
+              style={cat === c ? { borderColor: c === '損保' ? '#F59E0B' : 'var(--accent)', background: c === '損保' ? '#FFFBEB' : 'var(--accent-light)', color: c === '損保' ? '#D97706' : 'var(--accent)' } : {}}
+              onClick={() => sv('category')(c)}>{c}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* 共通：種類・会社・証券番号 */}
       <div className="form-row" style={{ marginBottom: 8 }}>
         <div>
           <label className="form-label">保険種類</label>
-          <input className="form-input" placeholder="例：生命保険" value={contract.type || ''} onChange={s('type')} />
+          <input className="form-input" placeholder={cat === '損保' ? '例：自動車保険' : '例：生命保険'} value={contract.type || ''} onChange={s('type')} />
         </div>
         <div>
           <label className="form-label">保険会社</label>
-          <input className="form-input" placeholder="例：〇〇生命" value={contract.company || ''} onChange={s('company')} />
+          <input className="form-input" placeholder={cat === '損保' ? '例：〇〇損保' : '例：〇〇生命'} value={contract.company || ''} onChange={s('company')} />
         </div>
       </div>
       <div className="form-group" style={{ marginBottom: 8 }}>
         <label className="form-label">証券番号</label>
         <input className="form-input" placeholder="例：AB-1234567" value={contract.policyNum || ''} onChange={s('policyNum')} />
       </div>
-      {/* 払込方法 */}
-      <div className="form-group" style={{ marginBottom: 8 }}>
-        <label className="form-label">払込方法</label>
-        <div className="toggle-group">
-          {PAYMENT_CYCLES.map(p => (
-            <button key={p} type="button"
-              className={`toggle-btn ${(contract.paymentCycle || '月払') === p ? 'sel' : ''}`}
-              onClick={() => sv('paymentCycle')(p)}>{p}</button>
-          ))}
-        </div>
-      </div>
-      {/* 通貨 */}
-      <div className="form-group" style={{ marginBottom: 8 }}>
-        <label className="form-label">通貨</label>
-        <div className="toggle-group">
-          {CURRENCIES.map(cur => (
-            <button key={cur} type="button"
-              className={`toggle-btn ${(contract.currency || '円') === cur ? 'sel' : ''}`}
-              onClick={() => sv('currency')(cur)}>{cur}</button>
-          ))}
-        </div>
-      </div>
-      {/* 保険料 */}
-      {(contract.currency || '円') === 'ドル' ? (
-        // ドル建：ドル金額 + 円払込額を両方入力
+
+      {cat === '損保' ? (
+        // ── 損保フィールド ──────────────────────────────
         <>
-          <div className="form-row" style={{ marginBottom: 8 }}>
-            <div>
-              <label className="form-label">
-                {(contract.paymentCycle || '月払') === '一時払' ? '一時払込額（ドル）' :
-                 (contract.paymentCycle || '月払') === '年払'  ? '年間保険料（ドル）' : '月額保険料（ドル）'}
-              </label>
-              <div style={{ position: 'relative' }}>
-                <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', fontSize: 15, color: '#059669', fontWeight: 700, pointerEvents: 'none' }}>$</span>
-                <input className="form-input" type="number" placeholder="例：50000"
-                  style={{ paddingLeft: 28 }} value={contract.premium || ''} onChange={s('premium')} />
-              </div>
-            </div>
-            <div>
-              <label className="form-label">
-                {(contract.paymentCycle || '月払') === '一時払' ? '円払込総額' :
-                 (contract.paymentCycle || '月払') === '年払'  ? '円換算（年額）' : '円換算（月額）'}
-              </label>
-              <div style={{ position: 'relative' }}>
-                <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', fontSize: 15, color: 'var(--text-sub)', pointerEvents: 'none' }}>¥</span>
-                <input className="form-input" type="number" placeholder="例：7500000"
-                  style={{ paddingLeft: 28 }} value={contract.premiumJpy || ''} onChange={s('premiumJpy')} />
-              </div>
-            </div>
+          <div className="form-group" style={{ marginBottom: 8 }}>
+            <label className="form-label">保険対象</label>
+            <input className="form-input" placeholder="例：車両（品川500 あ 1234）・自宅（大阪市北区〇〇）" value={contract.insuredObject || ''} onChange={s('insuredObject')} />
           </div>
-          <div className="form-row">
-            <div>
-              <label className="form-label">適用レート（1$=）</label>
-              <div style={{ position: 'relative' }}>
-                <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', fontSize: 13, color: 'var(--text-sub)', pointerEvents: 'none' }}>¥</span>
-                <input className="form-input" type="number" placeholder="例：150"
-                  style={{ paddingLeft: 28 }} value={contract.exchangeRate || ''} onChange={s('exchangeRate')} />
-              </div>
-            </div>
+          <div className="form-row" style={{ marginBottom: 8 }}>
             <div>
               <label className="form-label">契約日</label>
               <input className="form-input" type="date" value={contract.date || ''} onChange={s('date')} />
             </div>
+            <div>
+              <label className="form-label">満期日・更新日 🔔</label>
+              <input className="form-input" type="date" value={contract.expiryDate || ''} onChange={s('expiryDate')} />
+            </div>
+          </div>
+          <div className="form-group" style={{ marginBottom: 8 }}>
+            <label className="form-label">補償内容</label>
+            <textarea className="form-textarea" style={{ minHeight: 70 }} placeholder="例：対人・対物無制限、車両保険あり（一般担保）" value={contract.coverage || ''} onChange={s('coverage')} />
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">払込方法</label>
+            <div className="toggle-group" style={{ marginBottom: 8 }}>
+              {['月払', '年払'].map(p => (
+                <button key={p} type="button" className={`toggle-btn ${cycle === p ? 'sel' : ''}`} onClick={() => sv('paymentCycle')(p)}>{p}</button>
+              ))}
+            </div>
+            <AmountInput prefix="¥" value={contract.premium || ''} onChange={s('premium')} placeholder={cycle === '年払' ? '例：80000（年額）' : '例：7000（月額）'} />
           </div>
         </>
       ) : (
-        // 円建：通常の保険料入力
-        <div className="form-row">
-          <div>
-            <label className="form-label">
-              {(contract.paymentCycle || '月払') === '一時払' ? '一時払込額' :
-               (contract.paymentCycle || '月払') === '年払'  ? '年間保険料' : '月額保険料'}
-            </label>
-            <div style={{ position: 'relative' }}>
-              <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', fontSize: 15, color: 'var(--text-sub)', pointerEvents: 'none' }}>¥</span>
-              <input className="form-input" type="number" placeholder="例：15000"
-                style={{ paddingLeft: 28 }} value={contract.premium || ''} onChange={s('premium')} />
+        // ── 生保フィールド ──────────────────────────────
+        <>
+          <div className="form-group" style={{ marginBottom: 8 }}>
+            <label className="form-label">払込方法</label>
+            <div className="toggle-group">
+              {PAYMENT_CYCLES.map(p => (
+                <button key={p} type="button" className={`toggle-btn ${cycle === p ? 'sel' : ''}`} onClick={() => sv('paymentCycle')(p)}>{p}</button>
+              ))}
             </div>
           </div>
-          <div>
-            <label className="form-label">契約日</label>
-            <input className="form-input" type="date" value={contract.date || ''} onChange={s('date')} />
+          <div className="form-group" style={{ marginBottom: 8 }}>
+            <label className="form-label">通貨</label>
+            <div className="toggle-group">
+              {CURRENCIES.map(c => (
+                <button key={c} type="button" className={`toggle-btn ${cur === c ? 'sel' : ''}`} onClick={() => sv('currency')(c)}>{c}</button>
+              ))}
+            </div>
           </div>
-        </div>
+          {cur === 'ドル' ? (
+            <>
+              <div className="form-row" style={{ marginBottom: 8 }}>
+                <div>
+                  <label className="form-label">{cycle === '一時払' ? '一時払込額（$）' : cycle === '年払' ? '年間保険料（$）' : '月額保険料（$）'}</label>
+                  <AmountInput prefix="$" prefixColor="#059669" value={contract.premium || ''} onChange={s('premium')} placeholder="例：50000" />
+                </div>
+                <div>
+                  <label className="form-label">{cycle === '一時払' ? '円払込総額' : cycle === '年払' ? '円換算（年額）' : '円換算（月額）'}</label>
+                  <AmountInput prefix="¥" value={contract.premiumJpy || ''} onChange={s('premiumJpy')} placeholder="例：7500000" />
+                </div>
+              </div>
+              <div className="form-row">
+                <div>
+                  <label className="form-label">適用レート（1$=）</label>
+                  <AmountInput prefix="¥" value={contract.exchangeRate || ''} onChange={s('exchangeRate')} placeholder="例：150" />
+                </div>
+                <div>
+                  <label className="form-label">契約日</label>
+                  <input className="form-input" type="date" value={contract.date || ''} onChange={s('date')} />
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="form-row">
+              <div>
+                <label className="form-label">{cycle === '一時払' ? '一時払込額' : cycle === '年払' ? '年間保険料' : '月額保険料'}</label>
+                <AmountInput prefix="¥" value={contract.premium || ''} onChange={s('premium')} placeholder="例：15000" />
+              </div>
+              <div>
+                <label className="form-label">契約日</label>
+                <input className="form-input" type="date" value={contract.date || ''} onChange={s('date')} />
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -834,60 +864,70 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose }) {
         {c.contracts && c.contracts.length > 0 && (
           <>
             <div className="section-header">契約情報 ({c.contracts.length}件)</div>
-            {c.contracts.map((ct, i) => (
-              <div className="card" key={ct.id} style={{ marginBottom: 8 }}>
-                <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--accent)', marginBottom: 10 }}>契約 {i + 1}</div>
+            {c.contracts.map((ct, i) => {
+              const isSonpo = ct.category === '損保';
+              const expiryDays = daysUntil(ct.expiryDate);
+              return (
+              <div className="card" key={ct.id} style={{ marginBottom: 8, borderTop: `3px solid ${isSonpo ? '#F59E0B' : 'var(--accent)'}` }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: isSonpo ? '#D97706' : 'var(--accent)' }}>契約 {i + 1}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 6, background: isSonpo ? '#FFFBEB' : 'var(--accent-light)', color: isSonpo ? '#D97706' : 'var(--accent)' }}>
+                    {isSonpo ? '損保' : '生保'}
+                  </span>
+                </div>
                 <div className="customer-info-row">
-                  {/* 保険種類・保険会社は常に2列セットで表示 */}
                   <div className="info-item"><div className="info-label">保険種類</div><div className="info-value">{ct.type || '—'}</div></div>
                   <div className="info-item"><div className="info-label">保険会社</div><div className="info-value">{ct.company || '—'}</div></div>
-                  {ct.policyNum && <div className="info-item" style={{gridColumn:'1 / -1'}}><div className="info-label">証券番号</div><div className="info-value" style={{fontSize:15,letterSpacing:0.5}}>{ct.policyNum}</div></div>}
-                  {ct.premium && (ct.currency || '円') === 'ドル' ? (
-                    // ドル建：ドル額・円払込額・レートを表示
-                    <div className="info-item" style={{ gridColumn: '1 / -1' }}>
-                      <div className="info-label" style={{ marginBottom: 6 }}>
-                        保険料
-                        {ct.paymentCycle === '一時払' ? '（一時払・ドル建）' : ct.paymentCycle === '年払' ? '（年払・ドル建）' : '（月払・ドル建）'}
-                      </div>
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                        <span style={{ fontSize: 17, fontWeight: 800, color: '#059669' }}>
-                          ${Number(ct.premium).toLocaleString()}
-                        </span>
-                        {ct.premiumJpy && (
-                          <>
-                            <span style={{ color: 'var(--text-sub)', fontSize: 14 }}>＝</span>
-                            <span style={{ fontSize: 17, fontWeight: 800, color: 'var(--text)' }}>
-                              ¥{Number(ct.premiumJpy).toLocaleString()}
-                            </span>
-                          </>
-                        )}
-                        {ct.exchangeRate && (
-                          <span style={{ fontSize: 12, color: 'var(--text-sub)', background: 'var(--bg)', borderRadius: 6, padding: '2px 8px' }}>
-                            1$=¥{ct.exchangeRate}
+                  {ct.policyNum && <div className="info-item" style={{gridColumn:'1/-1'}}><div className="info-label">証券番号</div><div className="info-value" style={{fontSize:15,letterSpacing:0.5}}>{ct.policyNum}</div></div>}
+
+                  {/* 損保専用フィールド */}
+                  {isSonpo && ct.insuredObject && (
+                    <div className="info-item" style={{gridColumn:'1/-1'}}><div className="info-label">保険対象</div><div className="info-value">{ct.insuredObject}</div></div>
+                  )}
+                  {isSonpo && ct.expiryDate && (
+                    <div className="info-item" style={{gridColumn:'1/-1'}}>
+                      <div className="info-label">満期日・更新日</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <div className="info-value" style={{ color: expiryDays !== null && expiryDays <= 30 ? 'var(--danger)' : expiryDays !== null && expiryDays <= 60 ? 'var(--warning)' : 'var(--text)' }}>
+                          {fmtDateFull(ct.expiryDate)}
+                        </div>
+                        {expiryDays !== null && (
+                          <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 6,
+                            background: expiryDays <= 0 ? '#FEF2F2' : expiryDays <= 30 ? '#FFF7ED' : '#F3F4F6',
+                            color: expiryDays <= 0 ? 'var(--danger)' : expiryDays <= 30 ? 'var(--warning)' : 'var(--text-sub)' }}>
+                            {expiryDays <= 0 ? '満期切れ' : `あと${expiryDays}日`}
                           </span>
                         )}
                       </div>
                     </div>
-                  ) : ct.premium ? (
-                    // 円建
-                    <div className="info-item">
-                      <div className="info-label">
-                        {ct.paymentCycle === '一時払' ? '一時払込額' : ct.paymentCycle === '年払' ? '年間保険料' : '月額保険料'}
+                  )}
+                  {isSonpo && ct.coverage && (
+                    <div className="info-item" style={{gridColumn:'1/-1'}}><div className="info-label">補償内容</div><div style={{fontSize:13,lineHeight:1.5,whiteSpace:'pre-wrap'}}>{ct.coverage}</div></div>
+                  )}
+
+                  {/* 保険料 */}
+                  {ct.premium && (ct.currency || '円') === 'ドル' ? (
+                    <div className="info-item" style={{ gridColumn: '1/-1' }}>
+                      <div className="info-label" style={{ marginBottom: 6 }}>保険料（{ct.paymentCycle || '月払'}・ドル建）</div>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                        <span style={{ fontSize: 17, fontWeight: 800, color: '#059669' }}>${Number(ct.premium).toLocaleString()}</span>
+                        {ct.premiumJpy && (<><span style={{ color: 'var(--text-sub)', fontSize: 14 }}>＝</span><span style={{ fontSize: 17, fontWeight: 800 }}>¥{Number(ct.premiumJpy).toLocaleString()}</span></>)}
+                        {ct.exchangeRate && <span style={{ fontSize: 12, color: 'var(--text-sub)', background: 'var(--bg)', borderRadius: 6, padding: '2px 8px' }}>1$=¥{ct.exchangeRate}</span>}
                       </div>
-                      <div className="info-value">
-                        ¥{Number(ct.premium).toLocaleString()}
-                        {ct.paymentCycle && ct.paymentCycle !== '月払' && (
-                          <span style={{ fontSize: 11, color: 'var(--accent)', background: 'var(--accent-light)', borderRadius: 5, padding: '1px 6px', marginLeft: 5 }}>
-                            {ct.paymentCycle}
-                          </span>
-                        )}
+                    </div>
+                  ) : ct.premium ? (
+                    <div className="info-item">
+                      <div className="info-label">{ct.paymentCycle === '一時払' ? '一時払込額' : ct.paymentCycle === '年払' ? '年間保険料' : '月額保険料'}</div>
+                      <div className="info-value">¥{Number(ct.premium).toLocaleString()}
+                        {ct.paymentCycle && ct.paymentCycle !== '月払' && <span style={{ fontSize: 11, color: 'var(--accent)', background: 'var(--accent-light)', borderRadius: 5, padding: '1px 6px', marginLeft: 5 }}>{ct.paymentCycle}</span>}
                       </div>
                     </div>
                   ) : null}
                   {ct.date && <div className="info-item"><div className="info-label">契約日</div><div className="info-value">{fmtDateFull(ct.date)}</div></div>}
                 </div>
               </div>
-            ))}
+              );
+            })}
           </>
         )}
 
@@ -955,9 +995,19 @@ function DashboardTab({ customers, onNavigate }) {
     return parseInt(c.birthdate.split('-')[1], 10) === nowM;
   }).sort((a, b) => parseInt(a.birthdate.split('-')[2],10) - parseInt(b.birthdate.split('-')[2],10));
 
-  // 今月契約月（整数比較）
+  // 今月契約月（生保・整数比較）
   const contractThisMonth = customers.filter(c =>
-    (c.contracts || []).some(ct => ct.date && parseInt(ct.date.split('-')[1], 10) === nowM)
+    (c.contracts || []).some(ct => ct.category !== '損保' && ct.date && parseInt(ct.date.split('-')[1], 10) === nowM)
+  );
+
+  // 損保：今月・来月満期
+  const nextM = nowM === 12 ? 1 : nowM + 1;
+  const expiryAlert = customers.filter(c =>
+    (c.contracts || []).some(ct => {
+      if (ct.category !== '損保' || !ct.expiryDate) return false;
+      const m = parseInt(ct.expiryDate.split('-')[1], 10);
+      return m === nowM || m === nextM;
+    })
   );
 
   const statusCounts = STATUSES.map(s => ({
@@ -987,7 +1037,7 @@ function DashboardTab({ customers, onNavigate }) {
       </div>
 
       {/* 今月のアラート */}
-      {(birthdayThisMonth.length > 0 || contractThisMonth.length > 0) && (
+      {(birthdayThisMonth.length > 0 || contractThisMonth.length > 0 || expiryAlert.length > 0) && (
         <div className="card" style={{ borderLeft: '4px solid var(--warning)', marginBottom: 10 }}>
           <div className="card-title" style={{ color: 'var(--warning)' }}>🔔 今月のアラート</div>
 
@@ -1019,11 +1069,44 @@ function DashboardTab({ customers, onNavigate }) {
             </div>
           )}
 
+          {expiryAlert.length > 0 && (
+            <div style={{ marginBottom: contractThisMonth.length > 0 ? 14 : 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>🚗</span>
+                <span>損保 満期・更新（今月〜来月）</span>
+                <span style={{ background: '#FEF3C7', color: '#D97706', borderRadius: 10, padding: '1px 8px', fontSize: 12 }}>
+                  {expiryAlert.length}人
+                </span>
+              </div>
+              {expiryAlert.map(c => {
+                const expContracts = (c.contracts || []).filter(ct =>
+                  ct.category === '損保' && ct.expiryDate &&
+                  (parseInt(ct.expiryDate.split('-')[1], 10) === nowM || parseInt(ct.expiryDate.split('-')[1], 10) === nextM)
+                );
+                return (
+                  <div key={c.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: '#FFFBEB', borderRadius: 10, marginBottom: 6 }}
+                    onClick={() => onNavigate('customers', c)}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 20 }}>🚗</span>
+                      <div>
+                        <div style={{ fontSize: 15, fontWeight: 700 }}>{c.name}</div>
+                        <div style={{ fontSize: 12, color: 'var(--text-sub)' }}>
+                          {expContracts.map(ct => `${ct.type || '損保'} 満期：${fmtDateFull(ct.expiryDate)}`).join(' / ')}
+                        </div>
+                      </div>
+                    </div>
+                    <span style={{ fontSize: 12, color: 'var(--text-sub)' }}>›</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           {contractThisMonth.length > 0 && (
             <div>
               <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span>📋</span>
-                <span>今月契約月</span>
+                <span>今月契約月（生保）</span>
                 <span style={{ background: '#EDE9FE', color: '#7C3AED', borderRadius: 10, padding: '1px 8px', fontSize: 12 }}>
                   {contractThisMonth.length}人
                 </span>
