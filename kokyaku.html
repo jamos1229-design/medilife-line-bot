@@ -464,7 +464,7 @@ function ContractBlock({ contract, onChange, onRemove, index }) {
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label className="form-label">払込方法</label>
             <div className="toggle-group" style={{ marginBottom: 8 }}>
-              {['月払', '年払'].map(p => (
+              {PAYMENT_CYCLES.map(p => (
                 <button key={p} type="button" className={`toggle-btn ${cycle === p ? 'sel' : ''}`} onClick={() => sv('paymentCycle')(p)}>{p}</button>
               ))}
             </div>
