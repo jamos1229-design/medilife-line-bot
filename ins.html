@@ -1,0 +1,1619 @@
+<!DOCTYPE html>
+<!-- build:20260531 -->
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>顧客管理</title>
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="既契約管理">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#5B5BD6">
+  <link rel="manifest" href="data:application/json,%7B%22name%22%3A%22%E6%97%A2%E5%A5%91%E7%B4%84%E7%AE%A1%E7%90%86%22%2C%22short_name%22%3A%22%E6%97%A2%E5%A5%91%E7%B4%84%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%23F6F6F8%22%2C%22theme_color%22%3A%22%235B5BD6%22%7D">
+  <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%235B5BD6'/><text y='68' x='50' text-anchor='middle' font-size='55'>👥</text></svg>">
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --accent: #5B5BD6;
+      --accent-light: #EEEEFF;
+      --bg: #F2F2F7;
+      --surface: #FFFFFF;
+      --border: #E4E4E8;
+      --text: #18181B;
+      --text-sub: #6B6B80;
+      --danger: #EF4444;
+      --warning: #F59E0B;
+      --success: #22C55E;
+      --nav-h: 56px;
+      --safe-b: env(safe-area-inset-bottom, 0px);
+      --safe-t: env(safe-area-inset-top, 0px);
+      --radius: 16px;
+    }
+    html, body { height: 100%; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
+      font-size: 16px;
+      line-height: 1.5;
+      overscroll-behavior: none;
+    }
+    #root { min-height: 100vh; max-width: 430px; margin: 0 auto; }
+
+    .header {
+      position: sticky; top: 0; z-index: 10;
+      background: rgba(242,242,247,0.92);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 16px 10px;
+      padding-top: calc(12px + var(--safe-t));
+    }
+    .header-row { display: flex; align-items: center; justify-content: space-between; }
+    .header h1 { font-size: 22px; font-weight: 800; letter-spacing: -0.5px; color: var(--accent); }
+    .header-sub { font-size: 12px; color: var(--text-sub); font-weight: 500; }
+
+    .content {
+      padding: 14px 14px;
+      padding-bottom: calc(var(--nav-h) + var(--safe-b) + 80px);
+    }
+
+    .bottom-nav {
+      position: fixed; bottom: 0; left: 0;
+      width: 100%;
+      background: rgba(255,255,255,0.95);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-top: 1px solid rgba(0,0,0,0.08);
+      display: flex;
+      padding-bottom: var(--safe-b);
+      z-index: 20;
+      height: calc(var(--nav-h) + var(--safe-b));
+    }
+    .nav-item {
+      flex: 1;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 6px 2px 4px;
+      cursor: pointer; border: none; background: none; gap: 3px;
+      -webkit-tap-highlight-color: transparent;
+      min-height: 44px;
+    }
+    .nav-item:active { opacity: 0.5; }
+    .nav-icon {
+      width: 32px; height: 32px;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 10px; font-size: 19px;
+      transition: background 0.15s;
+    }
+    .nav-item.active .nav-icon { background: var(--accent-light); }
+    .nav-label { font-size: 10px; font-weight: 600; color: var(--text-sub); white-space: nowrap; }
+    .nav-item.active .nav-label { color: var(--accent); }
+
+    .card {
+      background: var(--surface);
+      border-radius: var(--radius); padding: 16px; margin-bottom: 10px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.07);
+    }
+    .card-title {
+      font-size: 12px; font-weight: 700; color: var(--text-sub);
+      letter-spacing: 0.6px; margin-bottom: 12px;
+    }
+    .section-title { font-size: 22px; font-weight: 800; margin-bottom: 14px; letter-spacing: -0.4px; }
+
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+      padding: 12px 18px; border-radius: 12px;
+      font-size: 15px; font-weight: 600;
+      cursor: pointer; border: none;
+      transition: opacity 0.1s, transform 0.1s;
+      -webkit-tap-highlight-color: transparent;
+      min-height: 44px;
+    }
+    .btn:active { opacity: 0.7; transform: scale(0.97); }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-ghost { background: transparent; color: var(--text-sub); padding: 8px 10px; font-size: 17px; }
+    .btn-danger { color: var(--danger); background: #FEF2F2; }
+    .btn-sm { padding: 8px 14px; font-size: 14px; border-radius: 10px; min-height: 36px; }
+    .btn-full { width: 100%; }
+    .btn-outline { background: transparent; border: 1.5px solid var(--border); color: var(--text-sub); }
+
+    .form-group { margin-bottom: 16px; }
+    .form-label { font-size: 14px; font-weight: 600; color: var(--text-sub); margin-bottom: 7px; display: block; }
+    .form-input, .form-select, .form-textarea {
+      width: 100%; padding: 13px 14px;
+      border: 1.5px solid var(--border); border-radius: 12px;
+      font-size: 16px; font-family: inherit;
+      background: var(--bg); color: var(--text); outline: none;
+      transition: border-color 0.15s, background 0.15s;
+      -webkit-appearance: none;
+      min-height: 48px;
+    }
+    .form-input:focus, .form-select:focus, .form-textarea:focus {
+      border-color: var(--accent); background: var(--surface);
+    }
+    .form-textarea { resize: none; min-height: 90px; line-height: 1.6; }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+    .toggle-group { display: flex; gap: 8px; flex-wrap: wrap; }
+    .toggle-btn {
+      flex: 1; padding: 11px 6px; border-radius: 10px;
+      border: 1.5px solid var(--border); background: var(--bg);
+      font-size: 14px; font-weight: 600; cursor: pointer; text-align: center;
+      transition: all 0.15s; -webkit-tap-highlight-color: transparent;
+      min-width: 60px; min-height: 44px;
+    }
+    .toggle-btn.sel { border-color: var(--accent); background: var(--accent-light); color: var(--accent); }
+
+    .overlay {
+      position: fixed; top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: rgba(0,0,0,0.5);
+      z-index: 50; display: flex; align-items: flex-end; justify-content: center;
+    }
+    .drawer {
+      background: var(--surface); border-radius: 24px 24px 0 0;
+      padding: 20px 18px;
+      padding-bottom: calc(28px + var(--safe-b));
+      width: 100%; max-width: 430px;
+      max-height: 92vh; overflow-y: auto;
+    }
+    .drawer-handle {
+      width: 40px; height: 5px; background: #D1D1D6;
+      border-radius: 3px; margin: 0 auto 20px;
+    }
+    .drawer-title { font-size: 20px; font-weight: 800; margin-bottom: 18px; letter-spacing: -0.4px; }
+
+    .full-screen {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: var(--bg);
+      z-index: 40; overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .full-header {
+      position: sticky; top: 0; z-index: 10;
+      background: rgba(242,242,247,0.92);
+      backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 16px 10px;
+      padding-top: calc(12px + var(--safe-t));
+      display: flex; align-items: center; gap: 10px;
+      min-height: calc(52px + var(--safe-t));
+    }
+    .full-content { padding: 14px; padding-bottom: 50px; }
+
+    .fab {
+      position: fixed;
+      bottom: calc(var(--nav-h) + var(--safe-b) + 16px);
+      right: 16px;
+      width: 58px; height: 58px; border-radius: 29px;
+      background: var(--accent); color: #fff;
+      border: none; font-size: 28px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 4px 20px rgba(91,91,214,0.5);
+      z-index: 30; -webkit-tap-highlight-color: transparent;
+      transition: transform 0.15s;
+    }
+    .fab:active { transform: scale(0.88); }
+
+    .empty { text-align: center; padding: 40px 16px; color: var(--text-sub); font-size: 14px; }
+    .empty-icon { font-size: 40px; margin-bottom: 10px; }
+
+    .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+    .stat-card {
+      background: var(--surface); border-radius: var(--radius); padding: 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.07); text-align: center;
+    }
+    .stat-num { font-size: 34px; font-weight: 800; color: var(--accent); line-height: 1.1; }
+    .stat-label { font-size: 12px; color: var(--text-sub); font-weight: 600; margin-top: 4px; }
+
+    .customer-card {
+      background: var(--surface); border-radius: var(--radius); padding: 16px;
+      margin-bottom: 10px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.07);
+      cursor: pointer; -webkit-tap-highlight-color: transparent;
+      transition: transform 0.1s;
+    }
+    .customer-card:active { transform: scale(0.98); }
+    .customer-card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+    .customer-name { font-size: 17px; font-weight: 700; }
+    .customer-meta { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+    .customer-info-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .info-item { background: var(--bg); border-radius: 10px; padding: 9px 12px; }
+    .info-label { font-size: 11px; font-weight: 700; color: var(--text-sub); margin-bottom: 3px; }
+    .info-value { font-size: 14px; font-weight: 600; }
+
+    .badge {
+      display: inline-flex; align-items: center;
+      padding: 3px 9px; border-radius: 8px;
+      font-size: 12px; font-weight: 700;
+    }
+    .badge-line { background: #DCFCE7; color: #16A34A; }
+    .badge-noline { background: #F3F4F6; color: #9CA3AF; }
+    .status-badge {
+      display: inline-flex; align-items: center;
+      padding: 4px 11px; border-radius: 20px;
+      font-size: 12px; font-weight: 700;
+    }
+
+    .appt-item {
+      padding: 14px 0; border-bottom: 1px solid var(--border);
+      display: flex; align-items: flex-start; gap: 14px;
+    }
+    .appt-item:last-child { border-bottom: none; }
+    .appt-date-box {
+      background: var(--accent-light); border-radius: 12px;
+      padding: 8px 12px; text-align: center; flex-shrink: 0; min-width: 52px;
+    }
+    .appt-date-month { font-size: 11px; font-weight: 700; color: var(--accent); }
+    .appt-date-day { font-size: 26px; font-weight: 800; color: var(--accent); line-height: 1; }
+    .appt-date-box.urgent { background: #FEF2F2; }
+    .appt-date-box.urgent .appt-date-month,
+    .appt-date-box.urgent .appt-date-day { color: var(--danger); }
+    .appt-body { flex: 1; min-width: 0; }
+    .appt-name { font-size: 16px; font-weight: 700; margin-bottom: 3px; }
+    .appt-sub { font-size: 13px; color: var(--text-sub); }
+
+    .contract-block {
+      background: var(--bg); border-radius: 12px; padding: 14px;
+      margin-bottom: 10px; border: 1px solid var(--border);
+      position: relative;
+    }
+    .contract-block-title { font-size: 14px; font-weight: 700; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+
+    .search-wrap { position: relative; margin-bottom: 10px; }
+    .search-wrap span { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); font-size: 16px; }
+    .search-input {
+      width: 100%; padding: 12px 40px;
+      border: none; border-radius: 12px;
+      font-size: 16px; background: var(--surface); outline: none;
+      min-height: 46px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.07);
+    }
+    .search-clear {
+      position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+      background: #C7C7CC; border: none; font-size: 14px; color: #fff;
+      cursor: pointer; border-radius: 50%; width: 20px; height: 20px;
+      display: flex; align-items: center; justify-content: center;
+    }
+
+    .filter-chips { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 10px; }
+    .filter-chips::-webkit-scrollbar { display: none; }
+    .chip {
+      padding: 7px 14px; border-radius: 20px; border: 1.5px solid var(--border);
+      font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap;
+      background: var(--surface); color: var(--text-sub); flex-shrink: 0;
+      -webkit-tap-highlight-color: transparent; transition: all 0.15s;
+      min-height: 36px; display: flex; align-items: center;
+    }
+    .chip.active { border-color: var(--accent); background: var(--accent-light); color: var(--accent); }
+
+    .divider { height: 1px; background: var(--border); margin: 14px 0; }
+
+    .section-header {
+      font-size: 13px; font-weight: 700; color: var(--text-sub);
+      letter-spacing: 0.5px;
+      margin-bottom: 8px; margin-top: 6px; padding-left: 4px;
+    }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useCallback, useMemo } = React;
+
+// ── Utils ─────────────────────────────────────────────────────
+const uid = () => Math.random().toString(36).slice(2, 9);
+const todayStr = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+};
+const thisMonthStr = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+};
+const fmtDate = s => {
+  if (!s) return '';
+  const [y, m, d] = s.split('-');
+  return `${parseInt(m)}/${parseInt(d)}`;
+};
+const fmtDateFull = s => {
+  if (!s) return '';
+  const [y, m, d] = s.split('-');
+  return `${y}年${parseInt(m)}月${parseInt(d)}日`;
+};
+const daysUntil = s => {
+  if (!s) return null;
+  const today = new Date(); today.setHours(0,0,0,0);
+  const [y,m,d] = s.split('-').map(Number);
+  return Math.ceil((new Date(y,m-1,d) - today) / 86400000);
+};
+
+// ── localStorage hook ────────────────────────────────────────
+function useLS(key, init) {
+  const [val, setVal] = useState(() => {
+    try { const s = localStorage.getItem(key); return s ? JSON.parse(s) : init; }
+    catch { return init; }
+  });
+  const set = useCallback(v => {
+    setVal(prev => {
+      const next = typeof v === 'function' ? v(prev) : v;
+      try { localStorage.setItem(key, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, [key]);
+  return [val, set];
+}
+
+// ── Status config ─────────────────────────────────────────────
+const STATUSES = [
+  { key: '未接触', color: '#9CA3AF', bg: '#F3F4F6' },
+  { key: 'アポ済', color: '#2563EB', bg: '#EFF6FF' },
+  { key: '面談済', color: '#7C3AED', bg: '#F5F3FF' },
+  { key: 'フォロー中', color: '#059669', bg: '#ECFDF5' },
+];
+const statusInfo = key => STATUSES.find(s => s.key === key) || STATUSES[0];
+
+const CONTACT_METHODS = ['電話', '個人LINE', 'その他'];
+
+// ── StatusBadge ───────────────────────────────────────────────
+const StatusBadge = ({ status }) => {
+  const s = statusInfo(status);
+  return (
+    <span className="status-badge" style={{ background: s.bg, color: s.color }}>
+      {status || '未接触'}
+    </span>
+  );
+};
+
+// ── Empty state ───────────────────────────────────────────────
+const EmptyState = ({ icon, text }) => (
+  <div className="empty">
+    <div className="empty-icon">{icon}</div>
+    <div>{text}</div>
+  </div>
+);
+
+// ── Contract Form Block ───────────────────────────────────────
+const PAYMENT_CYCLES  = ['月払', '年払', '一時払'];
+const CURRENCIES      = ['円', 'ドル'];
+const INS_CATEGORIES  = ['生保', '損保'];
+
+// 金額入力ヘルパー
+function AmountInput({ prefix, prefixColor, value, onChange, placeholder }) {
+  return (
+    <div style={{ position: 'relative' }}>
+      <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', fontSize: 15, color: prefixColor || 'var(--text-sub)', fontWeight: 700, pointerEvents: 'none' }}>{prefix}</span>
+      <input className="form-input" type="number" placeholder={placeholder} style={{ paddingLeft: 28 }} value={value} onChange={onChange} />
+    </div>
+  );
+}
+
+function ContractBlock({ contract, onChange, onRemove, index }) {
+  const s  = k => e => onChange({ ...contract, [k]: e.target.value });
+  const sv = k => v => onChange({ ...contract, [k]: v });
+  const cat = contract.category || '生保';
+  const cycle = contract.paymentCycle || '月払';
+  const cur   = contract.currency || '円';
+
+  return (
+    <div className="contract-block" style={{ borderTop: `3px solid ${cat === '損保' ? '#F59E0B' : 'var(--accent)'}` }}>
+      <div className="contract-block-title">
+        <span>契約 {index + 1}</span>
+        <button onClick={onRemove} style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', fontSize: 20, lineHeight: 1 }}>×</button>
+      </div>
+
+      {/* 生保 / 損保 切り替え */}
+      <div className="form-group" style={{ marginBottom: 10 }}>
+        <label className="form-label">保険区分</label>
+        <div className="toggle-group">
+          {INS_CATEGORIES.map(c => (
+            <button key={c} type="button"
+              className={`toggle-btn ${cat === c ? 'sel' : ''}`}
+              style={cat === c ? { borderColor: c === '損保' ? '#F59E0B' : 'var(--accent)', background: c === '損保' ? '#FFFBEB' : 'var(--accent-light)', color: c === '損保' ? '#D97706' : 'var(--accent)' } : {}}
+              onClick={() => sv('category')(c)}>{c}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* 共通：種類・会社・証券番号 */}
+      <div className="form-row" style={{ marginBottom: 8 }}>
+        <div>
+          <label className="form-label">保険種類</label>
+          <input className="form-input" placeholder={cat === '損保' ? '例：自動車保険' : '例：生命保険'} value={contract.type || ''} onChange={s('type')} />
+        </div>
+        <div>
+          <label className="form-label">保険会社</label>
+          <input className="form-input" placeholder={cat === '損保' ? '例：〇〇損保' : '例：〇〇生命'} value={contract.company || ''} onChange={s('company')} />
+        </div>
+      </div>
+      <div className="form-group" style={{ marginBottom: 8 }}>
+        <label className="form-label">証券番号</label>
+        <input className="form-input" placeholder="例：AB-1234567" value={contract.policyNum || ''} onChange={s('policyNum')} />
+      </div>
+
+      {/* 被保険者（契約者と異なる場合） */}
+      <div style={{ background: 'var(--bg)', borderRadius: 10, padding: '10px 12px', marginBottom: 8 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-sub)', marginBottom: 8 }}>被保険者（契約者と異なる場合）</div>
+        <div className="form-row">
+          <div>
+            <label className="form-label">被保険者名</label>
+            <input className="form-input" placeholder="例：山田 花子" value={contract.insuredName || ''} onChange={s('insuredName')} />
+          </div>
+          <div>
+            <label className="form-label">被保険者 生年月日</label>
+            <input className="form-input" type="date" value={contract.insuredBirthdate || ''} onChange={s('insuredBirthdate')} />
+          </div>
+        </div>
+      </div>
+
+      {cat === '損保' ? (
+        // ── 損保フィールド ──────────────────────────────
+        <>
+          <div className="form-group" style={{ marginBottom: 8 }}>
+            <label className="form-label">保険対象</label>
+            <input className="form-input" placeholder="例：車両（品川500 あ 1234）・自宅（大阪市北区〇〇）" value={contract.insuredObject || ''} onChange={s('insuredObject')} />
+          </div>
+          <div className="form-row" style={{ marginBottom: 8 }}>
+            <div>
+              <label className="form-label">契約日</label>
+              <input className="form-input" type="date" value={contract.date || ''} onChange={s('date')} />
+            </div>
+            <div>
+              <label className="form-label">満期日・更新日 🔔</label>
+              <input className="form-input" type="date" value={contract.expiryDate || ''} onChange={s('expiryDate')} />
+            </div>
+          </div>
+          <div className="form-group" style={{ marginBottom: 8 }}>
+            <label className="form-label">補償内容</label>
+            <textarea className="form-textarea" style={{ minHeight: 70 }} placeholder="例：対人・対物無制限、車両保険あり（一般担保）" value={contract.coverage || ''} onChange={s('coverage')} />
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">払込方法</label>
+            <div className="toggle-group" style={{ marginBottom: 8 }}>
+              {PAYMENT_CYCLES.map(p => (
+                <button key={p} type="button" className={`toggle-btn ${cycle === p ? 'sel' : ''}`} onClick={() => sv('paymentCycle')(p)}>{p}</button>
+              ))}
+            </div>
+            <AmountInput prefix="¥" value={contract.premium || ''} onChange={s('premium')} placeholder={cycle === '年払' ? '例：80000（年額）' : '例：7000（月額）'} />
+          </div>
+        </>
+      ) : (
+        // ── 生保フィールド ──────────────────────────────
+        <>
+          {/* 保険期間 */}
+          <div className="form-row" style={{ marginBottom: 8 }}>
+            <div>
+              <label className="form-label">保険期間</label>
+              <input className="form-input" placeholder="例：60歳まで・20年定期" value={contract.termNote || ''} onChange={s('termNote')} />
+            </div>
+            <div>
+              <label className="form-label">保険期間 終了日</label>
+              <input className="form-input" type="date" value={contract.termEnd || ''} onChange={s('termEnd')} />
+            </div>
+          </div>
+
+          <div className="form-group" style={{ marginBottom: 8 }}>
+            <label className="form-label">払込方法</label>
+            <div className="toggle-group">
+              {PAYMENT_CYCLES.map(p => (
+                <button key={p} type="button" className={`toggle-btn ${cycle === p ? 'sel' : ''}`} onClick={() => sv('paymentCycle')(p)}>{p}</button>
+              ))}
+            </div>
+          </div>
+          <div className="form-group" style={{ marginBottom: 8 }}>
+            <label className="form-label">通貨</label>
+            <div className="toggle-group">
+              {CURRENCIES.map(c => (
+                <button key={c} type="button" className={`toggle-btn ${cur === c ? 'sel' : ''}`} onClick={() => sv('currency')(c)}>{c}</button>
+              ))}
+            </div>
+          </div>
+          {cur === 'ドル' ? (
+            <>
+              <div className="form-row" style={{ marginBottom: 8 }}>
+                <div>
+                  <label className="form-label">{cycle === '一時払' ? '一時払込額（$）' : cycle === '年払' ? '年間保険料（$）' : '月額保険料（$）'}</label>
+                  <AmountInput prefix="$" prefixColor="#059669" value={contract.premium || ''} onChange={s('premium')} placeholder="例：50000" />
+                </div>
+                <div>
+                  <label className="form-label">{cycle === '一時払' ? '円払込総額' : cycle === '年払' ? '円換算（年額）' : '円換算（月額）'}</label>
+                  <AmountInput prefix="¥" value={contract.premiumJpy || ''} onChange={s('premiumJpy')} placeholder="例：7500000" />
+                </div>
+              </div>
+              <div className="form-row">
+                <div>
+                  <label className="form-label">適用レート（1$=）</label>
+                  <AmountInput prefix="¥" value={contract.exchangeRate || ''} onChange={s('exchangeRate')} placeholder="例：150" />
+                </div>
+                <div>
+                  <label className="form-label">契約日</label>
+                  <input className="form-input" type="date" value={contract.date || ''} onChange={s('date')} />
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="form-row">
+              <div>
+                <label className="form-label">{cycle === '一時払' ? '一時払込額' : cycle === '年払' ? '年間保険料' : '月額保険料'}</label>
+                <AmountInput prefix="¥" value={contract.premium || ''} onChange={s('premium')} placeholder="例：15000" />
+              </div>
+              <div>
+                <label className="form-label">契約日</label>
+                <input className="form-input" type="date" value={contract.date || ''} onChange={s('date')} />
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── Customer Form Drawer / Screen ─────────────────────────────
+function CustomerForm({ editing, onSave, onClose, customers }) {
+  const blank = {
+    name: '', age: '', birthdate: '', phone: '', email: '',
+    postalCode: '', address: '', occupation: '', workplace: '',
+    status: '未接触',
+    contactMethod: '電話',
+    lastContact: '',
+    nextAppt: '',
+    memo: '',
+    lineRegistered: false,
+    contracts: [],
+    referredBy: '',
+    referredTo: '',
+  };
+  const [form, setForm] = useState({ ...blank, ...(editing || {}) });
+  const s = k => v => setForm(f => ({ ...f, [k]: v }));
+  const si = k => e => s(k)(e.target.value);
+
+  const addContract = () => s('contracts')([...form.contracts, { id: uid(), type: '', company: '', premium: '', date: '' }]);
+  const updateContract = (id, data) => s('contracts')(form.contracts.map(c => c.id === id ? data : c));
+  const removeContract = id => s('contracts')(form.contracts.filter(c => c.id !== id));
+
+  const otherCustomers = customers.filter(c => c.id !== form.id);
+
+  const save = () => {
+    if (!form.name.trim()) return;
+    onSave({ ...form, id: form.id || uid() });
+    onClose();
+  };
+
+  return (
+    <div className="full-screen">
+      <div className="full-header">
+        <button onClick={onClose} style={{
+          background: 'none', border: 'none', cursor: 'pointer',
+          fontSize: 15, color: 'var(--text-sub)', fontWeight: 600, padding: '4px 8px',
+        }}>← 戻る</button>
+        <div style={{ flex: 1, fontSize: 18, fontWeight: 800, letterSpacing: -0.4 }}>
+          {editing ? '顧客編集' : '新規顧客登録'}
+        </div>
+        <button className="btn btn-primary btn-sm" onClick={save}>保存</button>
+      </div>
+
+      <div className="full-content">
+        {/* 基本情報 */}
+        <div className="section-header">基本情報</div>
+        <div className="card">
+          <div className="form-group">
+            <label className="form-label">氏名 <span style={{ color: 'var(--danger)' }}>*</span></label>
+            <input className="form-input" placeholder="例：山田 太郎" value={form.name} onChange={si('name')} autoFocus />
+          </div>
+          <div className="form-row">
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">年齢</label>
+              <input className="form-input" type="number" placeholder="例：42" value={form.age} onChange={si('age')} />
+            </div>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">電話番号</label>
+              <input className="form-input" type="tel" placeholder="090-0000-0000" value={form.phone} onChange={si('phone')} />
+            </div>
+          </div>
+          <div className="form-group" style={{ marginTop: 14, marginBottom: 0 }}>
+            <label className="form-label">メールアドレス</label>
+            <input className="form-input" type="email" placeholder="example@email.com" value={form.email} onChange={si('email')} />
+          </div>
+          <div className="form-group" style={{ marginTop: 14, marginBottom: 0 }}>
+            <label className="form-label">生年月日</label>
+            <input className="form-input" type="date" value={form.birthdate} onChange={si('birthdate')} />
+          </div>
+          <div className="form-row" style={{ marginTop: 14 }}>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">郵便番号</label>
+              <input className="form-input" type="tel" placeholder="例：530-0001" value={form.postalCode} onChange={si('postalCode')} />
+            </div>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label" style={{ visibility: 'hidden' }}>_</label>
+              <button type="button" className="btn btn-outline btn-full" style={{ fontSize: 12, padding: '11px 8px' }}
+                onClick={async () => {
+                  const code = form.postalCode.replace(/[-ー−]/g, '');
+                  if (code.length !== 7) return;
+                  try {
+                    const res = await fetch(`https://zipcloud.ibsnet.co.jp/api/search?zipcode=${code}`);
+                    const json = await res.json();
+                    if (json.results && json.results[0]) {
+                      const r = json.results[0];
+                      const addr = r.address1 + r.address2 + r.address3;
+                      setForm(f => ({ ...f, address: addr }));
+                    }
+                  } catch {}
+                }}>
+                住所を自動入力
+              </button>
+            </div>
+          </div>
+          <div className="form-group" style={{ marginTop: 14, marginBottom: 0 }}>
+            <label className="form-label">住所</label>
+            <input className="form-input" placeholder="例：大阪府大阪市北区梅田1丁目" value={form.address} onChange={si('address')} />
+          </div>
+          <div className="form-row" style={{ marginTop: 14 }}>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">職業</label>
+              <input className="form-input" placeholder="例：会社員" value={form.occupation} onChange={si('occupation')} />
+            </div>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">勤務先</label>
+              <input className="form-input" placeholder="例：株式会社○○" value={form.workplace} onChange={si('workplace')} />
+            </div>
+          </div>
+        </div>
+
+        {/* LINE公式登録 */}
+        <div className="card">
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>LINE公式アカウント登録</div>
+              <div style={{ fontSize: 12, color: 'var(--text-sub)', marginTop: 2 }}>登録済みかどうかをON/OFFで管理</div>
+            </div>
+            <button
+              onClick={() => s('lineRegistered')(!form.lineRegistered)}
+              style={{
+                width: 52, height: 30, borderRadius: 15, border: 'none', cursor: 'pointer',
+                background: form.lineRegistered ? 'var(--success)' : '#D1D5DB',
+                transition: 'background 0.2s', position: 'relative', flexShrink: 0,
+              }}
+            >
+              <div style={{
+                position: 'absolute', top: 3, left: form.lineRegistered ? 24 : 3,
+                width: 24, height: 24, borderRadius: '50%', background: '#fff',
+                boxShadow: '0 1px 4px rgba(0,0,0,0.15)', transition: 'left 0.2s',
+              }} />
+            </button>
+          </div>
+        </div>
+
+        {/* 接触管理 */}
+        <div className="section-header">接触管理</div>
+        <div className="card">
+          <div className="form-group">
+            <label className="form-label">ステータス</label>
+            <div className="toggle-group">
+              {STATUSES.map(st => (
+                <button key={st.key} className={`toggle-btn ${form.status === st.key ? 'sel' : ''}`}
+                  style={form.status === st.key ? { borderColor: st.color, background: st.bg, color: st.color } : {}}
+                  onClick={() => s('status')(st.key)}>{st.key}</button>
+              ))}
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">接触方法</label>
+            <div className="toggle-group">
+              {CONTACT_METHODS.map(m => (
+                <button key={m} className={`toggle-btn ${form.contactMethod === m ? 'sel' : ''}`}
+                  onClick={() => s('contactMethod')(m)}>{m}</button>
+              ))}
+            </div>
+          </div>
+          <div className="form-row">
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">最終接触日</label>
+              <input className="form-input" type="date" value={form.lastContact} onChange={si('lastContact')} />
+            </div>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">次回アポイント</label>
+              <input className="form-input" type="date" value={form.nextAppt} onChange={si('nextAppt')} />
+            </div>
+          </div>
+          <div className="form-group" style={{ marginTop: 14, marginBottom: 0 }}>
+            <label className="form-label">面談メモ</label>
+            <textarea className="form-textarea" placeholder="面談内容・気づき・次回アクションなど..."
+              value={form.memo} onChange={si('memo')} />
+          </div>
+        </div>
+
+        {/* 契約情報 */}
+        <div className="section-header">契約情報</div>
+        {form.contracts.map((c, i) => (
+          <ContractBlock key={c.id} contract={c} index={i}
+            onChange={data => updateContract(c.id, data)}
+            onRemove={() => removeContract(c.id)} />
+        ))}
+        <button className="btn btn-outline btn-full" style={{ marginBottom: 10 }} onClick={addContract}>
+          ＋ 契約を追加
+        </button>
+
+        {/* 紹介管理 */}
+        <div className="section-header">紹介管理</div>
+        <div className="card">
+          <div className="form-group">
+            <label className="form-label">紹介元（誰から紹介されたか）</label>
+            <select className="form-select" value={form.referredBy} onChange={si('referredBy')}>
+              <option value="">— なし —</option>
+              {otherCustomers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">紹介先（この顧客が紹介した人）</label>
+            <select className="form-select" value={form.referredTo} onChange={si('referredTo')}>
+              <option value="">— なし —</option>
+              {otherCustomers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <button className="btn btn-primary btn-full" style={{ marginTop: 8 }} onClick={save}>保存する</button>
+      </div>
+    </div>
+  );
+}
+
+// ── Customer Detail Screen ────────────────────────────────────
+function CustomerDetail({ customer, customers, onEdit, onDelete, onClose }) {
+  const [confirmDel, setConfirmDel] = useState(false);
+  const c = customer;
+  const referredByCustomer = customers.find(x => x.id === c.referredBy);
+  const referredToCustomer = customers.find(x => x.id === c.referredTo);
+  const apptDays = daysUntil(c.nextAppt);
+
+  return (
+    <div className="full-screen">
+      <div className="full-header">
+        <button onClick={onClose} style={{
+          background: 'none', border: 'none', cursor: 'pointer',
+          fontSize: 15, color: 'var(--text-sub)', fontWeight: 600, padding: '4px 8px',
+        }}>← 戻る</button>
+        <div style={{ flex: 1 }} />
+        <button className="btn btn-primary btn-sm" onClick={onEdit}>編集</button>
+        <button className="btn btn-sm btn-danger" style={{ marginLeft: 6 }} onClick={() => setConfirmDel(true)}>削除</button>
+      </div>
+
+      <div className="full-content">
+        {/* 顧客ヘッダー */}
+        <div className="card" style={{ marginBottom: 10 }}>
+          {/* 名前 + 年齢 横並び */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+            <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: -0.5 }}>{c.name}</div>
+            {c.age && (
+              <div style={{ textAlign: 'center', background: 'var(--accent-light)', borderRadius: 12, padding: '6px 14px', flexShrink: 0, marginLeft: 10 }}>
+                <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--accent)', lineHeight: 1 }}>{c.age}</div>
+                <div style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 700 }}>歳</div>
+              </div>
+            )}
+          </div>
+          {/* バッジ行 – 横並び固定 */}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'nowrap' }}>
+            <StatusBadge status={c.status} />
+            <span className={`badge ${c.lineRegistered ? 'badge-line' : 'badge-noline'}`} style={{ whiteSpace: 'nowrap' }}>
+              {c.lineRegistered ? '✓ LINE済' : 'LINE未登録'}
+            </span>
+          </div>
+          {/* 連絡先・属性情報 */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {c.phone && (
+              <a href={`tel:${c.phone}`} style={{ display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none', color: 'var(--text)', background: 'var(--bg)', borderRadius: 10, padding: '10px 12px' }}>
+                <span style={{ fontSize: 17 }}>📞</span>
+                <span style={{ fontSize: 16, fontWeight: 700 }}>{c.phone}</span>
+              </a>
+            )}
+            {c.email && (
+              <a href={`mailto:${c.email}`} style={{ display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none', color: 'var(--text)', background: 'var(--bg)', borderRadius: 10, padding: '10px 12px' }}>
+                <span style={{ fontSize: 17 }}>✉️</span>
+                <span style={{ fontSize: 15, fontWeight: 600 }}>{c.email}</span>
+              </a>
+            )}
+            {c.birthdate && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg)', borderRadius: 10, padding: '10px 12px' }}>
+                <span style={{ fontSize: 17 }}>🎂</span>
+                <span style={{ fontSize: 15, fontWeight: 600, whiteSpace: 'nowrap' }}>{fmtDateFull(c.birthdate)}</span>
+              </div>
+            )}
+            {(c.postalCode || c.address) && (
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, background: 'var(--bg)', borderRadius: 10, padding: '10px 12px' }}>
+                <span style={{ fontSize: 17, flexShrink: 0 }}>📍</span>
+                <span style={{ fontSize: 15, color: 'var(--text)', lineHeight: 1.5 }}>
+                  {c.postalCode && <span style={{ color: 'var(--text-sub)', fontSize: 13 }}>〒{c.postalCode}　</span>}
+                  {c.address}
+                </span>
+              </div>
+            )}
+            {(c.occupation || c.workplace) && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg)', borderRadius: 10, padding: '10px 12px' }}>
+                <span style={{ fontSize: 17 }}>💼</span>
+                <span style={{ fontSize: 15, fontWeight: 600 }}>
+                  {[c.occupation, c.workplace].filter(Boolean).join('　')}
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* 接触情報 */}
+        <div className="section-header">接触管理</div>
+        <div className="card">
+          <div className="customer-info-row">
+            <div className="info-item">
+              <div className="info-label">接触方法</div>
+              <div className="info-value">{c.contactMethod || '—'}</div>
+            </div>
+            <div className="info-item">
+              <div className="info-label">最終接触日</div>
+              <div className="info-value">{c.lastContact ? fmtDate(c.lastContact) : '—'}</div>
+            </div>
+            <div className="info-item" style={{ gridColumn: '1 / -1' }}>
+              <div className="info-label">次回アポイント</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div className="info-value" style={{ color: apptDays !== null && apptDays <= 3 ? 'var(--danger)' : apptDays !== null && apptDays <= 7 ? 'var(--warning)' : 'var(--text)' }}>
+                  {c.nextAppt ? fmtDateFull(c.nextAppt) : '—'}
+                </div>
+                {apptDays !== null && c.nextAppt && (
+                  <span style={{
+                    fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 6,
+                    background: apptDays <= 0 ? '#FEF2F2' : apptDays <= 3 ? '#FFF7ED' : 'var(--accent-light)',
+                    color: apptDays <= 0 ? 'var(--danger)' : apptDays <= 3 ? 'var(--warning)' : 'var(--accent)',
+                  }}>
+                    {apptDays <= 0 ? '期限切れ' : `あと${apptDays}日`}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+          {c.memo && (
+            <>
+              <div className="divider" />
+              <div className="info-label" style={{ marginBottom: 6 }}>面談メモ</div>
+              <div style={{ fontSize: 14, lineHeight: 1.6, whiteSpace: 'pre-wrap', color: 'var(--text)' }}>{c.memo}</div>
+            </>
+          )}
+        </div>
+
+        {/* 契約情報 */}
+        {c.contracts && c.contracts.length > 0 && (
+          <>
+            <div className="section-header">契約情報 ({c.contracts.length}件)</div>
+            {c.contracts.map((ct, i) => {
+              const isSonpo = ct.category === '損保';
+              const expiryDays = daysUntil(ct.expiryDate);
+              return (
+              <div className="card" key={ct.id} style={{ marginBottom: 8, borderTop: `3px solid ${isSonpo ? '#F59E0B' : 'var(--accent)'}` }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: isSonpo ? '#D97706' : 'var(--accent)' }}>契約 {i + 1}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 6, background: isSonpo ? '#FFFBEB' : 'var(--accent-light)', color: isSonpo ? '#D97706' : 'var(--accent)' }}>
+                    {isSonpo ? '損保' : '生保'}
+                  </span>
+                </div>
+                <div className="customer-info-row">
+                  <div className="info-item"><div className="info-label">保険種類</div><div className="info-value">{ct.type || '—'}</div></div>
+                  <div className="info-item"><div className="info-label">保険会社</div><div className="info-value">{ct.company || '—'}</div></div>
+                  {ct.policyNum && <div className="info-item" style={{gridColumn:'1/-1'}}><div className="info-label">証券番号</div><div className="info-value" style={{fontSize:15,letterSpacing:0.5}}>{ct.policyNum}</div></div>}
+
+                  {/* 被保険者 */}
+                  {ct.insuredName && <div className="info-item"><div className="info-label">被保険者</div><div className="info-value">{ct.insuredName}</div></div>}
+                  {ct.insuredBirthdate && <div className="info-item"><div className="info-label">被保険者 生年月日</div><div className="info-value">{fmtDateFull(ct.insuredBirthdate)}</div></div>}
+
+                  {/* 保険期間（生保） */}
+                  {!isSonpo && (ct.termNote || ct.termEnd) && (
+                    <div className="info-item" style={{gridColumn:'1/-1'}}>
+                      <div className="info-label">保険期間</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        {ct.termNote && <span className="info-value">{ct.termNote}</span>}
+                        {ct.termEnd && (
+                          <>
+                            {ct.termNote && <span style={{color:'var(--text-sub)'}}>／</span>}
+                            <span className="info-value">{fmtDateFull(ct.termEnd)} まで</span>
+                            {daysUntil(ct.termEnd) !== null && (
+                              <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 6,
+                                background: daysUntil(ct.termEnd) <= 0 ? '#FEF2F2' : daysUntil(ct.termEnd) <= 365 ? '#FFF7ED' : 'var(--bg)',
+                                color: daysUntil(ct.termEnd) <= 0 ? 'var(--danger)' : daysUntil(ct.termEnd) <= 365 ? 'var(--warning)' : 'var(--text-sub)' }}>
+                                {daysUntil(ct.termEnd) <= 0 ? '期間終了' : `あと${Math.ceil(daysUntil(ct.termEnd)/365)}年`}
+                              </span>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 損保専用フィールド */}
+                  {isSonpo && ct.insuredObject && (
+                    <div className="info-item" style={{gridColumn:'1/-1'}}><div className="info-label">保険対象</div><div className="info-value">{ct.insuredObject}</div></div>
+                  )}
+                  {isSonpo && ct.expiryDate && (
+                    <div className="info-item" style={{gridColumn:'1/-1'}}>
+                      <div className="info-label">満期日・更新日</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <div className="info-value" style={{ color: expiryDays !== null && expiryDays <= 30 ? 'var(--danger)' : expiryDays !== null && expiryDays <= 60 ? 'var(--warning)' : 'var(--text)' }}>
+                          {fmtDateFull(ct.expiryDate)}
+                        </div>
+                        {expiryDays !== null && (
+                          <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 6,
+                            background: expiryDays <= 0 ? '#FEF2F2' : expiryDays <= 30 ? '#FFF7ED' : '#F3F4F6',
+                            color: expiryDays <= 0 ? 'var(--danger)' : expiryDays <= 30 ? 'var(--warning)' : 'var(--text-sub)' }}>
+                            {expiryDays <= 0 ? '満期切れ' : `あと${expiryDays}日`}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  {isSonpo && ct.coverage && (
+                    <div className="info-item" style={{gridColumn:'1/-1'}}><div className="info-label">補償内容</div><div style={{fontSize:13,lineHeight:1.5,whiteSpace:'pre-wrap'}}>{ct.coverage}</div></div>
+                  )}
+
+                  {/* 保険料 */}
+                  {ct.premium && (ct.currency || '円') === 'ドル' ? (
+                    <div className="info-item" style={{ gridColumn: '1/-1' }}>
+                      <div className="info-label" style={{ marginBottom: 6 }}>保険料（{ct.paymentCycle || '月払'}・ドル建）</div>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                        <span style={{ fontSize: 17, fontWeight: 800, color: '#059669' }}>${Number(ct.premium).toLocaleString()}</span>
+                        {ct.premiumJpy && (<><span style={{ color: 'var(--text-sub)', fontSize: 14 }}>＝</span><span style={{ fontSize: 17, fontWeight: 800 }}>¥{Number(ct.premiumJpy).toLocaleString()}</span></>)}
+                        {ct.exchangeRate && <span style={{ fontSize: 12, color: 'var(--text-sub)', background: 'var(--bg)', borderRadius: 6, padding: '2px 8px' }}>1$=¥{ct.exchangeRate}</span>}
+                      </div>
+                    </div>
+                  ) : ct.premium ? (
+                    <div className="info-item">
+                      <div className="info-label">{ct.paymentCycle === '一時払' ? '一時払込額' : ct.paymentCycle === '年払' ? '年間保険料' : '月額保険料'}</div>
+                      <div className="info-value">¥{Number(ct.premium).toLocaleString()}
+                        {ct.paymentCycle && ct.paymentCycle !== '月払' && <span style={{ fontSize: 11, color: 'var(--accent)', background: 'var(--accent-light)', borderRadius: 5, padding: '1px 6px', marginLeft: 5 }}>{ct.paymentCycle}</span>}
+                      </div>
+                    </div>
+                  ) : null}
+                  {ct.date && <div className="info-item"><div className="info-label">契約日</div><div className="info-value">{fmtDateFull(ct.date)}</div></div>}
+                </div>
+              </div>
+              );
+            })}
+          </>
+        )}
+
+        {/* 紹介管理 */}
+        {(referredByCustomer || referredToCustomer) && (
+          <>
+            <div className="section-header">紹介ネットワーク</div>
+            <div className="card">
+              {referredByCustomer && (
+                <div style={{ marginBottom: referredToCustomer ? 10 : 0 }}>
+                  <div className="info-label">紹介元</div>
+                  <div style={{ fontSize: 15, fontWeight: 700 }}>👤 {referredByCustomer.name}</div>
+                </div>
+              )}
+              {referredToCustomer && (
+                <div>
+                  <div className="info-label">紹介先</div>
+                  <div style={{ fontSize: 15, fontWeight: 700 }}>👤 {referredToCustomer.name}</div>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* 削除確認ダイアログ */}
+      {confirmDel && (
+        <div className="overlay" style={{ zIndex: 60 }} onClick={() => setConfirmDel(false)}>
+          <div className="drawer" onClick={e => e.stopPropagation()}>
+            <div className="drawer-handle" />
+            <div className="drawer-title" style={{ color: 'var(--danger)' }}>顧客を削除しますか？</div>
+            <div style={{ fontSize: 14, color: 'var(--text-sub)', marginBottom: 20 }}>
+              「{c.name}」のデータをすべて削除します。この操作は元に戻せません。
+            </div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button className="btn btn-outline btn-full" onClick={() => setConfirmDel(false)}>キャンセル</button>
+              <button className="btn btn-danger btn-full" onClick={() => { onDelete(c.id); onClose(); }}>削除する</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Tab: Dashboard ────────────────────────────────────────────
+function DashboardTab({ customers, onNavigate }) {
+  const total = customers.length;
+  const lineCount = customers.filter(c => c.lineRegistered).length;
+  const thisMonth = thisMonthStr();
+  // 今月の月番号（整数で比較してゼロ埋め問題を回避）
+  const nowM = new Date().getMonth() + 1; // 1〜12の整数
+  const apptThisMonth = customers.filter(c => c.nextAppt && c.nextAppt.startsWith(thisMonth)).length;
+  const noContact = customers.filter(c => !c.status || c.status === '未接触').length;
+
+  const today = todayStr();
+  const upcoming = customers
+    .filter(c => c.nextAppt && c.nextAppt >= today)
+    .sort((a, b) => a.nextAppt.localeCompare(b.nextAppt))
+    .slice(0, 5);
+
+  // 今月誕生日（整数比較）
+  const birthdayThisMonth = customers.filter(c => {
+    if (!c.birthdate) return false;
+    return parseInt(c.birthdate.split('-')[1], 10) === nowM;
+  }).sort((a, b) => parseInt(a.birthdate.split('-')[2],10) - parseInt(b.birthdate.split('-')[2],10));
+
+  // 月計算ヘルパー（1〜12の範囲で循環）
+  const addMonth = (m, n) => ((m - 1 + n) % 12) + 1;
+  const nextM1 = addMonth(nowM, 1); // 来月
+  const nextM2 = addMonth(nowM, 2); // 再来月
+
+  // 生保：今月・来月・再来月が契約月（2ヶ月前からアラート）
+  const contractThisMonth = customers.filter(c =>
+    (c.contracts || []).some(ct => {
+      if (ct.category === '損保' || !ct.date) return false;
+      const m = parseInt(ct.date.split('-')[1], 10);
+      return m === nowM || m === nextM1 || m === nextM2;
+    })
+  );
+
+  // 損保：今月・来月満期
+  const nextM = nextM1;
+  const expiryAlert = customers.filter(c =>
+    (c.contracts || []).some(ct => {
+      if (ct.category !== '損保' || !ct.expiryDate) return false;
+      const m = parseInt(ct.expiryDate.split('-')[1], 10);
+      return m === nowM || m === nextM;
+    })
+  );
+
+  const statusCounts = STATUSES.map(s => ({
+    ...s,
+    count: customers.filter(c => (c.status || '未接触') === s.key).length,
+  }));
+
+  return (
+    <div>
+      <div className="stat-grid">
+        <div className="stat-card">
+          <div className="stat-num">{total}</div>
+          <div className="stat-label">顧客総数</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-num" style={{ color: '#16A34A' }}>{lineCount}</div>
+          <div className="stat-label">LINE登録済み</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-num" style={{ color: '#2563EB' }}>{apptThisMonth}</div>
+          <div className="stat-label">今月のアポイント</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-num" style={{ color: 'var(--warning)' }}>{noContact}</div>
+          <div className="stat-label">未接触顧客</div>
+        </div>
+      </div>
+
+      {/* 今月のアラート */}
+      {(birthdayThisMonth.length > 0 || contractThisMonth.length > 0 || expiryAlert.length > 0) && (
+        <div className="card" style={{ borderLeft: '4px solid var(--warning)', marginBottom: 10 }}>
+          <div className="card-title" style={{ color: 'var(--warning)' }}>🔔 今月のアラート</div>
+
+          {birthdayThisMonth.length > 0 && (
+            <div style={{ marginBottom: contractThisMonth.length > 0 ? 14 : 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>🎂</span>
+                <span>今月誕生日</span>
+                <span style={{ background: '#FEF3C7', color: '#D97706', borderRadius: 10, padding: '1px 8px', fontSize: 12 }}>
+                  {birthdayThisMonth.length}人
+                </span>
+              </div>
+              {birthdayThisMonth.map(c => (
+                <div key={c.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: '#FFFBEB', borderRadius: 10, marginBottom: 6 }}
+                  onClick={() => onNavigate('customers', c)}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 20 }}>🎂</span>
+                    <div>
+                      <div style={{ fontSize: 15, fontWeight: 700 }}>{c.name}</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-sub)' }}>
+                        {parseInt(c.birthdate.slice(5,7))}月{parseInt(c.birthdate.slice(8,10))}日
+                        {c.age && ` · ${c.age}歳`}
+                      </div>
+                    </div>
+                  </div>
+                  <span style={{ fontSize: 12, color: 'var(--text-sub)' }}>›</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {expiryAlert.length > 0 && (
+            <div style={{ marginBottom: contractThisMonth.length > 0 ? 14 : 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>🚗</span>
+                <span>損保 満期・更新（今月〜来月）</span>
+                <span style={{ background: '#FEF3C7', color: '#D97706', borderRadius: 10, padding: '1px 8px', fontSize: 12 }}>
+                  {expiryAlert.length}人
+                </span>
+              </div>
+              {expiryAlert.map(c => {
+                const expContracts = (c.contracts || []).filter(ct =>
+                  ct.category === '損保' && ct.expiryDate &&
+                  (parseInt(ct.expiryDate.split('-')[1], 10) === nowM || parseInt(ct.expiryDate.split('-')[1], 10) === nextM)
+                );
+                return (
+                  <div key={c.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: '#FFFBEB', borderRadius: 10, marginBottom: 6 }}
+                    onClick={() => onNavigate('customers', c)}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 20 }}>🚗</span>
+                      <div>
+                        <div style={{ fontSize: 15, fontWeight: 700 }}>{c.name}</div>
+                        <div style={{ fontSize: 12, color: 'var(--text-sub)' }}>
+                          {expContracts.map(ct => `${ct.type || '損保'} 満期：${fmtDateFull(ct.expiryDate)}`).join(' / ')}
+                        </div>
+                      </div>
+                    </div>
+                    <span style={{ fontSize: 12, color: 'var(--text-sub)' }}>›</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {contractThisMonth.length > 0 && (
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>📋</span>
+                <span>今月契約月（生保）</span>
+                <span style={{ background: '#EDE9FE', color: '#7C3AED', borderRadius: 10, padding: '1px 8px', fontSize: 12 }}>
+                  {contractThisMonth.length}人
+                </span>
+              </div>
+              {contractThisMonth.map(c => {
+                const monthContracts = (c.contracts || []).filter(ct => {
+                  if (ct.category === '損保' || !ct.date) return false;
+                  const m = parseInt(ct.date.split('-')[1], 10);
+                  return m === nowM || m === nextM1 || m === nextM2;
+                });
+                const getLabel = m => m === nowM ? '今月' : m === nextM1 ? '来月' : '再来月';
+                return (
+                  <div key={c.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: '#F5F3FF', borderRadius: 10, marginBottom: 6 }}
+                    onClick={() => onNavigate('customers', c)}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 20 }}>📋</span>
+                      <div>
+                        <div style={{ fontSize: 15, fontWeight: 700 }}>{c.name}</div>
+                        <div style={{ fontSize: 12, color: 'var(--text-sub)' }}>
+                          {monthContracts.map(ct => {
+                            const m = parseInt(ct.date.split('-')[1], 10);
+                            return `${getLabel(m)}契約月：${ct.type || '契約'}`;
+                          }).join(' / ')}
+                        </div>
+                      </div>
+                    </div>
+                    <span style={{ fontSize: 12, color: 'var(--text-sub)' }}>›</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ステータス内訳 */}
+      <div className="card">
+        <div className="card-title">ステータス内訳</div>
+        {statusCounts.map(s => (
+          <div key={s.key} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+            <span className="status-badge" style={{ background: s.bg, color: s.color, minWidth: 72, justifyContent: 'center' }}>
+              {s.key}
+            </span>
+            <div style={{ flex: 1, background: '#F0F0F5', borderRadius: 4, height: 8, overflow: 'hidden' }}>
+              <div style={{
+                height: '100%', borderRadius: 4,
+                width: total > 0 ? `${(s.count / total * 100)}%` : '0%',
+                background: s.color, transition: 'width 0.4s',
+              }} />
+            </div>
+            <span style={{ fontSize: 14, fontWeight: 700, minWidth: 24, textAlign: 'right' }}>{s.count}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* 直近アポイント */}
+      <div className="card">
+        <div className="card-title">直近のアポイント</div>
+        {upcoming.length === 0
+          ? <EmptyState icon="📅" text="予定されているアポイントはありません" />
+          : upcoming.map(c => {
+            const days = daysUntil(c.nextAppt);
+            const urgent = days !== null && days <= 3;
+            const [, m, d] = c.nextAppt.split('-');
+            return (
+              <div key={c.id} className="appt-item">
+                <div className={`appt-date-box ${urgent ? 'urgent' : ''}`}>
+                  <div className="appt-date-month">{parseInt(m)}月</div>
+                  <div className="appt-date-day">{parseInt(d)}</div>
+                </div>
+                <div className="appt-body">
+                  <div className="appt-name">{c.name}</div>
+                  <div className="appt-sub">
+                    <StatusBadge status={c.status} />
+                    {days !== null && (
+                      <span style={{ marginLeft: 6, fontSize: 11, color: urgent ? 'var(--danger)' : 'var(--text-sub)', fontWeight: 600 }}>
+                        {days <= 0 ? '本日以前' : `あと${days}日`}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })
+        }
+        {upcoming.length > 0 && (
+          <button className="btn btn-outline btn-full" style={{ marginTop: 8, fontSize: 13 }}
+            onClick={() => onNavigate('appt')}>アポイント一覧を見る</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Tab: Customer List ────────────────────────────────────────
+function CustomerListTab({ customers, onSelect, onAdd }) {
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('すべて');
+  const [lineFilter, setLineFilter] = useState('すべて');
+
+  const filtered = useMemo(() => customers
+    .filter(c => statusFilter === 'すべて' || (c.status || '未接触') === statusFilter)
+    .filter(c => lineFilter === 'すべて' || (lineFilter === 'LINE登録' ? c.lineRegistered : !c.lineRegistered))
+    .filter(c => {
+      if (!search) return true;
+      const q = search.toLowerCase();
+      return c.name.includes(search) ||
+        (c.phone || '').includes(q) ||
+        (c.memo || '').includes(search) ||
+        (c.email || '').toLowerCase().includes(q);
+    })
+    .sort((a, b) => a.name.localeCompare(b.name, 'ja')),
+    [customers, search, statusFilter, lineFilter]
+  );
+
+  return (
+    <div>
+      <div style={{ position: 'sticky', top: 0, background: 'var(--bg)', zIndex: 5, paddingBottom: 4 }}>
+        <div className="search-wrap">
+          <span>🔍</span>
+          <input
+            className="search-input"
+            placeholder="名前・電話番号・メモで検索..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+          {search && <button className="search-clear" onClick={() => setSearch('')}>×</button>}
+        </div>
+        <div className="filter-chips">
+          {['すべて', ...STATUSES.map(s => s.key)].map(st => (
+            <button key={st} className={`chip ${statusFilter === st ? 'active' : ''}`}
+              onClick={() => setStatusFilter(st)}>
+              {st}
+              <span style={{ marginLeft: 4, fontSize: 10 }}>
+                {st === 'すべて' ? customers.length : customers.filter(c => (c.status || '未接触') === st).length}
+              </span>
+            </button>
+          ))}
+        </div>
+        <div className="filter-chips" style={{ marginBottom: 6 }}>
+          {['すべて', 'LINE登録', 'LINE未登録'].map(f => (
+            <button key={f} className={`chip ${lineFilter === f ? 'active' : ''}`}
+              onClick={() => setLineFilter(f)}>{f}</button>
+          ))}
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--text-sub)', marginBottom: 8 }}>
+          {filtered.length}件{search || statusFilter !== 'すべて' || lineFilter !== 'すべて' ? ` / 全${customers.length}件` : ''}
+        </div>
+      </div>
+
+      {filtered.length === 0
+        ? <EmptyState icon="👤" text={customers.length === 0 ? '顧客を追加してください' : '該当する顧客はいません'} />
+        : filtered.map(c => {
+          const apptDays = daysUntil(c.nextAppt);
+          const nowM2 = new Date().getMonth() + 1;
+          const nM1 = ((nowM2 - 1 + 1) % 12) + 1;
+          const nM2 = ((nowM2 - 1 + 2) % 12) + 1;
+          const isBirthMonth = c.birthdate && parseInt(c.birthdate.split('-')[1], 10) === nowM2;
+          const isContractMonth = (c.contracts || []).some(ct => {
+            if (ct.category === '損保' || !ct.date) return false;
+            const m = parseInt(ct.date.split('-')[1], 10);
+            return m === nowM2 || m === nM1 || m === nM2;
+          });
+          return (
+            <div key={c.id} className="customer-card" onClick={() => onSelect(c)}
+              style={ (isBirthMonth || isContractMonth) ? { borderLeft: '3px solid var(--warning)' } : {} }>
+              <div className="customer-card-top">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flexWrap: 'wrap' }}>
+                  <div className="customer-name">{c.name}</div>
+                  {c.age && <div style={{ fontSize: 12, color: 'var(--text-sub)', fontWeight: 500 }}>{c.age}歳</div>}
+                  {isBirthMonth && <span style={{ fontSize: 13 }}>🎂</span>}
+                  {isContractMonth && <span style={{ fontSize: 13 }}>📋🔔</span>}
+                </div>
+                <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
+                  <StatusBadge status={c.status} />
+                </div>
+              </div>
+              <div className="customer-meta">
+                <span className={`badge ${c.lineRegistered ? 'badge-line' : 'badge-noline'}`}>
+                  {c.lineRegistered ? '✓ LINE' : 'LINE未'}
+                </span>
+                {c.contracts && c.contracts.length > 0 && (
+                  <span className="badge" style={{ background: '#F5F3FF', color: '#7C3AED' }}>
+                    📋 {c.contracts.length}件
+                  </span>
+                )}
+                {c.contactMethod && (
+                  <span className="badge" style={{ background: 'var(--bg)', color: 'var(--text-sub)' }}>
+                    {c.contactMethod}
+                  </span>
+                )}
+              </div>
+              {c.nextAppt && (
+                <div className="customer-info-row">
+                  <div className="info-item">
+                    <div className="info-label">次回アポイント</div>
+                    <div className="info-value" style={{
+                      color: apptDays !== null && apptDays <= 3 ? 'var(--danger)' : apptDays !== null && apptDays <= 7 ? 'var(--warning)' : 'var(--text)',
+                    }}>
+                      {fmtDate(c.nextAppt)}
+                      {apptDays !== null && (
+                        <span style={{ marginLeft: 4, fontSize: 11, fontWeight: 600 }}>
+                          ({apptDays <= 0 ? '期限切れ' : `あと${apptDays}日`})
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  {c.lastContact && (
+                    <div className="info-item">
+                      <div className="info-label">最終接触</div>
+                      <div className="info-value">{fmtDate(c.lastContact)}</div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })
+      }
+    </div>
+  );
+}
+
+// ── Tab: Appointments ─────────────────────────────────────────
+function AppointmentTab({ customers, onSelect }) {
+  const today = todayStr();
+  const [showPast, setShowPast] = useState(false);
+
+  const withAppt = customers
+    .filter(c => c.nextAppt)
+    .sort((a, b) => a.nextAppt.localeCompare(b.nextAppt));
+
+  const upcoming = withAppt.filter(c => c.nextAppt >= today);
+  const past = withAppt.filter(c => c.nextAppt < today);
+
+  const ApptCard = ({ c }) => {
+    const days = daysUntil(c.nextAppt);
+    const [, m, d] = c.nextAppt.split('-');
+    const urgent = days !== null && days <= 3;
+    const overdue = days !== null && days < 0;
+    return (
+      <div className="customer-card" onClick={() => onSelect(c)}
+        style={overdue ? { borderColor: '#FECACA', background: '#FEF2F2' } : urgent ? { borderColor: '#FDE68A', background: '#FFFBEB' } : {}}>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+          <div className={`appt-date-box ${overdue ? 'urgent' : ''}`}
+            style={urgent && !overdue ? { background: '#FFFBEB' } : {}}>
+            <div className="appt-date-month" style={urgent && !overdue ? { color: 'var(--warning)' } : {}}>{parseInt(m)}月</div>
+            <div className="appt-date-day" style={urgent && !overdue ? { color: 'var(--warning)' } : {}}>{parseInt(d)}</div>
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>{c.name}</div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+              <StatusBadge status={c.status} />
+              {days !== null && (
+                <span style={{
+                  fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 6,
+                  background: overdue ? '#FEF2F2' : urgent ? '#FFFBEB' : 'var(--accent-light)',
+                  color: overdue ? 'var(--danger)' : urgent ? 'var(--warning)' : 'var(--accent)',
+                }}>
+                  {days === 0 ? '今日！' : days < 0 ? `${Math.abs(days)}日前` : `あと${days}日`}
+                </span>
+              )}
+              {c.contactMethod && (
+                <span style={{ fontSize: 11, color: 'var(--text-sub)' }}>{c.contactMethod}</span>
+              )}
+            </div>
+            {c.memo && (
+              <div style={{ fontSize: 12, color: 'var(--text-sub)', marginTop: 4, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+                {c.memo}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      <div className="section-title">アポイント管理</div>
+
+      {upcoming.length === 0 && past.length === 0 ? (
+        <EmptyState icon="📅" text="アポイントが登録されている顧客はいません" />
+      ) : (
+        <>
+          {upcoming.length > 0 ? (
+            <>
+              <div className="section-header">今後のアポイント ({upcoming.length}件)</div>
+              {upcoming.map(c => <ApptCard key={c.id} c={c} />)}
+            </>
+          ) : (
+            <EmptyState icon="✅" text="今後のアポイントはありません" />
+          )}
+
+          {past.length > 0 && (
+            <>
+              <button
+                onClick={() => setShowPast(v => !v)}
+                className="btn btn-outline btn-full"
+                style={{ marginTop: 8, fontSize: 13 }}>
+                {showPast ? '▲ 過去のアポイントを隠す' : `▼ 過去のアポイントを表示 (${past.length}件)`}
+              </button>
+              {showPast && past.map(c => <ApptCard key={c.id} c={c} />)}
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── CSV Export ────────────────────────────────────────────────
+function exportCSV(customers) {
+  const headers = ['氏名', '年齢', '生年月日', '電話番号', 'メールアドレス', '郵便番号', '住所', '職業', '勤務先', 'LINE登録', 'ステータス', '接触方法', '最終接触日', '次回アポイント', '契約数', '証券番号一覧', '払込方法一覧', '通貨一覧', '面談メモ'];
+  const rows = customers.map(c => [
+    c.name, c.age || '', c.birthdate || '', c.phone || '', c.email || '',
+    c.postalCode || '', c.address || '', c.occupation || '', c.workplace || '',
+    c.lineRegistered ? '登録済' : '未登録',
+    c.status || '未接触',
+    c.contactMethod || '',
+    c.lastContact || '',
+    c.nextAppt || '',
+    (c.contracts || []).length,
+    (c.contracts || []).map(ct => ct.policyNum || '').filter(Boolean).join(' / '),
+    (c.contracts || []).map(ct => ct.paymentCycle || '月払').join(' / '),
+    (c.contracts || []).map(ct => ct.currency || '円').join(' / '),
+    (c.memo || '').replace(/\n/g, '　'),
+  ]);
+  const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url;
+  a.download = `既契約顧客_${todayStr()}.csv`;
+  a.click(); URL.revokeObjectURL(url);
+}
+
+// ── App ───────────────────────────────────────────────────────
+function App() {
+  const [customers, setCustomers] = useLS('customers_v1', []);
+  const [tab, setTab] = useState('dashboard');
+  const [selectedCustomer, setSelectedCustomer] = useState(null);
+  const [editingCustomer, setEditingCustomer] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+
+  const saveCustomer = c => {
+    setCustomers(prev => {
+      const idx = prev.findIndex(x => x.id === c.id);
+      if (idx >= 0) {
+        const next = [...prev]; next[idx] = c; return next;
+      }
+      return [...prev, c];
+    });
+  };
+
+  const deleteCustomer = id => setCustomers(prev => prev.filter(c => c.id !== id));
+
+  const openNew = () => { setEditingCustomer(null); setShowForm(true); };
+  const openEdit = (c) => { setEditingCustomer(c); setSelectedCustomer(null); setShowForm(true); };
+
+  const tabs = [
+    { key: 'dashboard', icon: '🏠', label: 'ホーム' },
+    { key: 'list',      icon: '👥', label: '顧客一覧' },
+    { key: 'appt',      icon: '📅', label: 'アポイント' },
+  ];
+
+  return (
+    <div>
+      {/* Header */}
+      <div className="header">
+        <div className="header-row">
+          <h1>既契約管理</h1>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <span className="header-sub">{customers.length}名</span>
+            <button
+              onClick={() => exportCSV(customers)}
+              style={{
+                fontSize: 11, padding: '5px 10px', borderRadius: 8,
+                border: '1px solid var(--border)', background: '#fff',
+                color: 'var(--text-sub)', cursor: 'pointer', fontWeight: 600,
+              }}>
+              CSV
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="content">
+        {tab === 'dashboard' && (
+          <DashboardTab customers={customers} onNavigate={(t, c) => { setTab(t === 'customers' ? 'list' : t); if (c) setSelectedCustomer(c); }} />
+        )}
+        {tab === 'list' && (
+          <CustomerListTab customers={customers} onSelect={setSelectedCustomer} onAdd={openNew} />
+        )}
+        {tab === 'appt' && (
+          <AppointmentTab customers={customers} onSelect={setSelectedCustomer} />
+        )}
+      </div>
+
+      {/* Bottom Nav */}
+      <nav className="bottom-nav">
+        {tabs.map(t => (
+          <button key={t.key} className={`nav-item ${tab === t.key ? 'active' : ''}`}
+            onClick={() => setTab(t.key)}>
+            <div className="nav-icon">{t.icon}</div>
+            <div className="nav-label">{t.label}</div>
+          </button>
+        ))}
+      </nav>
+
+      {/* FAB */}
+      {(tab === 'list' || tab === 'dashboard') && (
+        <button className="fab" onClick={openNew}>＋</button>
+      )}
+
+      {/* Customer Detail */}
+      {selectedCustomer && !showForm && (
+        <CustomerDetail
+          customer={selectedCustomer}
+          customers={customers}
+          onEdit={() => openEdit(selectedCustomer)}
+          onDelete={id => { deleteCustomer(id); setSelectedCustomer(null); }}
+          onClose={() => setSelectedCustomer(null)}
+        />
+      )}
+
+      {/* Customer Form */}
+      {showForm && (
+        <CustomerForm
+          editing={editingCustomer}
+          customers={customers}
+          onSave={c => {
+            saveCustomer(c);
+            if (editingCustomer) setSelectedCustomer(c);
+          }}
+          onClose={() => { setShowForm(false); setEditingCustomer(null); }}
+        />
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
