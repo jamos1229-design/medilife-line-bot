@@ -1520,25 +1520,52 @@ function DashboardTab({ customers, onNavigate }) {
 }
 
 // ── Tab: Customer List ────────────────────────────────────────
+const SORT_OPTIONS = [
+  { key: 'newer',  label: '登録順（新しい）' },
+  { key: 'older',  label: '登録順（古い）' },
+  { key: 'name',   label: '名前順' },
+  { key: 'appt',   label: '次回アポ順' },
+  { key: 'status', label: 'ステータス順' },
+];
+
 function CustomerListTab({ customers, onSelect, onAdd }) {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('すべて');
   const [lineFilter, setLineFilter] = useState('すべて');
+  const [sortKey, setSortKey] = useState('newer');
+  const [showSort, setShowSort] = useState(false);
 
-  const filtered = useMemo(() => customers
-    .filter(c => statusFilter === 'すべて' || (c.status || '未接触') === statusFilter)
-    .filter(c => lineFilter === 'すべて' || (lineFilter === 'LINE登録' ? c.lineRegistered : !c.lineRegistered))
-    .filter(c => {
-      if (!search) return true;
-      const q = search.toLowerCase();
-      return c.name.includes(search) ||
-        (c.phone || '').includes(q) ||
-        (c.memo || '').includes(search) ||
-        (c.email || '').toLowerCase().includes(q);
-    })
-    .sort((a, b) => a.name.localeCompare(b.name, 'ja')),
-    [customers, search, statusFilter, lineFilter]
-  );
+  const filtered = useMemo(() => {
+    const list = customers
+      .filter(c => statusFilter === 'すべて' || (c.status || '未接触') === statusFilter)
+      .filter(c => lineFilter === 'すべて' || (lineFilter === 'LINE登録' ? c.lineRegistered : !c.lineRegistered))
+      .filter(c => {
+        if (!search) return true;
+        const q = search.toLowerCase();
+        return c.name.includes(search) ||
+          (c.phone || '').includes(q) ||
+          (c.memo || '').includes(search) ||
+          (c.email || '').toLowerCase().includes(q);
+      });
+
+    const STATUS_ORDER = ['未接触', 'アポ済', '面談済', 'フォロー中'];
+    list.sort((a, b) => {
+      switch (sortKey) {
+        case 'newer':  return customers.indexOf(b) - customers.indexOf(a);
+        case 'older':  return customers.indexOf(a) - customers.indexOf(b);
+        case 'name':   return (a.name || '').localeCompare(b.name || '', 'ja');
+        case 'appt': {
+          if (!a.nextAppt && !b.nextAppt) return 0;
+          if (!a.nextAppt) return 1;
+          if (!b.nextAppt) return -1;
+          return a.nextAppt.localeCompare(b.nextAppt);
+        }
+        case 'status': return STATUS_ORDER.indexOf(a.status || '未接触') - STATUS_ORDER.indexOf(b.status || '未接触');
+        default: return 0;
+      }
+    });
+    return list;
+  }, [customers, search, statusFilter, lineFilter, sortKey]);
 
   return (
     <div>
@@ -1570,8 +1597,33 @@ function CustomerListTab({ customers, onSelect, onAdd }) {
               onClick={() => setLineFilter(f)}>{f}</button>
           ))}
         </div>
-        <div style={{ fontSize: 12, color: 'var(--text-sub)', marginBottom: 8 }}>
-          {filtered.length}件{search || statusFilter !== 'すべて' || lineFilter !== 'すべて' ? ` / 全${customers.length}件` : ''}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+          <div style={{ fontSize: 12, color: 'var(--text-sub)' }}>
+            {filtered.length}件{search || statusFilter !== 'すべて' || lineFilter !== 'すべて' ? ` / 全${customers.length}件` : ''}
+          </div>
+          <div style={{ position: 'relative' }}>
+            <button onClick={() => setShowSort(v => !v)}
+              style={{ fontSize: 12, padding: '4px 10px', borderRadius: 8, border: '1.5px solid var(--border)',
+                background: '#fff', color: 'var(--text-sub)', cursor: 'pointer', fontWeight: 600,
+                display: 'flex', alignItems: 'center', gap: 4 }}>
+              ↕ {SORT_OPTIONS.find(o => o.key === sortKey)?.label}
+            </button>
+            {showSort && (
+              <div style={{ position: 'absolute', right: 0, top: '110%', background: '#fff', borderRadius: 12,
+                boxShadow: '0 4px 20px rgba(0,0,0,0.15)', zIndex: 20, overflow: 'hidden', minWidth: 160 }}>
+                {SORT_OPTIONS.map(o => (
+                  <button key={o.key} onClick={() => { setSortKey(o.key); setShowSort(false); }}
+                    style={{ display: 'block', width: '100%', padding: '12px 16px', border: 'none',
+                      background: sortKey === o.key ? 'var(--accent-light)' : '#fff',
+                      color: sortKey === o.key ? 'var(--accent)' : 'var(--text)',
+                      fontWeight: sortKey === o.key ? 700 : 500, fontSize: 14,
+                      textAlign: 'left', cursor: 'pointer' }}>
+                    {sortKey === o.key ? '✓ ' : '　'}{o.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
