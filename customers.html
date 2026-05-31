@@ -441,6 +441,21 @@ function ContractBlock({ contract, onChange, onRemove, index }) {
         <input className="form-input" placeholder="例：AB-1234567" value={contract.policyNum || ''} onChange={s('policyNum')} />
       </div>
 
+      {/* 被保険者（契約者と異なる場合） */}
+      <div style={{ background: 'var(--bg)', borderRadius: 10, padding: '10px 12px', marginBottom: 8 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-sub)', marginBottom: 8 }}>被保険者（契約者と異なる場合）</div>
+        <div className="form-row">
+          <div>
+            <label className="form-label">被保険者名</label>
+            <input className="form-input" placeholder="例：山田 花子" value={contract.insuredName || ''} onChange={s('insuredName')} />
+          </div>
+          <div>
+            <label className="form-label">被保険者 生年月日</label>
+            <input className="form-input" type="date" value={contract.insuredBirthdate || ''} onChange={s('insuredBirthdate')} />
+          </div>
+        </div>
+      </div>
+
       {cat === '損保' ? (
         // ── 損保フィールド ──────────────────────────────
         <>
@@ -475,6 +490,18 @@ function ContractBlock({ contract, onChange, onRemove, index }) {
       ) : (
         // ── 生保フィールド ──────────────────────────────
         <>
+          {/* 保険期間 */}
+          <div className="form-row" style={{ marginBottom: 8 }}>
+            <div>
+              <label className="form-label">保険期間</label>
+              <input className="form-input" placeholder="例：60歳まで・20年定期" value={contract.termNote || ''} onChange={s('termNote')} />
+            </div>
+            <div>
+              <label className="form-label">保険期間 終了日</label>
+              <input className="form-input" type="date" value={contract.termEnd || ''} onChange={s('termEnd')} />
+            </div>
+          </div>
+
           <div className="form-group" style={{ marginBottom: 8 }}>
             <label className="form-label">払込方法</label>
             <div className="toggle-group">
@@ -880,6 +907,33 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose }) {
                   <div className="info-item"><div className="info-label">保険種類</div><div className="info-value">{ct.type || '—'}</div></div>
                   <div className="info-item"><div className="info-label">保険会社</div><div className="info-value">{ct.company || '—'}</div></div>
                   {ct.policyNum && <div className="info-item" style={{gridColumn:'1/-1'}}><div className="info-label">証券番号</div><div className="info-value" style={{fontSize:15,letterSpacing:0.5}}>{ct.policyNum}</div></div>}
+
+                  {/* 被保険者 */}
+                  {ct.insuredName && <div className="info-item"><div className="info-label">被保険者</div><div className="info-value">{ct.insuredName}</div></div>}
+                  {ct.insuredBirthdate && <div className="info-item"><div className="info-label">被保険者 生年月日</div><div className="info-value">{fmtDateFull(ct.insuredBirthdate)}</div></div>}
+
+                  {/* 保険期間（生保） */}
+                  {!isSonpo && (ct.termNote || ct.termEnd) && (
+                    <div className="info-item" style={{gridColumn:'1/-1'}}>
+                      <div className="info-label">保険期間</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        {ct.termNote && <span className="info-value">{ct.termNote}</span>}
+                        {ct.termEnd && (
+                          <>
+                            {ct.termNote && <span style={{color:'var(--text-sub)'}}>／</span>}
+                            <span className="info-value">{fmtDateFull(ct.termEnd)} まで</span>
+                            {daysUntil(ct.termEnd) !== null && (
+                              <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 6,
+                                background: daysUntil(ct.termEnd) <= 0 ? '#FEF2F2' : daysUntil(ct.termEnd) <= 365 ? '#FFF7ED' : 'var(--bg)',
+                                color: daysUntil(ct.termEnd) <= 0 ? 'var(--danger)' : daysUntil(ct.termEnd) <= 365 ? 'var(--warning)' : 'var(--text-sub)' }}>
+                                {daysUntil(ct.termEnd) <= 0 ? '期間終了' : `あと${Math.ceil(daysUntil(ct.termEnd)/365)}年`}
+                              </span>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
 
                   {/* 損保専用フィールド */}
                   {isSonpo && ct.insuredObject && (
