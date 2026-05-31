@@ -880,24 +880,97 @@ function CustomerForm({ editing, onSave, onClose, customers }) {
         {/* 紹介管理 */}
         <div className="section-header">紹介管理</div>
         <div className="card">
-          <div className="form-group">
-            <label className="form-label">紹介元（誰から紹介されたか）</label>
-            <select className="form-select" value={form.referredBy} onChange={si('referredBy')}>
-              <option value="">— なし —</option>
-              {otherCustomers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-          </div>
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label className="form-label">紹介先（この顧客が紹介した人）</label>
-            <select className="form-select" value={form.referredTo} onChange={si('referredTo')}>
-              <option value="">— なし —</option>
-              {otherCustomers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+          <CustomerSelect
+            label="紹介元（誰から紹介されたか）"
+            value={form.referredBy}
+            onChange={v => s('referredBy')(v)}
+            customers={otherCustomers}
+          />
+          <div style={{ marginTop: 14 }}>
+            <CustomerSelect
+              label="紹介先（この顧客が紹介した人）"
+              value={form.referredTo}
+              onChange={v => s('referredTo')(v)}
+              customers={otherCustomers}
+            />
           </div>
         </div>
 
         <button className="btn btn-primary btn-full" style={{ marginTop: 8 }} onClick={save}>保存する</button>
       </div>
+    </div>
+  );
+}
+
+// ── Searchable Customer Select ────────────────────────────────
+function CustomerSelect({ label, value, onChange, customers }) {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const selected = customers.find(c => c.id === value);
+
+  const filtered = customers.filter(c =>
+    !query || c.name.includes(query) || (c.phone || '').includes(query)
+  );
+
+  return (
+    <div className="form-group" style={{ marginBottom: 0, position: 'relative' }}>
+      <label className="form-label">{label}</label>
+      {/* 選択済み表示 or 検索入力 */}
+      {!open ? (
+        <button type="button" onClick={() => { setOpen(true); setQuery(''); }}
+          style={{ width: '100%', padding: '13px 14px', borderRadius: 12,
+            border: '1.5px solid var(--border)', background: 'var(--bg)',
+            fontSize: 16, textAlign: 'left', cursor: 'pointer', color: value ? 'var(--text)' : 'var(--text-sub)',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', minHeight: 48 }}>
+          <span>{selected ? selected.name : '— なし —'}</span>
+          <span style={{ color: 'var(--text-sub)', fontSize: 13 }}>▼</span>
+        </button>
+      ) : (
+        <div>
+          <div style={{ position: 'relative' }}>
+            <input autoFocus className="form-input"
+              placeholder="名前で検索..." value={query}
+              onChange={e => setQuery(e.target.value)}
+              style={{ borderColor: 'var(--accent)', borderRadius: '12px 12px 0 0', marginBottom: 0 }} />
+            {query && (
+              <button type="button" onClick={() => setQuery('')}
+                style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
+                  background: '#C7C7CC', border: 'none', borderRadius: '50%',
+                  width: 20, height: 20, color: '#fff', fontSize: 13, cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
+            )}
+          </div>
+          <div style={{ border: '1.5px solid var(--accent)', borderTop: 'none',
+            borderRadius: '0 0 12px 12px', background: '#fff',
+            maxHeight: 220, overflowY: 'auto', zIndex: 100 }}>
+            {/* なし */}
+            <button type="button" onClick={() => { onChange(''); setOpen(false); }}
+              style={{ display: 'block', width: '100%', padding: '12px 16px', border: 'none',
+                background: !value ? 'var(--accent-light)' : '#fff',
+                color: !value ? 'var(--accent)' : 'var(--text-sub)',
+                fontWeight: !value ? 700 : 400, fontSize: 15, textAlign: 'left', cursor: 'pointer',
+                borderBottom: '1px solid var(--border)' }}>
+              — なし —
+            </button>
+            {filtered.length === 0 && (
+              <div style={{ padding: '12px 16px', color: 'var(--text-sub)', fontSize: 14 }}>該当なし</div>
+            )}
+            {filtered.map(c => (
+              <button key={c.id} type="button" onClick={() => { onChange(c.id); setOpen(false); }}
+                style={{ display: 'block', width: '100%', padding: '12px 16px', border: 'none',
+                  background: value === c.id ? 'var(--accent-light)' : '#fff',
+                  color: value === c.id ? 'var(--accent)' : 'var(--text)',
+                  fontWeight: value === c.id ? 700 : 500, fontSize: 15,
+                  textAlign: 'left', cursor: 'pointer', borderBottom: '1px solid var(--border)' }}>
+                {c.name}
+                {c.age && <span style={{ fontSize: 12, color: 'var(--text-sub)', marginLeft: 6 }}>{c.age}歳</span>}
+              </button>
+            ))}
+          </div>
+          {/* 外タップで閉じる */}
+          <div style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={() => setOpen(false)} />
+        </div>
+      )}
     </div>
   );
 }
