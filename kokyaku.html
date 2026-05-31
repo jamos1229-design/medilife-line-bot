@@ -470,7 +470,17 @@ function ContractBlock({ contract, onChange, onRemove, index }) {
             </div>
             <div>
               <label className="form-label">満期日・更新日 🔔</label>
-              <input className="form-input" type="date" value={contract.expiryDate || ''} onChange={s('expiryDate')} />
+              <div style={{ position: 'relative' }}>
+                <input className="form-input" type="date" value={contract.expiryDate || ''} onChange={s('expiryDate')}
+                  style={{ paddingRight: contract.expiryDate ? 44 : 14 }} />
+                {contract.expiryDate && (
+                  <button type="button" onClick={() => onChange({ ...contract, expiryDate: '' })}
+                    style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)',
+                      background: '#C7C7CC', border: 'none', borderRadius: '50%',
+                      width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      cursor: 'pointer', color: '#fff', fontSize: 13, fontWeight: 700, lineHeight: 1 }}>×</button>
+                )}
+              </div>
             </div>
           </div>
           <div className="form-group" style={{ marginBottom: 8 }}>
@@ -498,7 +508,17 @@ function ContractBlock({ contract, onChange, onRemove, index }) {
             </div>
             <div>
               <label className="form-label">保険期間 終了日</label>
-              <input className="form-input" type="date" value={contract.termEnd || ''} onChange={s('termEnd')} />
+              <div style={{ position: 'relative' }}>
+                <input className="form-input" type="date" value={contract.termEnd || ''} onChange={s('termEnd')}
+                  style={{ paddingRight: contract.termEnd ? 44 : 14 }} />
+                {contract.termEnd && (
+                  <button type="button" onClick={() => onChange({ ...contract, termEnd: '' })}
+                    style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)',
+                      background: '#C7C7CC', border: 'none', borderRadius: '50%',
+                      width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      cursor: 'pointer', color: '#fff', fontSize: 13, fontWeight: 700, lineHeight: 1 }}>×</button>
+                )}
+              </div>
             </div>
           </div>
 
