@@ -966,9 +966,56 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose, onRegi
         </div>
 
         {/* 契約情報 */}
-        {c.contracts && c.contracts.length > 0 && (
-          <>
-            <div className="section-header">契約情報 ({c.contracts.length}件)</div>
+        {c.contracts && c.contracts.length > 0 && (() => {
+          // 保険料合計の計算
+          let annualJpy = 0, annualUsd = 0, lumpJpy = 0, lumpUsd = 0;
+          (c.contracts || []).forEach(ct => {
+            const amt  = Number(ct.premium)     || 0;
+            const jpy  = Number(ct.premiumJpy)  || 0;
+            const rate = Number(ct.exchangeRate)|| 0;
+            const cur  = ct.currency || '円';
+            const cyc  = ct.paymentCycle || '月払';
+            const annualAmt = cyc === '年払' ? amt : cyc === '一時払' ? 0 : amt * 12;
+            const annualJpyAmt = cyc === '年払' ? jpy : cyc === '一時払' ? 0 : jpy * 12;
+            if (cyc === '一時払') {
+              if (cur === 'ドル') { lumpUsd += amt; lumpJpy += jpy || amt * rate; }
+              else { lumpJpy += amt; }
+            } else {
+              if (cur === 'ドル') { annualUsd += annualAmt; annualJpy += annualJpyAmt || annualAmt * rate; }
+              else { annualJpy += annualAmt; }
+            }
+          });
+          const hasAnnual = annualJpy > 0 || annualUsd > 0;
+          const hasLump   = lumpJpy  > 0 || lumpUsd  > 0;
+          return (
+            <>
+              <div className="section-header">契約情報 ({c.contracts.length}件)</div>
+              {/* 保険料合計サマリー */}
+              {(hasAnnual || hasLump) && (
+                <div className="card" style={{ marginBottom: 10, background: 'var(--accent-light)', border: '1.5px solid var(--accent)' }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent)', marginBottom: 8 }}>💰 保険料合計</div>
+                  {hasAnnual && (
+                    <div style={{ marginBottom: hasLump ? 10 : 0 }}>
+                      <div style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 700, marginBottom: 4 }}>年間保険料（月払・年払）</div>
+                      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'baseline' }}>
+                        {annualJpy > 0 && <span style={{ fontSize: 22, fontWeight: 800, color: 'var(--text)' }}>¥{annualJpy.toLocaleString()}</span>}
+                        {annualUsd > 0 && <span style={{ fontSize: 18, fontWeight: 800, color: '#059669' }}>${annualUsd.toLocaleString()}</span>}
+                        <span style={{ fontSize: 12, color: 'var(--text-sub)' }}>/ 年</span>
+                        {annualJpy > 0 && <span style={{ fontSize: 13, color: 'var(--text-sub)' }}>（月割 ¥{Math.round(annualJpy/12).toLocaleString()}）</span>}
+                      </div>
+                    </div>
+                  )}
+                  {hasLump && (
+                    <div style={{ paddingTop: hasAnnual ? 10 : 0, borderTop: hasAnnual ? '1px solid rgba(91,91,214,0.2)' : 'none' }}>
+                      <div style={{ fontSize: 11, color: '#7C3AED', fontWeight: 700, marginBottom: 4 }}>一時払（別途）</div>
+                      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'baseline' }}>
+                        {lumpJpy > 0 && <span style={{ fontSize: 22, fontWeight: 800, color: 'var(--text)' }}>¥{lumpJpy.toLocaleString()}</span>}
+                        {lumpUsd > 0 && <span style={{ fontSize: 18, fontWeight: 800, color: '#059669' }}>${lumpUsd.toLocaleString()}</span>}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             {c.contracts.map((ct, i) => {
               const isSonpo = ct.category === '損保';
               const expiryDays = daysUntil(ct.expiryDate);
@@ -1060,8 +1107,9 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose, onRegi
               </div>
               );
             })}
-          </>
-        )}
+            </>
+          );
+        })()}
 
         {/* サスペクト */}
         {c.suspects && c.suspects.length > 0 && (
