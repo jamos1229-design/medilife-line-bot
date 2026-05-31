@@ -573,6 +573,62 @@ function ContractBlock({ contract, onChange, onRemove, index }) {
               </div>
             </div>
           )}
+
+          {/* 定期支払金 */}
+          <div style={{ marginTop: 10, background: '#F0FDF4', borderRadius: 10, padding: '10px 12px', border: '1px solid #BBF7D0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: contract.hasPeriodicPay ? 10 : 0 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#15803D' }}>定期支払金あり</div>
+                <div style={{ fontSize: 11, color: '#16A34A' }}>毎年・毎月受け取る金利・分配金</div>
+              </div>
+              <button type="button" onClick={() => sv('hasPeriodicPay')(!contract.hasPeriodicPay)}
+                style={{ width: 48, height: 28, borderRadius: 14, border: 'none', cursor: 'pointer',
+                  background: contract.hasPeriodicPay ? '#16A34A' : '#D1D5DB',
+                  transition: 'background 0.2s', position: 'relative', flexShrink: 0 }}>
+                <div style={{ position: 'absolute', top: 3, left: contract.hasPeriodicPay ? 22 : 3,
+                  width: 22, height: 22, borderRadius: '50%', background: '#fff',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.2)', transition: 'left 0.2s' }} />
+              </button>
+            </div>
+            {contract.hasPeriodicPay && (
+              <>
+                <div className="form-group" style={{ marginBottom: 8 }}>
+                  <label className="form-label">受取頻度</label>
+                  <div className="toggle-group">
+                    {['毎年', '半年ごと', '毎月'].map(f => (
+                      <button key={f} type="button"
+                        className={`toggle-btn ${(contract.periodicFreq || '毎年') === f ? 'sel' : ''}`}
+                        style={(contract.periodicFreq || '毎年') === f ? { borderColor:'#16A34A', background:'#DCFCE7', color:'#15803D' } : {}}
+                        onClick={() => sv('periodicFreq')(f)}>{f}</button>
+                    ))}
+                  </div>
+                </div>
+                <div className="form-row">
+                  <div>
+                    <label className="form-label">
+                      受取額（{(contract.periodicFreq || '毎年') === '毎年' ? '年間' : (contract.periodicFreq || '毎年') === '半年ごと' ? '半年' : '毎月'}）
+                    </label>
+                    <AmountInput
+                      prefix={cur === 'ドル' ? '$' : '¥'}
+                      prefixColor={cur === 'ドル' ? '#059669' : undefined}
+                      value={contract.periodicAmt || ''}
+                      onChange={s('periodicAmt')}
+                      placeholder="例：30000" />
+                  </div>
+                  <div>
+                    <label className="form-label">受取開始日</label>
+                    <input className="form-input" type="date" value={contract.periodicStart || ''} onChange={s('periodicStart')} />
+                  </div>
+                </div>
+                {cur === 'ドル' && (
+                  <div style={{ marginTop: 8 }}>
+                    <label className="form-label">円換算受取額</label>
+                    <AmountInput prefix="¥" value={contract.periodicAmtJpy || ''} onChange={s('periodicAmtJpy')} placeholder="例：4500000" />
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         </>
       )}
     </div>
@@ -969,6 +1025,7 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose, onRegi
         {c.contracts && c.contracts.length > 0 && (() => {
           // 保険料合計の計算
           let annualJpy = 0, annualUsd = 0, lumpJpy = 0, lumpUsd = 0;
+          let recvJpy = 0, recvUsd = 0; // 定期支払金 年間合計
           (c.contracts || []).forEach(ct => {
             const amt  = Number(ct.premium)     || 0;
             const jpy  = Number(ct.premiumJpy)  || 0;
@@ -984,16 +1041,26 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose, onRegi
               if (cur === 'ドル') { annualUsd += annualAmt; annualJpy += annualJpyAmt || annualAmt * rate; }
               else { annualJpy += annualAmt; }
             }
+            // 定期支払金
+            if (ct.hasPeriodicPay && ct.periodicAmt) {
+              const pa = Number(ct.periodicAmt) || 0;
+              const pj = Number(ct.periodicAmtJpy) || 0;
+              const freq = ct.periodicFreq || '毎年';
+              const mul = freq === '毎月' ? 12 : freq === '半年ごと' ? 2 : 1;
+              if (cur === 'ドル') { recvUsd += pa * mul; recvJpy += (pj || pa * rate) * mul; }
+              else { recvJpy += pa * mul; }
+            }
           });
           const hasAnnual = annualJpy > 0 || annualUsd > 0;
           const hasLump   = lumpJpy  > 0 || lumpUsd  > 0;
+          const hasRecv   = recvJpy  > 0 || recvUsd  > 0;
           return (
             <>
               <div className="section-header">契約情報 ({c.contracts.length}件)</div>
               {/* 保険料合計サマリー */}
-              {(hasAnnual || hasLump) && (
+              {(hasAnnual || hasLump || hasRecv) && (
                 <div className="card" style={{ marginBottom: 10, background: 'var(--accent-light)', border: '1.5px solid var(--accent)' }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent)', marginBottom: 8 }}>💰 保険料合計</div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent)', marginBottom: 8 }}>💰 保険料・受取金 合計</div>
                   {hasAnnual && (
                     <div style={{ marginBottom: hasLump ? 10 : 0 }}>
                       <div style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 700, marginBottom: 4 }}>年間保険料（月払・年払）</div>
@@ -1011,6 +1078,16 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose, onRegi
                       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'baseline' }}>
                         {lumpJpy > 0 && <span style={{ fontSize: 22, fontWeight: 800, color: 'var(--text)' }}>¥{lumpJpy.toLocaleString()}</span>}
                         {lumpUsd > 0 && <span style={{ fontSize: 18, fontWeight: 800, color: '#059669' }}>${lumpUsd.toLocaleString()}</span>}
+                      </div>
+                    </div>
+                  )}
+                  {hasRecv && (
+                    <div style={{ paddingTop: 10, borderTop: '1px solid rgba(91,91,214,0.2)' }}>
+                      <div style={{ fontSize: 11, color: '#15803D', fontWeight: 700, marginBottom: 4 }}>💚 定期支払金 年間受取合計</div>
+                      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'baseline' }}>
+                        {recvJpy > 0 && <span style={{ fontSize: 22, fontWeight: 800, color: '#15803D' }}>¥{recvJpy.toLocaleString()}</span>}
+                        {recvUsd > 0 && <span style={{ fontSize: 18, fontWeight: 800, color: '#059669' }}>${recvUsd.toLocaleString()}</span>}
+                        <span style={{ fontSize: 12, color: 'var(--text-sub)' }}>/ 年</span>
                       </div>
                     </div>
                   )}
@@ -1103,6 +1180,20 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose, onRegi
                     </div>
                   ) : null}
                   {ct.date && <div className="info-item"><div className="info-label">契約日</div><div className="info-value">{fmtDateFull(ct.date)}</div></div>}
+
+                  {/* 定期支払金 */}
+                  {ct.hasPeriodicPay && ct.periodicAmt && (
+                    <div className="info-item" style={{ gridColumn:'1/-1', background:'#F0FDF4', border:'1px solid #BBF7D0' }}>
+                      <div className="info-label" style={{ color:'#15803D' }}>💚 定期支払金（{ct.periodicFreq || '毎年'}受取）</div>
+                      <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'baseline', marginTop:4 }}>
+                        <span style={{ fontSize:18, fontWeight:800, color:'#15803D' }}>
+                          {(ct.currency||'円')==='ドル' ? '$' : '¥'}{Number(ct.periodicAmt).toLocaleString()}
+                        </span>
+                        {ct.periodicAmtJpy && <><span style={{color:'var(--text-sub)'}}>≒</span><span style={{fontSize:16,fontWeight:700}}>¥{Number(ct.periodicAmtJpy).toLocaleString()}</span></>}
+                        {ct.periodicStart && <span style={{fontSize:12,color:'var(--text-sub)'}}>開始：{fmtDateFull(ct.periodicStart)}</span>}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
               );
