@@ -559,6 +559,47 @@ function ContractBlock({ contract, onChange, onRemove, index }) {
   );
 }
 
+// ── Suspect Block ─────────────────────────────────────────────
+const RELATIONS = ['配偶者', '子供', '親', '兄弟姉妹', '友人', '職場', '知人', 'その他'];
+
+function SuspectBlock({ suspect, onChange, onRemove, index }) {
+  const s = k => e => onChange({ ...suspect, [k]: e.target.value });
+  return (
+    <div style={{ background: 'var(--bg)', borderRadius: 12, padding: 12, marginBottom: 8, border: '1px solid var(--border)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-sub)' }}>サスペクト {index + 1}</span>
+        <button onClick={onRemove} style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', fontSize: 20, lineHeight: 1 }}>×</button>
+      </div>
+      <div className="form-row" style={{ marginBottom: 8 }}>
+        <div>
+          <label className="form-label">名前</label>
+          <input className="form-input" placeholder="例：山田 次郎" value={suspect.name || ''} onChange={s('name')} />
+        </div>
+        <div>
+          <label className="form-label">年齢</label>
+          <input className="form-input" type="number" placeholder="例：38" value={suspect.age || ''} onChange={s('age')} />
+        </div>
+      </div>
+      <div className="form-group" style={{ marginBottom: 8 }}>
+        <label className="form-label">続柄・関係</label>
+        <div className="toggle-group">
+          {RELATIONS.map(r => (
+            <button key={r} type="button"
+              className={`toggle-btn ${(suspect.relation || '') === r ? 'sel' : ''}`}
+              style={{ minWidth: 'unset', flex: 'none', padding: '8px 10px', fontSize: 13 }}
+              onClick={() => onChange({ ...suspect, relation: r })}>{r}</button>
+          ))}
+        </div>
+      </div>
+      <div>
+        <label className="form-label">メモ</label>
+        <textarea className="form-textarea" style={{ minHeight: 56 }} placeholder="例：保険未加入、来年結婚予定"
+          value={suspect.memo || ''} onChange={s('memo')} />
+      </div>
+    </div>
+  );
+}
+
 // ── Customer Form Drawer / Screen ─────────────────────────────
 function CustomerForm({ editing, onSave, onClose, customers }) {
   const blank = {
@@ -571,6 +612,7 @@ function CustomerForm({ editing, onSave, onClose, customers }) {
     memo: '',
     lineRegistered: false,
     contracts: [],
+    suspects: [],
     referredBy: '',
     referredTo: '',
   };
@@ -581,6 +623,10 @@ function CustomerForm({ editing, onSave, onClose, customers }) {
   const addContract = () => s('contracts')([...form.contracts, { id: uid(), type: '', company: '', premium: '', date: '' }]);
   const updateContract = (id, data) => s('contracts')(form.contracts.map(c => c.id === id ? data : c));
   const removeContract = id => s('contracts')(form.contracts.filter(c => c.id !== id));
+
+  const addSuspect = () => s('suspects')([...(form.suspects || []), { id: uid(), name: '', age: '', relation: '', memo: '' }]);
+  const updateSuspect = (id, data) => s('suspects')((form.suspects || []).map(sp => sp.id === id ? data : sp));
+  const removeSuspect = id => s('suspects')((form.suspects || []).filter(sp => sp.id !== id));
 
   const otherCustomers = customers.filter(c => c.id !== form.id);
 
@@ -744,6 +790,17 @@ function CustomerForm({ editing, onSave, onClose, customers }) {
           ＋ 契約を追加
         </button>
 
+        {/* サスペクト */}
+        <div className="section-header">👥 サスペクト（家族・知人）</div>
+        {(form.suspects || []).map((sp, i) => (
+          <SuspectBlock key={sp.id} suspect={sp} index={i}
+            onChange={data => updateSuspect(sp.id, data)}
+            onRemove={() => removeSuspect(sp.id)} />
+        ))}
+        <button className="btn btn-outline btn-full" style={{ marginBottom: 10 }} onClick={addSuspect}>
+          ＋ サスペクトを追加
+        </button>
+
         {/* 紹介管理 */}
         <div className="section-header">紹介管理</div>
         <div className="card">
@@ -770,7 +827,7 @@ function CustomerForm({ editing, onSave, onClose, customers }) {
 }
 
 // ── Customer Detail Screen ────────────────────────────────────
-function CustomerDetail({ customer, customers, onEdit, onDelete, onClose }) {
+function CustomerDetail({ customer, customers, onEdit, onDelete, onClose, onRegisterSuspect }) {
   const [confirmDel, setConfirmDel] = useState(false);
   const c = customer;
   const referredByCustomer = customers.find(x => x.id === c.referredBy);
@@ -983,6 +1040,44 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose }) {
               </div>
               );
             })}
+          </>
+        )}
+
+        {/* サスペクト */}
+        {c.suspects && c.suspects.length > 0 && (
+          <>
+            <div className="section-header">👥 サスペクト（{c.suspects.length}人）</div>
+            {c.suspects.map(sp => (
+              <div key={sp.id} className="card" style={{ marginBottom: 8, padding: '12px 14px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: sp.memo ? 8 : 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 20 }}>👤</span>
+                    <div>
+                      <div style={{ fontSize: 16, fontWeight: 700 }}>
+                        {sp.name || '（名前未入力）'}
+                        {sp.age && <span style={{ fontSize: 13, color: 'var(--text-sub)', marginLeft: 6 }}>{sp.age}歳</span>}
+                      </div>
+                      {sp.relation && (
+                        <span style={{ fontSize: 12, fontWeight: 700, background: 'var(--accent-light)', color: 'var(--accent)', borderRadius: 6, padding: '1px 7px' }}>
+                          {sp.relation}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    className="btn btn-sm btn-primary"
+                    style={{ fontSize: 12, padding: '6px 10px', whiteSpace: 'nowrap' }}
+                    onClick={() => onRegisterSuspect(sp)}>
+                    顧客登録 →
+                  </button>
+                </div>
+                {sp.memo && (
+                  <div style={{ fontSize: 13, color: 'var(--text-sub)', background: 'var(--bg)', borderRadius: 8, padding: '7px 10px', marginTop: 8, lineHeight: 1.5 }}>
+                    {sp.memo}
+                  </div>
+                )}
+              </div>
+            ))}
           </>
         )}
 
@@ -1530,6 +1625,21 @@ function App() {
   const openNew = () => { setEditingCustomer(null); setShowForm(true); };
   const openEdit = (c) => { setEditingCustomer(c); setSelectedCustomer(null); setShowForm(true); };
 
+  // サスペクトを新規顧客として登録（名前・年齢を引き継ぎ）
+  const registerSuspect = (sp) => {
+    setEditingCustomer({
+      name: sp.name || '',
+      age: sp.age || '',
+      memo: sp.memo || '',
+      status: '未接触',
+      contactMethod: '電話',
+      contracts: [],
+      suspects: [],
+    });
+    setSelectedCustomer(null);
+    setShowForm(true);
+  };
+
   const tabs = [
     { key: 'dashboard', icon: '🏠', label: 'ホーム' },
     { key: 'list',      icon: '👥', label: '顧客一覧' },
@@ -1594,6 +1704,7 @@ function App() {
           onEdit={() => openEdit(selectedCustomer)}
           onDelete={id => { deleteCustomer(id); setSelectedCustomer(null); }}
           onClose={() => setSelectedCustomer(null)}
+          onRegisterSuspect={sp => { setSelectedCustomer(null); registerSuspect(sp); }}
         />
       )}
 
