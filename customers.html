@@ -679,8 +679,11 @@ function SuspectBlock({ suspect, onChange, onRemove, index }) {
 // ── Customer Form Drawer / Screen ─────────────────────────────
 function CustomerForm({ editing, onSave, onClose, customers }) {
   const blank = {
-    name: '', age: '', birthdate: '', phone: '', email: '',
+    customerType: '個人',  // 個人 / 法人
+    name: '', age: '', gender: '', birthdate: '', phone: '', email: '',
     postalCode: '', address: '', occupation: '', workplace: '',
+    // 法人専用
+    corporateName: '', representative: '', industry: '', employeeCount: '',
     status: '未接触',
     contactMethod: '電話',
     lastContact: '',
@@ -729,28 +732,108 @@ function CustomerForm({ editing, onSave, onClose, customers }) {
         {/* 基本情報 */}
         <div className="section-header">基本情報</div>
         <div className="card">
+          {/* 個人 / 法人 切り替え */}
           <div className="form-group">
-            <label className="form-label">氏名 <span style={{ color: 'var(--danger)' }}>*</span></label>
-            <input className="form-input" placeholder="例：山田 太郎" value={form.name} onChange={si('name')} autoFocus />
-          </div>
-          <div className="form-row">
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label className="form-label">年齢</label>
-              <input className="form-input" type="number" placeholder="例：42" value={form.age} onChange={si('age')} />
-            </div>
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label className="form-label">電話番号</label>
-              <input className="form-input" type="tel" placeholder="090-0000-0000" value={form.phone} onChange={si('phone')} />
+            <label className="form-label">区分</label>
+            <div className="toggle-group">
+              {['個人', '法人'].map(t => (
+                <button key={t} type="button"
+                  className={`toggle-btn ${form.customerType === t ? 'sel' : ''}`}
+                  onClick={() => s('customerType')(t)}>{t}</button>
+              ))}
             </div>
           </div>
-          <div className="form-group" style={{ marginTop: 14, marginBottom: 0 }}>
-            <label className="form-label">メールアドレス</label>
-            <input className="form-input" type="email" placeholder="example@email.com" value={form.email} onChange={si('email')} />
-          </div>
-          <div className="form-group" style={{ marginTop: 14, marginBottom: 0 }}>
-            <label className="form-label">生年月日</label>
-            <input className="form-input" type="date" value={form.birthdate} onChange={si('birthdate')} />
-          </div>
+
+          {form.customerType === '法人' ? (
+            // ── 法人フィールド ──────────────────────────
+            <>
+              <div className="form-group">
+                <label className="form-label">法人名 <span style={{ color: 'var(--danger)' }}>*</span></label>
+                <input className="form-input" placeholder="例：株式会社○○" value={form.corporateName || ''} onChange={si('corporateName')} autoFocus />
+              </div>
+              <div className="form-row">
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">代表者名</label>
+                  <input className="form-input" placeholder="例：山田 太郎" value={form.representative || ''} onChange={si('representative')} />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">担当者名</label>
+                  <input className="form-input" placeholder="例：鈴木 花子" value={form.name} onChange={si('name')} />
+                </div>
+              </div>
+              <div className="form-row" style={{ marginTop: 14 }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">業種</label>
+                  <input className="form-input" placeholder="例：建設業" value={form.industry || ''} onChange={si('industry')} />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">従業員数</label>
+                  <input className="form-input" type="number" placeholder="例：50" value={form.employeeCount || ''} onChange={si('employeeCount')} />
+                </div>
+              </div>
+              <div className="form-row" style={{ marginTop: 14 }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">電話番号</label>
+                  <input className="form-input" type="tel" placeholder="06-0000-0000" value={form.phone} onChange={si('phone')} />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">メールアドレス</label>
+                  <input className="form-input" type="email" placeholder="info@example.com" value={form.email} onChange={si('email')} />
+                </div>
+              </div>
+            </>
+          ) : (
+            // ── 個人フィールド ──────────────────────────
+            <>
+              <div className="form-group">
+                <label className="form-label">氏名 <span style={{ color: 'var(--danger)' }}>*</span></label>
+                <input className="form-input" placeholder="例：山田 太郎" value={form.name} onChange={si('name')} autoFocus />
+              </div>
+              <div className="form-row">
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">性別</label>
+                  <div className="toggle-group">
+                    {['男性', '女性', 'その他'].map(g => (
+                      <button key={g} type="button"
+                        className={`toggle-btn ${form.gender === g ? 'sel' : ''}`}
+                        style={{ minWidth: 'unset', flex: 1, padding: '10px 4px', fontSize: 13 }}
+                        onClick={() => s('gender')(form.gender === g ? '' : g)}>{g}</button>
+                    ))}
+                  </div>
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">年齢</label>
+                  <input className="form-input" type="number" placeholder="例：42" value={form.age} onChange={si('age')} />
+                </div>
+              </div>
+              <div className="form-row" style={{ marginTop: 14 }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">電話番号</label>
+                  <input className="form-input" type="tel" placeholder="090-0000-0000" value={form.phone} onChange={si('phone')} />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">メールアドレス</label>
+                  <input className="form-input" type="email" placeholder="example@email.com" value={form.email} onChange={si('email')} />
+                </div>
+              </div>
+              <div className="form-group" style={{ marginTop: 14, marginBottom: 0 }}>
+                <label className="form-label">生年月日</label>
+                <input className="form-input" type="date" value={form.birthdate} onChange={si('birthdate')} />
+              </div>
+              <div className="form-row" style={{ marginTop: 14 }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">職業</label>
+                  <input className="form-input" placeholder="例：会社員" value={form.occupation} onChange={si('occupation')} />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">勤務先</label>
+                  <input className="form-input" placeholder="例：株式会社○○" value={form.workplace} onChange={si('workplace')} />
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* 住所（共通） */}
           <div className="form-row" style={{ marginTop: 14 }}>
             <div className="form-group" style={{ marginBottom: 0 }}>
               <label className="form-label">郵便番号</label>
@@ -767,28 +850,15 @@ function CustomerForm({ editing, onSave, onClose, customers }) {
                     const json = await res.json();
                     if (json.results && json.results[0]) {
                       const r = json.results[0];
-                      const addr = r.address1 + r.address2 + r.address3;
-                      setForm(f => ({ ...f, address: addr }));
+                      setForm(f => ({ ...f, address: r.address1 + r.address2 + r.address3 }));
                     }
                   } catch {}
-                }}>
-                住所を自動入力
-              </button>
+                }}>住所を自動入力</button>
             </div>
           </div>
           <div className="form-group" style={{ marginTop: 14, marginBottom: 0 }}>
             <label className="form-label">住所</label>
             <input className="form-input" placeholder="例：大阪府大阪市北区梅田1丁目" value={form.address} onChange={si('address')} />
-          </div>
-          <div className="form-row" style={{ marginTop: 14 }}>
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label className="form-label">職業</label>
-              <input className="form-input" placeholder="例：会社員" value={form.occupation} onChange={si('occupation')} />
-            </div>
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label className="form-label">勤務先</label>
-              <input className="form-input" placeholder="例：株式会社○○" value={form.workplace} onChange={si('workplace')} />
-            </div>
           </div>
         </div>
 
@@ -1000,8 +1070,18 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose, onRegi
         <div className="card" style={{ marginBottom: 10 }}>
           {/* 名前 + 年齢 横並び */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-            <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: -0.5 }}>{c.name}</div>
-            {c.age && (
+            <div>
+              {c.customerType === '法人' && (
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#D97706', background: '#FFFBEB', borderRadius: 6, padding: '2px 8px', display: 'inline-block', marginBottom: 4 }}>🏢 法人</div>
+              )}
+              <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: -0.5 }}>
+                {c.customerType === '法人' ? (c.corporateName || c.name) : c.name}
+              </div>
+              {c.customerType === '法人' && c.name && (
+                <div style={{ fontSize: 13, color: 'var(--text-sub)', marginTop: 2 }}>担当：{c.name}</div>
+              )}
+            </div>
+            {c.customerType !== '法人' && c.age && (
               <div style={{ textAlign: 'center', background: 'var(--accent-light)', borderRadius: 12, padding: '6px 14px', flexShrink: 0, marginLeft: 10 }}>
                 <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--accent)', lineHeight: 1 }}>{c.age}</div>
                 <div style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 700 }}>歳</div>
@@ -1011,10 +1091,23 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose, onRegi
           {/* バッジ行 – 横並び固定 */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'nowrap' }}>
             <StatusBadge status={c.status} />
+            {c.gender && (
+              <span className="badge" style={{ background: c.gender === '男性' ? '#EFF6FF' : c.gender === '女性' ? '#FDF2F8' : '#F3F4F6', color: c.gender === '男性' ? '#2563EB' : c.gender === '女性' ? '#DB2777' : '#6B7280', whiteSpace: 'nowrap' }}>
+                {c.gender}
+              </span>
+            )}
             <span className={`badge ${c.lineRegistered ? 'badge-line' : 'badge-noline'}`} style={{ whiteSpace: 'nowrap' }}>
               {c.lineRegistered ? '✓ LINE済' : 'LINE未登録'}
             </span>
           </div>
+          {/* 法人専用情報 */}
+          {c.customerType === '法人' && (c.representative || c.industry || c.employeeCount) && (
+            <div className="customer-info-row" style={{ marginBottom: 10 }}>
+              {c.representative && <div className="info-item"><div className="info-label">代表者</div><div className="info-value">{c.representative}</div></div>}
+              {c.industry && <div className="info-item"><div className="info-label">業種</div><div className="info-value">{c.industry}</div></div>}
+              {c.employeeCount && <div className="info-item"><div className="info-label">従業員数</div><div className="info-value">{c.employeeCount}名</div></div>}
+            </div>
+          )}
           {/* 連絡先・属性情報 */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {c.phone && (
@@ -1718,8 +1811,12 @@ function CustomerListTab({ customers, onSelect, onAdd }) {
               style={ (isBirthMonth || isContractMonth) ? { borderLeft: '3px solid var(--warning)' } : {} }>
               <div className="customer-card-top">
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flexWrap: 'wrap' }}>
-                  <div className="customer-name">{c.name}</div>
-                  {c.age && <div style={{ fontSize: 12, color: 'var(--text-sub)', fontWeight: 500 }}>{c.age}歳</div>}
+                  {c.customerType === '法人' && (
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#D97706', background: '#FFFBEB', borderRadius: 5, padding: '1px 6px' }}>🏢</span>
+                  )}
+                  <div className="customer-name">{c.customerType === '法人' ? (c.corporateName || c.name) : c.name}</div>
+                  {c.customerType !== '法人' && c.age && <div style={{ fontSize: 12, color: 'var(--text-sub)', fontWeight: 500 }}>{c.age}歳</div>}
+                  {c.gender && <div style={{ fontSize: 11, color: c.gender === '男性' ? '#2563EB' : '#DB2777', fontWeight: 600 }}>{c.gender}</div>}
                   {isBirthMonth && <span style={{ fontSize: 13 }}>🎂</span>}
                   {isContractMonth && <span style={{ fontSize: 13 }}>📋🔔</span>}
                 </div>
