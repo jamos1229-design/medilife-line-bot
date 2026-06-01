@@ -1059,7 +1059,7 @@ function CustomerSelect({ label, value, onChange, customers }) {
           </div>
           <div style={{ border: '1.5px solid var(--accent)', borderTop: 'none',
             borderRadius: '0 0 12px 12px', background: '#fff',
-            maxHeight: 220, overflowY: 'auto', zIndex: 100 }}>
+            maxHeight: 220, overflowY: 'auto', position: 'relative', zIndex: 101 }}>
             {/* なし */}
             <button type="button" onClick={() => { onChange(''); setOpen(false); }}
               style={{ display: 'block', width: '100%', padding: '12px 16px', border: 'none',
