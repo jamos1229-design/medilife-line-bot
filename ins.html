@@ -645,12 +645,23 @@ const calcAge = birthdate => {
   return age;
 };
 
+// ── 手動入力年齢の自動加算（入力年を記録して毎年+1）─────────
+// 入力時に ageYear（入力した西暦）を一緒に保存
+// 表示時: 入力年齢 + (今年 - 入力年) で現在の年齢を算出
+const calcStoredAge = (age, ageYear) => {
+  if (!age) return null;
+  const diff = ageYear ? new Date().getFullYear() - Number(ageYear) : 0;
+  return Number(age) + diff;
+};
+
 // ── Suspect Block ─────────────────────────────────────────────
 const RELATIONS = ['配偶者', '子供', '親', '兄弟姉妹', '友人', '職場', '知人', 'その他'];
 
 function SuspectBlock({ suspect, onChange, onRemove, index }) {
   const s = k => e => onChange({ ...suspect, [k]: e.target.value });
   const autoAge = calcAge(suspect.birthdate);
+  // 生年月日がない場合は手動年齢を入力年から自動加算
+  const displayAge = autoAge !== null ? autoAge : calcStoredAge(suspect.age, suspect.ageYear);
 
   return (
     <div style={{ background: 'var(--bg)', borderRadius: 12, padding: 12, marginBottom: 8, border: '1px solid var(--border)' }}>
@@ -676,8 +687,19 @@ function SuspectBlock({ suspect, onChange, onRemove, index }) {
       {/* 生年月日未入力の場合のみ手動年齢を表示 */}
       {!suspect.birthdate && (
         <div className="form-group" style={{ marginBottom: 8 }}>
-          <label className="form-label">年齢（生年月日がない場合）</label>
-          <input className="form-input" type="number" placeholder="例：38" value={suspect.age || ''} onChange={s('age')} />
+          <label className="form-label">
+            年齢
+            {displayAge !== null && (
+              <span style={{ marginLeft: 6, color: 'var(--accent)', fontWeight: 700 }}>
+                → 現在 {displayAge}歳
+                {suspect.ageYear && suspect.ageYear !== new Date().getFullYear() &&
+                  <span style={{ fontSize: 11, color: 'var(--text-sub)', marginLeft: 4 }}>（{suspect.ageYear}年時点で{suspect.age}歳）</span>
+                }
+              </span>
+            )}
+          </label>
+          <input className="form-input" type="number" placeholder="例：38" value={suspect.age || ''}
+            onChange={e => onChange({ ...suspect, age: e.target.value, ageYear: new Date().getFullYear() })} />
         </div>
       )}
       <div className="form-group" style={{ marginBottom: 8 }}>
@@ -827,7 +849,8 @@ function CustomerForm({ editing, onSave, onClose, customers }) {
                 </div>
                 <div className="form-group" style={{ marginBottom: 0 }}>
                   <label className="form-label">年齢</label>
-                  <input className="form-input" type="number" placeholder="例：42" value={form.age} onChange={si('age')} />
+                  <input className="form-input" type="number" placeholder="例：42" value={form.age}
+                    onChange={e => setForm(f => ({ ...f, age: e.target.value, ageYear: new Date().getFullYear() }))} />
                 </div>
               </div>
               <div className="form-row" style={{ marginTop: 14 }}>
@@ -1105,12 +1128,15 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose, onRegi
                 <div style={{ fontSize: 13, color: 'var(--text-sub)', marginTop: 2 }}>担当：{c.name}</div>
               )}
             </div>
-            {c.customerType !== '法人' && c.age && (
-              <div style={{ textAlign: 'center', background: 'var(--accent-light)', borderRadius: 12, padding: '6px 14px', flexShrink: 0, marginLeft: 10 }}>
-                <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--accent)', lineHeight: 1 }}>{c.age}</div>
-                <div style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 700 }}>歳</div>
-              </div>
-            )}
+            {c.customerType !== '法人' && (c.birthdate || c.age) && (() => {
+              const age = c.birthdate ? calcAge(c.birthdate) : calcStoredAge(c.age, c.ageYear);
+              return age !== null ? (
+                <div style={{ textAlign: 'center', background: 'var(--accent-light)', borderRadius: 12, padding: '6px 14px', flexShrink: 0, marginLeft: 10 }}>
+                  <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--accent)', lineHeight: 1 }}>{age}</div>
+                  <div style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 700 }}>歳</div>
+                </div>
+              ) : null;
+            })()}
           </div>
           {/* バッジ行 – 横並び固定 */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'nowrap' }}>
@@ -1404,13 +1430,13 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose, onRegi
                     <div>
                       <div style={{ fontSize: 16, fontWeight: 700 }}>
                         {sp.name || '（名前未入力）'}
-                        {/* 生年月日があれば自動計算、なければ手動年齢 */}
-                        {sp.birthdate
-                          ? <span style={{ fontSize: 13, color: 'var(--accent)', marginLeft: 6, fontWeight: 600 }}>{calcAge(sp.birthdate)}歳</span>
-                          : sp.age
-                          ? <span style={{ fontSize: 13, color: 'var(--text-sub)', marginLeft: 6 }}>{sp.age}歳</span>
-                          : null
-                        }
+                        {/* 生年月日→正確な満年齢、なければ入力年から自動加算 */}
+                        {(() => {
+                          const age = sp.birthdate ? calcAge(sp.birthdate) : calcStoredAge(sp.age, sp.ageYear);
+                          return age !== null
+                            ? <span style={{ fontSize: 13, color: sp.birthdate ? 'var(--accent)' : 'var(--text-sub)', marginLeft: 6, fontWeight: 600 }}>{age}歳</span>
+                            : null;
+                        })()}
                       </div>
                       {sp.birthdate && (
                         <div style={{ fontSize: 12, color: 'var(--text-sub)' }}>🎂 {fmtDateFull(sp.birthdate)}</div>
@@ -1848,7 +1874,10 @@ function CustomerListTab({ customers, onSelect, onAdd }) {
                     <span style={{ fontSize: 11, fontWeight: 700, color: '#D97706', background: '#FFFBEB', borderRadius: 5, padding: '1px 6px' }}>🏢</span>
                   )}
                   <div className="customer-name">{c.customerType === '法人' ? (c.corporateName || c.name) : c.name}</div>
-                  {c.customerType !== '法人' && c.age && <div style={{ fontSize: 12, color: 'var(--text-sub)', fontWeight: 500 }}>{c.age}歳</div>}
+                  {c.customerType !== '法人' && (c.birthdate || c.age) && (() => {
+                    const age = c.birthdate ? calcAge(c.birthdate) : calcStoredAge(c.age, c.ageYear);
+                    return age !== null ? <div style={{ fontSize: 12, color: 'var(--text-sub)', fontWeight: 500 }}>{age}歳</div> : null;
+                  })()}
                   {c.gender && <div style={{ fontSize: 11, color: c.gender === '男性' ? '#2563EB' : '#DB2777', fontWeight: 600 }}>{c.gender}</div>}
                   {isBirthMonth && <span style={{ fontSize: 13 }}>🎂</span>}
                   {isContractMonth && <span style={{ fontSize: 13 }}>📋🔔</span>}
