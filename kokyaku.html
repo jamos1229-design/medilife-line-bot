@@ -635,11 +635,23 @@ function ContractBlock({ contract, onChange, onRemove, index }) {
   );
 }
 
+// ── 年齢自動計算（生年月日→今日時点の満年齢）────────────────
+const calcAge = birthdate => {
+  if (!birthdate) return null;
+  const [y, m, d] = birthdate.split('-').map(Number);
+  const today = new Date();
+  let age = today.getFullYear() - y;
+  if (today.getMonth() + 1 < m || (today.getMonth() + 1 === m && today.getDate() < d)) age--;
+  return age;
+};
+
 // ── Suspect Block ─────────────────────────────────────────────
 const RELATIONS = ['配偶者', '子供', '親', '兄弟姉妹', '友人', '職場', '知人', 'その他'];
 
 function SuspectBlock({ suspect, onChange, onRemove, index }) {
   const s = k => e => onChange({ ...suspect, [k]: e.target.value });
+  const autoAge = calcAge(suspect.birthdate);
+
   return (
     <div style={{ background: 'var(--bg)', borderRadius: 12, padding: 12, marginBottom: 8, border: '1px solid var(--border)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -652,10 +664,22 @@ function SuspectBlock({ suspect, onChange, onRemove, index }) {
           <input className="form-input" placeholder="例：山田 次郎" value={suspect.name || ''} onChange={s('name')} />
         </div>
         <div>
-          <label className="form-label">年齢</label>
-          <input className="form-input" type="number" placeholder="例：38" value={suspect.age || ''} onChange={s('age')} />
+          <label className="form-label">
+            生年月日
+            {autoAge !== null && (
+              <span style={{ marginLeft: 6, color: 'var(--accent)', fontWeight: 700 }}>（{autoAge}歳）</span>
+            )}
+          </label>
+          <input className="form-input" type="date" value={suspect.birthdate || ''} onChange={s('birthdate')} />
         </div>
       </div>
+      {/* 生年月日未入力の場合のみ手動年齢を表示 */}
+      {!suspect.birthdate && (
+        <div className="form-group" style={{ marginBottom: 8 }}>
+          <label className="form-label">年齢（生年月日がない場合）</label>
+          <input className="form-input" type="number" placeholder="例：38" value={suspect.age || ''} onChange={s('age')} />
+        </div>
+      )}
       <div className="form-group" style={{ marginBottom: 8 }}>
         <label className="form-label">続柄・関係</label>
         <div className="toggle-group">
@@ -1380,8 +1404,17 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose, onRegi
                     <div>
                       <div style={{ fontSize: 16, fontWeight: 700 }}>
                         {sp.name || '（名前未入力）'}
-                        {sp.age && <span style={{ fontSize: 13, color: 'var(--text-sub)', marginLeft: 6 }}>{sp.age}歳</span>}
+                        {/* 生年月日があれば自動計算、なければ手動年齢 */}
+                        {sp.birthdate
+                          ? <span style={{ fontSize: 13, color: 'var(--accent)', marginLeft: 6, fontWeight: 600 }}>{calcAge(sp.birthdate)}歳</span>
+                          : sp.age
+                          ? <span style={{ fontSize: 13, color: 'var(--text-sub)', marginLeft: 6 }}>{sp.age}歳</span>
+                          : null
+                        }
                       </div>
+                      {sp.birthdate && (
+                        <div style={{ fontSize: 12, color: 'var(--text-sub)' }}>🎂 {fmtDateFull(sp.birthdate)}</div>
+                      )}
                       {sp.relation && (
                         <span style={{ fontSize: 12, fontWeight: 700, background: 'var(--accent-light)', color: 'var(--accent)', borderRadius: 6, padding: '1px 7px' }}>
                           {sp.relation}
