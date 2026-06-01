@@ -2023,8 +2023,13 @@ function AppointmentTab({ customers, onSelect }) {
 // ── CSV Export ────────────────────────────────────────────────
 function exportCSV(customers) {
   const headers = ['氏名', '年齢', '生年月日', '電話番号', 'メールアドレス', '郵便番号', '住所', '職業', '勤務先', 'LINE登録', 'ステータス', '接触方法', '最終接触日', '次回アポイント', '契約数', '証券番号一覧', '払込方法一覧', '通貨一覧', '面談メモ'];
-  const rows = customers.map(c => [
-    c.name, c.age || '', c.birthdate || '', c.phone || '', c.email || '',
+  const rows = customers.map(c => {
+    // 年齢：生年月日があれば満年齢、なければ入力年から自動加算
+    const currentAge = c.birthdate
+      ? calcAge(c.birthdate)
+      : calcStoredAge(c.age, c.ageYear);
+    return [
+    c.name, currentAge !== null ? currentAge : '', c.birthdate || '', c.phone || '', c.email || '',
     c.postalCode || '', c.address || '', c.occupation || '', c.workplace || '',
     c.lineRegistered ? '登録済' : '未登録',
     c.status || '未接触',
@@ -2036,7 +2041,8 @@ function exportCSV(customers) {
     (c.contracts || []).map(ct => ct.paymentCycle || '月払').join(' / '),
     (c.contracts || []).map(ct => ct.currency || '円').join(' / '),
     (c.memo || '').replace(/\n/g, '　'),
-  ]);
+    ];
+  });
   const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
   const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
