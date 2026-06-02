@@ -2682,9 +2682,9 @@ function App() {
   // 商談メモ（新規）
   const [memos, setMemos] = useLS('nexus_memos_v1', []);
   const [kpiSettings, setKpiSettings] = useLS('nexus_kpi_v1', { avgCommission:200000, closeRate:50, proposalRate:70, apptRate:60 });
-  // タスク（app.htmlと互換）
-  const [tasks, setTasks] = useLS('ml_tasks_v1', []);
-  const [clients, setClients] = useLS('ml_clients_v1', []);
+  // タスク・クライアント（app.htmlと同じキーで引継ぎ）
+  const [tasks, setTasks] = useLS('tasks', []);
+  const [clients, setClients] = useLS('clients', []);
 
   const [tab, setTab] = useState('dashboard');
   const [selectedCustomer, setSelectedCustomer] = useState(null);
