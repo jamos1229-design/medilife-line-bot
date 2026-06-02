@@ -2538,29 +2538,75 @@ function SuspectFormApp({ editing, onSave, onClose }) {
 const VISION_AXES  = ['ロマン','ソロバン','チャージ'];
 const VISION_TYPES = ['仕事','プライベート'];
 
+const AXIS_ICONS = { ロマン:'🌟', ソロバン:'💰', チャージ:'⚡' };
+const AXIS_COLORS = { ロマン:'#7C3AED', ソロバン:'#059669', チャージ:'#DC2626' };
+
 function VisionPanel({ vision, setVision }) {
+  const [selected, setSelected] = useState(null); // {axis, type}
+
+  // 選択セルの編集モード
+  if (selected) {
+    const key = `${selected.axis}_${selected.type}`;
+    return (
+      <div>
+        <button onClick={() => setSelected(null)}
+          style={{background:'none',border:'none',color:'var(--text-sub)',fontWeight:700,fontSize:15,cursor:'pointer',marginBottom:12,padding:0}}>
+          ← 戻る
+        </button>
+        <div className="card" style={{borderTop:`3px solid ${AXIS_COLORS[selected.axis]}`}}>
+          <div style={{fontSize:16,fontWeight:800,marginBottom:4,color:AXIS_COLORS[selected.axis]}}>
+            {AXIS_ICONS[selected.axis]} {selected.axis} × {selected.type}
+          </div>
+          <textarea className="form-textarea" style={{minHeight:200}}
+            placeholder={`${selected.axis}×${selected.type}のビジョン・目標・想いを書く...`}
+            value={vision[key]||''}
+            onChange={e => setVision(prev=>({...prev,[key]:e.target.value}))}
+            autoFocus />
+        </div>
+      </div>
+    );
+  }
+
+  // グリッド一覧
   return (
     <div>
-      <div style={{fontSize:12,color:'var(--text-sub)',marginBottom:12}}>3軸×2区分でビジョンを整理する</div>
-      {VISION_AXES.map(axis => (
-        <div key={axis} className="card" style={{marginBottom:10}}>
-          <div style={{fontSize:14,fontWeight:800,color:'var(--accent)',marginBottom:10}}>
-            {axis==='ロマン'?'🌟':'ロマン'===axis?'🌟':axis==='ソロバン'?'💰':'⚡'} {axis}
+      <div style={{fontSize:12,color:'var(--text-sub)',marginBottom:12}}>
+        セルをタップして編集 / 3軸×仕事・プライベート
+      </div>
+      {/* ヘッダー行 */}
+      <div style={{display:'grid',gridTemplateColumns:'60px 1fr 1fr',gap:4,marginBottom:4}}>
+        <div/>
+        {VISION_TYPES.map(t=>(
+          <div key={t} style={{textAlign:'center',fontSize:12,fontWeight:700,color:'var(--text-sub)',padding:'4px 0'}}>{t}</div>
+        ))}
+      </div>
+      {/* 軸ごとの行 */}
+      {VISION_AXES.map(axis=>(
+        <div key={axis} style={{display:'grid',gridTemplateColumns:'60px 1fr 1fr',gap:4,marginBottom:4}}>
+          {/* 軸ラベル */}
+          <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',
+            background:AXIS_COLORS[axis]+'20',borderRadius:10,padding:'8px 4px'}}>
+            <span style={{fontSize:18}}>{AXIS_ICONS[axis]}</span>
+            <span style={{fontSize:10,fontWeight:800,color:AXIS_COLORS[axis],marginTop:2}}>{axis}</span>
           </div>
-          <div style={{display:'flex',flexDirection:'column',gap:8}}>
-            {VISION_TYPES.map(type => {
-              const key = `${axis}_${type}`;
-              return (
-                <div key={key}>
-                  <div style={{fontSize:12,fontWeight:700,color:'var(--text-sub)',marginBottom:4}}>{type}</div>
-                  <textarea className="form-textarea" style={{minHeight:70}}
-                    placeholder={`${axis}×${type}のビジョンを書く...`}
-                    value={(vision[key]||'')}
-                    onChange={e => setVision(prev=>({...prev,[key]:e.target.value}))}/>
+          {/* 各セル */}
+          {VISION_TYPES.map(type=>{
+            const key = `${axis}_${type}`;
+            const val = vision[key]||'';
+            return (
+              <button key={type} onClick={()=>setSelected({axis,type})}
+                style={{textAlign:'left',padding:'10px 10px',borderRadius:10,cursor:'pointer',minHeight:80,
+                  border:`1.5px solid ${val?AXIS_COLORS[axis]:'var(--border)'}`,
+                  background:val?AXIS_COLORS[axis]+'10':'var(--bg)',
+                  display:'flex',flexDirection:'column',justifyContent:'space-between'}}>
+                <div style={{fontSize:12,color:val?AXIS_COLORS[axis]:'var(--text-sub)',lineHeight:1.4,
+                  overflow:'hidden',display:'-webkit-box',WebkitLineClamp:3,WebkitBoxOrient:'vertical'}}>
+                  {val || <span style={{opacity:0.4}}>タップして入力...</span>}
                 </div>
-              );
-            })}
-          </div>
+                {val && <div style={{fontSize:10,color:AXIS_COLORS[axis],marginTop:4,fontWeight:700}}>編集 ›</div>}
+              </button>
+            );
+          })}
         </div>
       ))}
     </div>
@@ -2637,6 +2683,7 @@ const MATRIX_QUADS = [
 ];
 
 function MatrixPanel({ tasks, setTasks }) {
+  const [selected, setSelected] = useState(null); // 選択中のquadrant key
   const pending = tasks.filter(t=>!t.completed);
   const getQ = t => {
     const imp = t.importance===1||t.importance===true||t.importance==='1';
@@ -2644,30 +2691,89 @@ function MatrixPanel({ tasks, setTasks }) {
     return `${imp?1:0}${urg?1:0}`;
   };
 
+  const complete = id => setTasks(prev=>prev.map(t=>t.id===id?{...t,completed:true}:t));
+
+  // 選択したQuadrantのタスク詳細
+  if (selected) {
+    const q = MATRIX_QUADS.find(x=>x.key===selected);
+    const qtasks = pending.filter(t=>getQ(t)===q.key);
+    return (
+      <div>
+        <button onClick={()=>setSelected(null)}
+          style={{background:'none',border:'none',color:'var(--text-sub)',fontWeight:700,fontSize:15,cursor:'pointer',marginBottom:12,padding:0}}>
+          ← 戻る
+        </button>
+        <div className="card" style={{borderLeft:`4px solid ${q.color}`,marginBottom:8}}>
+          <div style={{fontSize:16,fontWeight:800,color:q.color,marginBottom:2}}>{q.label}</div>
+          <div style={{fontSize:12,color:'var(--text-sub)',marginBottom:12}}>{q.desc} · {qtasks.length}件</div>
+          {qtasks.length===0
+            ? <EmptyState icon="✅" text="このカテゴリのタスクはありません"/>
+            : qtasks.map(t=>(
+              <div key={t.id} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 12px',background:'var(--bg)',borderRadius:10,marginBottom:6}}>
+                <button onClick={()=>complete(t.id)}
+                  style={{width:24,height:24,borderRadius:6,border:`2px solid ${q.color}`,background:'var(--bg)',cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center'}}/>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:14,fontWeight:600}}>{t.title}</div>
+                  {t.date&&<div style={{fontSize:11,color:'var(--text-sub)',marginTop:2}}>📅 {fmtDate(t.date)}</div>}
+                  {t.memo&&<div style={{fontSize:12,color:'var(--text-sub)',marginTop:2}}>{t.memo}</div>}
+                </div>
+              </div>
+            ))
+          }
+        </div>
+      </div>
+    );
+  }
+
+  // 2×2グリッド概要
   return (
     <div>
-      <div style={{fontSize:11,color:'var(--text-sub)',marginBottom:10}}>タスクに「重要度・緊急度」をつけると自動で分類されます</div>
-      {MATRIX_QUADS.map(q=>{
-        const qtasks = pending.filter(t=>getQ(t)===q.key);
-        return (
-          <div key={q.key} className="card" style={{marginBottom:8,borderLeft:`3px solid ${q.color}`}}>
-            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:qtasks.length?8:0}}>
-              <span style={{fontSize:12,fontWeight:800,color:q.color,background:q.bg,padding:'2px 8px',borderRadius:6}}>{q.label}</span>
-              <span style={{fontSize:11,color:'var(--text-sub)'}}>{q.desc}</span>
-              <span style={{fontSize:11,color:q.color,fontWeight:700,marginLeft:'auto'}}>{qtasks.length}件</span>
-            </div>
-            {qtasks.map(t=>(
-              <div key={t.id} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 10px',background:'var(--bg)',borderRadius:8,marginBottom:4}}>
-                <button onClick={()=>setTasks(prev=>prev.map(x=>x.id===t.id?{...x,completed:true}:x))}
-                  style={{width:20,height:20,borderRadius:5,border:`2px solid ${q.color}`,background:'var(--bg)',cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center'}}/>
-                <span style={{flex:1,fontSize:14}}>{t.title}</span>
-                {t.date&&<span style={{fontSize:11,color:'var(--text-sub)',whiteSpace:'nowrap'}}>{fmtDate(t.date)}</span>}
-              </div>
-            ))}
-            {qtasks.length===0&&<div style={{fontSize:12,color:'var(--text-sub)',textAlign:'center',padding:'4px'}}>なし</div>}
-          </div>
-        );
-      })}
+      <div style={{fontSize:11,color:'var(--text-sub)',marginBottom:10}}>
+        タスクに重要度・緊急度をつけると自動分類されます。セルをタップで詳細。
+      </div>
+      {/* 縦軸ラベル */}
+      <div style={{display:'grid',gridTemplateColumns:'36px 1fr 1fr',gridTemplateRows:'28px 1fr 1fr',gap:4}}>
+        {/* 空白コーナー */}
+        <div/>
+        {/* 横軸ラベル（緊急・非緊急） */}
+        <div style={{textAlign:'center',fontSize:11,fontWeight:700,color:'#D97706',display:'flex',alignItems:'center',justifyContent:'center',background:'#FEF3C7',borderRadius:8}}>⚡ 緊急</div>
+        <div style={{textAlign:'center',fontSize:11,fontWeight:700,color:'var(--text-sub)',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--bg)',borderRadius:8}}>非緊急</div>
+        {/* 重要行 */}
+        <div style={{display:'flex',alignItems:'center',justifyContent:'center',background:'#FEF2F2',borderRadius:8,writingMode:'vertical-rl'}}>
+          <span style={{fontSize:10,fontWeight:700,color:'var(--danger)',transform:'rotate(180deg)'}}>重要</span>
+        </div>
+        {MATRIX_QUADS.filter(q=>q.imp).map(q=>{
+          const count = pending.filter(t=>getQ(t)===q.key).length;
+          return (
+            <button key={q.key} onClick={()=>setSelected(q.key)}
+              style={{padding:'14px 10px',borderRadius:12,border:`2px solid ${count>0?q.color:'var(--border)'}`,
+                background:count>0?q.bg:'var(--bg)',cursor:'pointer',textAlign:'center'}}>
+              <div style={{fontSize:13,fontWeight:800,color:q.color,marginBottom:4}}>{q.label}</div>
+              <div style={{fontSize:26,fontWeight:800,color:count>0?q.color:'var(--text-sub)'}}>{count}</div>
+              <div style={{fontSize:10,color:'var(--text-sub)'}}>件</div>
+            </button>
+          );
+        })}
+        {/* 非重要行 */}
+        <div style={{display:'flex',alignItems:'center',justifyContent:'center',background:'#F3F4F6',borderRadius:8}}>
+          <span style={{fontSize:10,fontWeight:700,color:'var(--text-sub)',writingMode:'vertical-rl',transform:'rotate(180deg)'}}>非重要</span>
+        </div>
+        {MATRIX_QUADS.filter(q=>!q.imp).map(q=>{
+          const count = pending.filter(t=>getQ(t)===q.key).length;
+          return (
+            <button key={q.key} onClick={()=>setSelected(q.key)}
+              style={{padding:'14px 10px',borderRadius:12,border:`2px solid ${count>0?q.color:'var(--border)'}`,
+                background:count>0?q.bg:'var(--bg)',cursor:'pointer',textAlign:'center'}}>
+              <div style={{fontSize:13,fontWeight:800,color:q.color,marginBottom:4}}>{q.label}</div>
+              <div style={{fontSize:26,fontWeight:800,color:count>0?q.color:'var(--text-sub)'}}>{count}</div>
+              <div style={{fontSize:10,color:'var(--text-sub)'}}>件</div>
+            </button>
+          );
+        })}
+      </div>
+      <div style={{fontSize:11,color:'var(--text-sub)',textAlign:'center',marginTop:8}}>
+        ※タスク追加時に「重要」「緊急」を設定してください
+      </div>
     </div>
   );
 }
