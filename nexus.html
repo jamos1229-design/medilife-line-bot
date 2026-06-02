@@ -654,6 +654,53 @@ const calcStoredAge = (age, ageYear) => {
   return Number(age) + diff;
 };
 
+// ── 顧客ランク自動判定 ────────────────────────────────────────
+// S: 複数契約 + (紹介あり or 高額)
+// A: 1件以上契約 + (高額 or 紹介あり)
+// B: 1件以上契約
+// C: アポ済・面談済・フォロー中
+// D: 未接触
+const RANK_INFO = {
+  S: { label:'Sランク', color:'#D97706', bg:'#FEF3C7', desc:'高額・紹介力・追加余地あり' },
+  A: { label:'Aランク', color:'#7C3AED', bg:'#F5F3FF', desc:'追加契約余地あり' },
+  B: { label:'Bランク', color:'#2563EB', bg:'#EFF6FF', desc:'保全中心' },
+  C: { label:'Cランク', color:'#059669', bg:'#ECFDF5', desc:'育成中' },
+  D: { label:'Dランク', color:'#9CA3AF', bg:'#F3F4F6', desc:'低接触' },
+};
+
+const calcCustomerRank = (c, allCustomers) => {
+  const contracts = c.contracts || [];
+  const referredToIds = Array.isArray(c.referredTo) ? c.referredTo : (c.referredTo ? [c.referredTo] : []);
+  const hasReferrals = referredToIds.length > 0 || (allCustomers || []).some(x => x.referredBy === c.id);
+
+  // 年間保険料合計（円換算）
+  let annualJpy = 0;
+  contracts.forEach(ct => {
+    const amt = Number(ct.premium) || 0;
+    const jpy = Number(ct.premiumJpy) || 0;
+    const rate = Number(ct.exchangeRate) || 1;
+    const cur = ct.currency || '円';
+    const cyc = ct.paymentCycle || '月払';
+    if (cyc === '一時払') return;
+    const annual = cyc === '年払' ? amt : amt * 12;
+    annualJpy += cur === 'ドル' ? (jpy || annual * rate) : annual;
+  });
+  const lumpJpy = contracts.reduce((s, ct) => {
+    if (ct.paymentCycle !== '一時払') return s;
+    const cur = ct.currency || '円';
+    return s + (cur === 'ドル' ? (Number(ct.premiumJpy) || 0) : (Number(ct.premium) || 0));
+  }, 0);
+
+  const isHighValue = annualJpy >= 600000 || lumpJpy >= 3000000;
+  const cnt = contracts.length;
+
+  if (cnt >= 2 && (hasReferrals || isHighValue)) return 'S';
+  if (cnt >= 1 && (isHighValue || hasReferrals)) return 'A';
+  if (cnt >= 1) return 'B';
+  if (['アポ済','面談済','フォロー中'].includes(c.status)) return 'C';
+  return 'D';
+};
+
 // ── Suspect Block ─────────────────────────────────────────────
 const RELATIONS = ['配偶者', '子供', '親', '兄弟姉妹', '友人', '職場', '知人', 'その他'];
 
@@ -1137,6 +1184,8 @@ function CustomerSelect({ label, value, onChange, customers, multi = false }) {
 function CustomerDetail({ customer, customers, onEdit, onDelete, onClose, onRegisterSuspect }) {
   const [confirmDel, setConfirmDel] = useState(false);
   const c = customer;
+  const rank = calcCustomerRank(c, customers);
+  const ri = RANK_INFO[rank];
   const referredByCustomer = customers.find(x => x.id === c.referredBy);
   // referredTo は配列・文字列どちらも互換対応
   const referredToIds = Array.isArray(c.referredTo)
@@ -1184,7 +1233,8 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose, onRegi
             })()}
           </div>
           {/* バッジ行 – 横並び固定 */}
-          <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'nowrap' }}>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+            <span style={{ fontSize:12, fontWeight:800, padding:'3px 10px', borderRadius:20, background:ri.bg, color:ri.color }}>{ri.label}</span>
             <StatusBadge status={c.status} />
             {c.gender && (
               <span className="badge" style={{ background: c.gender === '男性' ? '#EFF6FF' : c.gender === '女性' ? '#FDF2F8' : '#F3F4F6', color: c.gender === '男性' ? '#2563EB' : c.gender === '女性' ? '#DB2777' : '#6B7280', whiteSpace: 'nowrap' }}>
@@ -1563,14 +1613,14 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose, onRegi
 }
 
 // ── Tab: Dashboard ────────────────────────────────────────────
-function DashboardTab({ customers, onNavigate }) {
+function DashboardTab({ customers, onNavigate, kpiSettings, setKpiSettings }) {
   const total = customers.length;
   const lineCount = customers.filter(c => c.lineRegistered).length;
   const thisMonth = thisMonthStr();
-  // 今月の月番号（整数で比較してゼロ埋め問題を回避）
-  const nowM = new Date().getMonth() + 1; // 1〜12の整数
+  const nowM = new Date().getMonth() + 1;
   const apptThisMonth = customers.filter(c => c.nextAppt && c.nextAppt.startsWith(thisMonth)).length;
   const noContact = customers.filter(c => !c.status || c.status === '未接触').length;
+  const [showKpi, setShowKpi] = useState(false);
 
   const today = todayStr();
   const upcoming = customers
@@ -1612,6 +1662,36 @@ function DashboardTab({ customers, onNavigate }) {
     ...s,
     count: customers.filter(c => (c.status || '未接触') === s.key).length,
   }));
+
+  // Goldmine：ランク上位で最近接触していない顧客TOP5
+  const goldmine = [...customers]
+    .map(c => ({ ...c, _rank: calcCustomerRank(c, customers) }))
+    .filter(c => ['S','A','B'].includes(c._rank))
+    .sort((a, b) => {
+      const rankOrder = {S:0,A:1,B:2,C:3,D:4};
+      if (rankOrder[a._rank] !== rankOrder[b._rank]) return rankOrder[a._rank] - rankOrder[b._rank];
+      // 最終接触が古い順
+      const da = a.lastContact || '0000-00-00';
+      const db = b.lastContact || '0000-00-00';
+      return da.localeCompare(db);
+    })
+    .slice(0, 5);
+
+  // KPI逆算計算
+  const kpi = kpiSettings;
+  const calc = (target) => {
+    const avg = Number(kpi.avgCommission) || 200000;
+    const closeRate = (Number(kpi.closeRate) || 50) / 100;
+    const propRate = (Number(kpi.proposalRate) || 70) / 100;
+    const apptRate = (Number(kpi.apptRate) || 60) / 100;
+    const needed_close = Math.ceil(target / avg);
+    const needed_prop = Math.ceil(needed_close / closeRate);
+    const needed_meet = Math.ceil(needed_prop / propRate);
+    const needed_appt = Math.ceil(needed_meet / apptRate);
+    return { needed_close, needed_prop, needed_meet, needed_appt };
+  };
+  const kpi200 = calc(2000000);
+  const kpi1000 = calc(10000000);
 
   return (
     <div>
@@ -1739,6 +1819,103 @@ function DashboardTab({ customers, onNavigate }) {
           )}
         </div>
       )}
+
+      {/* Goldmine アラート */}
+      {goldmine.length > 0 && (
+        <div className="card" style={{ marginBottom:10, borderLeft:'4px solid #D97706' }}>
+          <div className="card-title" style={{ color:'#D97706' }}>⭐ Goldmine — 今月接触すべき顧客</div>
+          {goldmine.map(c => {
+            const ri = RANK_INFO[c._rank];
+            const daysSince = c.lastContact
+              ? Math.floor((new Date() - new Date(c.lastContact)) / 86400000)
+              : null;
+            return (
+              <div key={c.id} onClick={() => onNavigate('customers', c)}
+                style={{ display:'flex', alignItems:'center', justifyContent:'space-between',
+                  padding:'10px 10px', background:'#FFFBEB', borderRadius:10, marginBottom:6, cursor:'pointer' }}>
+                <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                  <span style={{ fontSize:11, fontWeight:800, padding:'2px 7px', borderRadius:6, background:ri.bg, color:ri.color }}>{ri.label}</span>
+                  <div>
+                    <div style={{ fontSize:14, fontWeight:700 }}>{c.customerType==='法人'?(c.corporateName||c.name):c.name}</div>
+                    <div style={{ fontSize:11, color:'var(--text-sub)' }}>
+                      {daysSince !== null ? `${daysSince}日前に最終接触` : '接触履歴なし'}
+                    </div>
+                  </div>
+                </div>
+                <span style={{ color:'var(--text-sub)', fontSize:13 }}>›</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* 月商逆算KPI */}
+      <div className="card" style={{ marginBottom:10 }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:showKpi?12:0 }}>
+          <div className="card-title" style={{ marginBottom:0 }}>📊 月商逆算KPI</div>
+          <button onClick={() => setShowKpi(v=>!v)}
+            style={{ fontSize:12, padding:'4px 10px', borderRadius:8, border:'1.5px solid var(--border)', background:'var(--bg)', cursor:'pointer', color:'var(--text-sub)', fontWeight:600 }}>
+            {showKpi ? '▲ 閉じる' : '▼ 開く'}
+          </button>
+        </div>
+        {showKpi && (
+          <>
+            {/* 設定 */}
+            <div style={{ background:'var(--bg)', borderRadius:10, padding:'10px 12px', marginBottom:12 }}>
+              <div style={{ fontSize:12, fontWeight:700, color:'var(--text-sub)', marginBottom:8 }}>設定（タップで変更）</div>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+                {[
+                  { key:'avgCommission', label:'平均手数料（円）', placeholder:'200000' },
+                  { key:'closeRate', label:'成約率（%）', placeholder:'50' },
+                  { key:'proposalRate', label:'提案化率（%）', placeholder:'70' },
+                  { key:'apptRate', label:'アポ率（%）', placeholder:'60' },
+                ].map(({ key, label, placeholder }) => (
+                  <div key={key}>
+                    <div style={{ fontSize:11, color:'var(--text-sub)', marginBottom:3 }}>{label}</div>
+                    <input className="form-input" type="number" placeholder={placeholder}
+                      style={{ padding:'8px 10px', fontSize:14, minHeight:36 }}
+                      value={kpi[key] || ''} onChange={e => setKpiSettings(prev => ({...prev, [key]: e.target.value}))} />
+                  </div>
+                ))}
+              </div>
+            </div>
+            {/* 200万 */}
+            <div style={{ marginBottom:10 }}>
+              <div style={{ fontSize:13, fontWeight:700, color:'#2563EB', marginBottom:6 }}>🎯 月200万円達成</div>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
+                {[
+                  { label:'必要成約', value:kpi200.needed_close, unit:'件' },
+                  { label:'必要提案', value:kpi200.needed_prop, unit:'件' },
+                  { label:'必要面談', value:kpi200.needed_meet, unit:'件' },
+                  { label:'必要アプローチ', value:kpi200.needed_appt, unit:'件' },
+                ].map(({ label, value, unit }) => (
+                  <div key={label} style={{ background:'#EFF6FF', borderRadius:8, padding:'8px 10px', textAlign:'center' }}>
+                    <div style={{ fontSize:10, color:'#2563EB', fontWeight:700 }}>{label}</div>
+                    <div style={{ fontSize:22, fontWeight:800, color:'#1D4ED8' }}>{value}<span style={{fontSize:12}}>{unit}</span></div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {/* 1000万 */}
+            <div>
+              <div style={{ fontSize:13, fontWeight:700, color:'#D97706', marginBottom:6 }}>🚀 月1,000万円達成</div>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
+                {[
+                  { label:'必要成約', value:kpi1000.needed_close, unit:'件' },
+                  { label:'必要提案', value:kpi1000.needed_prop, unit:'件' },
+                  { label:'必要面談', value:kpi1000.needed_meet, unit:'件' },
+                  { label:'必要アプローチ', value:kpi1000.needed_appt, unit:'件' },
+                ].map(({ label, value, unit }) => (
+                  <div key={label} style={{ background:'#FEF3C7', borderRadius:8, padding:'8px 10px', textAlign:'center' }}>
+                    <div style={{ fontSize:10, color:'#D97706', fontWeight:700 }}>{label}</div>
+                    <div style={{ fontSize:22, fontWeight:800, color:'#B45309' }}>{value}<span style={{fontSize:12}}>{unit}</span></div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
 
       {/* ステータス内訳 */}
       <div className="card">
@@ -1920,11 +2097,14 @@ function CustomerListTab({ customers, onSelect, onAdd }) {
             const m = parseInt(ct.date.split('-')[1], 10);
             return m === nowM2 || m === nM1 || m === nM2;
           });
+          const rank = calcCustomerRank(c, customers);
+          const ri = RANK_INFO[rank];
           return (
             <div key={c.id} className="customer-card" onClick={() => onSelect(c)}
-              style={ (isBirthMonth || isContractMonth) ? { borderLeft: '3px solid var(--warning)' } : {} }>
+              style={ (isBirthMonth || isContractMonth) ? { borderLeft: '3px solid var(--warning)' } : rank === 'S' ? { borderLeft:'3px solid #D97706' } : {} }>
               <div className="customer-card-top">
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize:11, fontWeight:800, padding:'1px 6px', borderRadius:5, background:ri.bg, color:ri.color, flexShrink:0 }}>{ri.label}</span>
                   {c.customerType === '法人' && (
                     <span style={{ fontSize: 11, fontWeight: 700, color: '#D97706', background: '#FFFBEB', borderRadius: 5, padding: '1px 6px' }}>🏢</span>
                   )}
@@ -2501,6 +2681,7 @@ function App() {
   const [customers, setCustomers] = useLS('customers_v1', []);
   // 商談メモ（新規）
   const [memos, setMemos] = useLS('nexus_memos_v1', []);
+  const [kpiSettings, setKpiSettings] = useLS('nexus_kpi_v1', { avgCommission:200000, closeRate:50, proposalRate:70, apptRate:60 });
   // タスク（app.htmlと互換）
   const [tasks, setTasks] = useLS('ml_tasks_v1', []);
   const [clients, setClients] = useLS('ml_clients_v1', []);
@@ -2563,7 +2744,7 @@ function App() {
       {/* Content */}
       <div className="content">
         {tab === 'dashboard' && (
-          <DashboardTab customers={customers} onNavigate={(t, c) => {
+          <DashboardTab customers={customers} kpiSettings={kpiSettings} setKpiSettings={setKpiSettings} onNavigate={(t, c) => {
             setTab(t === 'customers' ? 'list' : t);
             if (c) setSelectedCustomer(c);
           }} />
