@@ -2444,7 +2444,319 @@ const CLIENT_STATUSES = [
   { key:'完了',   color:'#9CA3AF', bg:'#F3F4F6' },
 ];
 
-function TaskTab({ tasks, setTasks, clients, setClients }) {
+// ── サスペクト（app.html互換）────────────────────────────────
+const SUSPECT_STATUSES = ['未接触','接触済み','育成中','アポ済','成約','断り'];
+const LIFE_STAGES = ['単身','結婚','妊娠・出産','子育て','住宅購入','教育費','老後準備','退職','相続','その他'];
+
+function SuspectsPanel({ suspects, setSuspects }) {
+  const [filter, setFilter] = useState('すべて');
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
+
+  const filtered = suspects.filter(s => filter === 'すべて' || s.status === filter);
+  const save = sp => {
+    setSuspects(prev => {
+      const idx = prev.findIndex(x => x.id === sp.id);
+      return idx >= 0 ? prev.map((x,i)=>i===idx?sp:x) : [...prev, sp];
+    });
+    setShowForm(false); setEditing(null);
+  };
+  const del = id => setSuspects(prev => prev.filter(x => x.id !== id));
+
+  return (
+    <div>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+        <div style={{fontSize:12,color:'var(--text-sub)'}}>サスペクト {suspects.length}人</div>
+        <button className="btn btn-primary btn-sm" onClick={()=>{setEditing(null);setShowForm(true)}}>＋ 追加</button>
+      </div>
+      <div className="filter-chips" style={{marginBottom:8}}>
+        {['すべて',...SUSPECT_STATUSES].map(s=>(
+          <button key={s} className={`chip ${filter===s?'active':''}`} onClick={()=>setFilter(s)}>{s}</button>
+        ))}
+      </div>
+      {filtered.length===0 ? <EmptyState icon="👤" text="サスペクトを追加してください" /> : filtered.map(sp=>(
+        <div key={sp.id} className="card" style={{marginBottom:8}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:4}}>
+            <div style={{fontSize:16,fontWeight:700}}>{sp.name}
+              {sp.age && <span style={{fontSize:12,color:'var(--text-sub)',marginLeft:6}}>{sp.age}歳</span>}
+            </div>
+            <div style={{display:'flex',gap:6}}>
+              <span style={{fontSize:11,padding:'2px 8px',borderRadius:10,background:'var(--accent-light)',color:'var(--accent)',fontWeight:700}}>{sp.status||'未接触'}</span>
+              <button onClick={()=>{setEditing(sp);setShowForm(true)}} style={{padding:'3px 8px',borderRadius:6,border:'1.5px solid var(--border)',background:'var(--bg)',fontSize:12,cursor:'pointer'}}>編集</button>
+              <button onClick={()=>del(sp.id)} style={{padding:'3px 8px',borderRadius:6,border:'none',background:'#FEF2F2',color:'var(--danger)',fontSize:12,cursor:'pointer'}}>削除</button>
+            </div>
+          </div>
+          {sp.lifeStage && <span style={{fontSize:11,background:'#F3F4F6',color:'var(--text-sub)',padding:'1px 7px',borderRadius:6}}>{sp.lifeStage}</span>}
+          {sp.approachDate && <div style={{fontSize:12,color:'var(--text-sub)',marginTop:4}}>📅 アプローチ：{fmtDateFull(sp.approachDate)}</div>}
+          {sp.memo && <div style={{fontSize:13,color:'var(--text-sub)',marginTop:4}}>{sp.memo}</div>}
+        </div>
+      ))}
+      {showForm && (
+        <div className="overlay" onClick={()=>{setShowForm(false);setEditing(null)}}>
+          <div className="drawer" onClick={e=>e.stopPropagation()}>
+            <div className="drawer-handle"/>
+            <div className="drawer-title">{editing?'サスペクト編集':'サスペクト追加'}</div>
+            <SuspectFormApp editing={editing} onSave={save} onClose={()=>{setShowForm(false);setEditing(null)}} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SuspectFormApp({ editing, onSave, onClose }) {
+  const [form, setForm] = useState({id:'',name:'',age:'',status:'未接触',lifeStage:'',approachDate:'',memo:'',...(editing||{})});
+  const si = k => e => setForm(f=>({...f,[k]:e.target.value}));
+  const save = () => { if(!form.name.trim()) return; onSave({...form,id:form.id||uid()}); };
+  return (
+    <>
+      <div className="form-row" style={{marginBottom:8}}>
+        <div><label className="form-label">名前 *</label><input className="form-input" placeholder="例：田中太郎" value={form.name} onChange={si('name')} autoFocus/></div>
+        <div><label className="form-label">年齢</label><input className="form-input" type="number" placeholder="例：35" value={form.age} onChange={si('age')}/></div>
+      </div>
+      <div className="form-group"><label className="form-label">ステータス</label>
+        <div className="toggle-group">{SUSPECT_STATUSES.slice(0,4).map(s=>(
+          <button key={s} type="button" className={`toggle-btn ${form.status===s?'sel':''}`} onClick={()=>setForm(f=>({...f,status:s}))} style={{minWidth:'unset',flex:'none',padding:'8px 10px',fontSize:12}}>{s}</button>
+        ))}</div>
+      </div>
+      <div className="form-group"><label className="form-label">ライフステージ</label>
+        <div className="toggle-group">{LIFE_STAGES.map(s=>(
+          <button key={s} type="button" className={`toggle-btn ${form.lifeStage===s?'sel':''}`} onClick={()=>setForm(f=>({...f,lifeStage:f.lifeStage===s?'':s}))} style={{minWidth:'unset',flex:'none',padding:'7px 8px',fontSize:11}}>{s}</button>
+        ))}</div>
+      </div>
+      <div className="form-group"><label className="form-label">アプローチ予定日</label><input className="form-input" type="date" value={form.approachDate} onChange={si('approachDate')}/></div>
+      <div className="form-group"><label className="form-label">メモ</label><textarea className="form-textarea" style={{minHeight:60}} placeholder="保険状況・ニーズ・紹介元など" value={form.memo} onChange={si('memo')}/></div>
+      <div style={{display:'flex',gap:10,marginTop:8}}>
+        <button className="btn btn-outline btn-full" onClick={onClose}>キャンセル</button>
+        <button className="btn btn-primary btn-full" onClick={save}>保存</button>
+      </div>
+    </>
+  );
+}
+
+// ── 神メモ（ビジョン）────────────────────────────────────────
+const VISION_AXES  = ['ロマン','ソロバン','チャージ'];
+const VISION_TYPES = ['仕事','プライベート'];
+
+function VisionPanel({ vision, setVision }) {
+  return (
+    <div>
+      <div style={{fontSize:12,color:'var(--text-sub)',marginBottom:12}}>3軸×2区分でビジョンを整理する</div>
+      {VISION_AXES.map(axis => (
+        <div key={axis} className="card" style={{marginBottom:10}}>
+          <div style={{fontSize:14,fontWeight:800,color:'var(--accent)',marginBottom:10}}>
+            {axis==='ロマン'?'🌟':'ロマン'===axis?'🌟':axis==='ソロバン'?'💰':'⚡'} {axis}
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            {VISION_TYPES.map(type => {
+              const key = `${axis}_${type}`;
+              return (
+                <div key={key}>
+                  <div style={{fontSize:12,fontWeight:700,color:'var(--text-sub)',marginBottom:4}}>{type}</div>
+                  <textarea className="form-textarea" style={{minHeight:70}}
+                    placeholder={`${axis}×${type}のビジョンを書く...`}
+                    value={(vision[key]||'')}
+                    onChange={e => setVision(prev=>({...prev,[key]:e.target.value}))}/>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── ガントチャート ────────────────────────────────────────────
+function GanttPanel({ tasks }) {
+  const today = new Date(); today.setHours(0,0,0,0);
+  // 今日から8週間（56日）
+  const days = Array.from({length:56},(_,i)=>{
+    const d = new Date(today); d.setDate(d.getDate()+i); return d;
+  });
+  const weeks = [];
+  for(let i=0;i<56;i+=7) weeks.push(days.slice(i,i+7));
+
+  const withDate = tasks.filter(t=>t.date && !t.completed);
+  const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+
+  if(withDate.length===0) return <EmptyState icon="📅" text="期日付きタスクがありません" />;
+
+  return (
+    <div style={{overflowX:'auto'}}>
+      {weeks.map((week,wi)=>{
+        const tasksInWeek = withDate.filter(t=>week.some(d=>fmt(d)===t.date));
+        if(tasksInWeek.length===0) return null;
+        return (
+          <div key={wi} className="card" style={{marginBottom:8}}>
+            <div style={{fontSize:12,fontWeight:700,color:'var(--text-sub)',marginBottom:8}}>
+              {week[0].getMonth()+1}/{week[0].getDate()} 〜 {week[6].getMonth()+1}/{week[6].getDate()}
+            </div>
+            <div style={{display:'flex',gap:2,marginBottom:8}}>
+              {week.map((d,di)=>{
+                const isToday = fmt(d)===fmt(today);
+                const hasTasks = tasksInWeek.some(t=>t.date===fmt(d));
+                return (
+                  <div key={di} style={{flex:1,textAlign:'center',padding:'4px 2px',borderRadius:6,
+                    background:isToday?'var(--accent)':hasTasks?'var(--accent-light)':'var(--bg)',
+                    color:isToday?'#fff':hasTasks?'var(--accent)':'var(--text-sub)',fontSize:11,fontWeight:isToday?800:400}}>
+                    <div>{['日','月','火','水','木','金','土'][d.getDay()]}</div>
+                    <div style={{fontWeight:700}}>{d.getDate()}</div>
+                    {hasTasks&&<div style={{width:5,height:5,borderRadius:'50%',background:isToday?'#fff':'var(--accent)',margin:'2px auto 0'}}/>}
+                  </div>
+                );
+              })}
+            </div>
+            {tasksInWeek.map(t=>{
+              const td = new Date(t.date); td.setHours(0,0,0,0);
+              const overdue = td < today;
+              return (
+                <div key={t.id} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 10px',
+                  background:overdue?'#FEF2F2':'var(--bg)',borderRadius:8,marginBottom:4}}>
+                  <span style={{fontSize:12,fontWeight:700,color:overdue?'var(--danger)':'var(--text-sub)',whiteSpace:'nowrap'}}>
+                    {new Date(t.date).getMonth()+1}/{new Date(t.date).getDate()}
+                  </span>
+                  <span style={{fontSize:14,flex:1}}>{t.title}</span>
+                  {overdue&&<span style={{fontSize:10,color:'var(--danger)',fontWeight:700}}>期限切れ</span>}
+                </div>
+              );
+            })}
+          </div>
+        );
+      }).filter(Boolean)}
+    </div>
+  );
+}
+
+// ── マトリクス ────────────────────────────────────────────────
+const MATRIX_QUADS = [
+  {key:'11',label:'すぐやる',  desc:'重要×緊急',   color:'#EF4444',bg:'#FEF2F2',imp:true, urg:true},
+  {key:'10',label:'計画する',  desc:'重要×非緊急', color:'#2563EB',bg:'#EFF6FF',imp:true, urg:false},
+  {key:'01',label:'委任する',  desc:'非重要×緊急', color:'#D97706',bg:'#FEF3C7',imp:false,urg:true},
+  {key:'00',label:'減らす',    desc:'非重要×非緊急',color:'#9CA3AF',bg:'#F3F4F6',imp:false,urg:false},
+];
+
+function MatrixPanel({ tasks, setTasks }) {
+  const pending = tasks.filter(t=>!t.completed);
+  const getQ = t => {
+    const imp = t.importance===1||t.importance===true||t.importance==='1';
+    const urg = t.urgency===1||t.urgency===true||t.urgency==='1';
+    return `${imp?1:0}${urg?1:0}`;
+  };
+
+  return (
+    <div>
+      <div style={{fontSize:11,color:'var(--text-sub)',marginBottom:10}}>タスクに「重要度・緊急度」をつけると自動で分類されます</div>
+      {MATRIX_QUADS.map(q=>{
+        const qtasks = pending.filter(t=>getQ(t)===q.key);
+        return (
+          <div key={q.key} className="card" style={{marginBottom:8,borderLeft:`3px solid ${q.color}`}}>
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:qtasks.length?8:0}}>
+              <span style={{fontSize:12,fontWeight:800,color:q.color,background:q.bg,padding:'2px 8px',borderRadius:6}}>{q.label}</span>
+              <span style={{fontSize:11,color:'var(--text-sub)'}}>{q.desc}</span>
+              <span style={{fontSize:11,color:q.color,fontWeight:700,marginLeft:'auto'}}>{qtasks.length}件</span>
+            </div>
+            {qtasks.map(t=>(
+              <div key={t.id} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 10px',background:'var(--bg)',borderRadius:8,marginBottom:4}}>
+                <button onClick={()=>setTasks(prev=>prev.map(x=>x.id===t.id?{...x,completed:true}:x))}
+                  style={{width:20,height:20,borderRadius:5,border:`2px solid ${q.color}`,background:'var(--bg)',cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center'}}/>
+                <span style={{flex:1,fontSize:14}}>{t.title}</span>
+                {t.date&&<span style={{fontSize:11,color:'var(--text-sub)',whiteSpace:'nowrap'}}>{fmtDate(t.date)}</span>}
+              </div>
+            ))}
+            {qtasks.length===0&&<div style={{fontSize:12,color:'var(--text-sub)',textAlign:'center',padding:'4px'}}>なし</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── ログ ──────────────────────────────────────────────────────
+const LOG_CATS = ['面談','電話','メール','アポ','提案','成約','保全','その他'];
+
+function LogPanel({ logs, setLogs }) {
+  const [showForm, setShowForm] = useState(false);
+  const sorted = [...logs].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+
+  const save = log => {
+    setLogs(prev=>[{...log,id:log.id||uid()},...prev.filter(x=>x.id!==log.id)]);
+    setShowForm(false);
+  };
+  const del = id => setLogs(prev=>prev.filter(x=>x.id!==id));
+
+  return (
+    <div>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}}>
+        <div style={{fontSize:12,color:'var(--text-sub)'}}>{logs.length}件の活動記録</div>
+        <button className="btn btn-primary btn-sm" onClick={()=>setShowForm(true)}>＋ 記録追加</button>
+      </div>
+      {sorted.length===0 ? <EmptyState icon="📝" text="活動を記録してください" /> : sorted.slice(0,30).map(log=>(
+        <div key={log.id} className="card" style={{marginBottom:8,padding:'10px 12px'}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:4}}>
+            <div style={{display:'flex',alignItems:'center',gap:6}}>
+              <span style={{fontSize:11,fontWeight:700,padding:'2px 8px',borderRadius:6,background:'var(--accent-light)',color:'var(--accent)'}}>{log.category||'その他'}</span>
+              <span style={{fontSize:12,color:'var(--text-sub)'}}>{log.date?fmtDateFull(log.date):''}</span>
+            </div>
+            <button onClick={()=>del(log.id)} style={{background:'none',border:'none',color:'var(--text-sub)',cursor:'pointer',fontSize:16}}>×</button>
+          </div>
+          {log.content&&<div style={{fontSize:14,lineHeight:1.5}}>{log.content}</div>}
+          {log.duration&&<div style={{fontSize:11,color:'var(--text-sub)',marginTop:4}}>⏱ {log.duration}分</div>}
+        </div>
+      ))}
+      {showForm&&(
+        <div className="overlay" onClick={()=>setShowForm(false)}>
+          <div className="drawer" onClick={e=>e.stopPropagation()}>
+            <div className="drawer-handle"/>
+            <div className="drawer-title">活動を記録</div>
+            <LogForm onSave={save} onClose={()=>setShowForm(false)}/>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LogForm({ onSave, onClose }) {
+  const [form,setForm] = useState({id:'',date:todayStr(),category:'面談',content:'',duration:''});
+  const si = k => e => setForm(f=>({...f,[k]:e.target.value}));
+  const save = () => { if(!form.content.trim()) return; onSave(form); };
+  return (
+    <>
+      <div className="form-row" style={{marginBottom:8}}>
+        <div><label className="form-label">日付</label><input className="form-input" type="date" value={form.date} onChange={si('date')}/></div>
+        <div><label className="form-label">時間（分）</label><input className="form-input" type="number" placeholder="例：60" value={form.duration} onChange={si('duration')}/></div>
+      </div>
+      <div className="form-group"><label className="form-label">カテゴリ</label>
+        <div className="toggle-group">{LOG_CATS.map(c=>(
+          <button key={c} type="button" className={`toggle-btn ${form.category===c?'sel':''}`}
+            style={{minWidth:'unset',flex:'none',padding:'7px 8px',fontSize:12}}
+            onClick={()=>setForm(f=>({...f,category:c}))}>{c}</button>
+        ))}</div>
+      </div>
+      <div className="form-group"><label className="form-label">内容</label>
+        <textarea className="form-textarea" style={{minHeight:80}} placeholder="活動内容を記録..." value={form.content} onChange={si('content')} autoFocus/></div>
+      <div style={{display:'flex',gap:10,marginTop:8}}>
+        <button className="btn btn-outline btn-full" onClick={onClose}>キャンセル</button>
+        <button className="btn btn-primary btn-full" onClick={save}>記録する</button>
+      </div>
+    </>
+  );
+}
+
+// ── TaskTab (統合版) ──────────────────────────────────────────
+const TASK_SUBTABS = [
+  {key:'today',  label:'今日',    icon:'📋'},
+  {key:'matrix', label:'マトリクス',icon:'🔢'},
+  {key:'clients',label:'クライアント',icon:'💼'},
+  {key:'vision', label:'神メモ',  icon:'🌟'},
+  {key:'gantt',  label:'ガント',  icon:'📅'},
+  {key:'suspects',label:'サスペクト',icon:'👤'},
+  {key:'log',    label:'ログ',    icon:'📝'},
+];
+
+function TaskTab({ tasks, setTasks, clients, setClients, vision, setVision, suspects, setSuspects, logs, setLogs }) {
+  const [subTab, setSubTab] = useState('today');
   const [clientFilter, setClientFilter] = useState('進行中');
   const [showClientForm, setShowClientForm] = useState(false);
   const [editingClient, setEditingClient] = useState(null);
@@ -2484,115 +2796,133 @@ function TaskTab({ tasks, setTasks, clients, setClients }) {
 
   return (
     <div>
-      {/* 見込みAC */}
-      <div className="card" style={{ background:'var(--accent-light)', border:'1.5px solid var(--accent)', marginBottom:10 }}>
-        <div style={{ fontSize:12, fontWeight:700, color:'var(--accent)', marginBottom:4 }}>💰 見込みAC合計（進行中）</div>
-        <div style={{ fontSize:32, fontWeight:800, color:'var(--accent)' }}>{totalAC.toLocaleString()} <span style={{ fontSize:16 }}>万円</span></div>
-        <div style={{ fontSize:12, color:'var(--text-sub)', marginTop:2 }}>{activeClients.length}人の進行中クライアント</div>
-      </div>
-
-      {/* 見込み客 */}
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
-        <div className="section-header" style={{ marginBottom:0, marginTop:0 }}>見込み客</div>
-        <button className="btn btn-primary btn-sm" onClick={() => { setEditingClient(null); setShowClientForm(true); }}>＋ 追加</button>
-      </div>
-      <div className="filter-chips" style={{ marginBottom:8 }}>
-        {['すべて', ...CLIENT_STATUSES.map(s => s.key)].map(st => (
-          <button key={st} className={`chip ${clientFilter === st ? 'active' : ''}`}
-            onClick={() => setClientFilter(st)}>{st}
-            <span style={{ marginLeft:4, fontSize:10 }}>
-              {st === 'すべて' ? clients.length : clients.filter(c => (c.status||'進行中') === st).length}
-            </span>
+      {/* サブタブナビ */}
+      <div style={{overflowX:'auto',display:'flex',gap:4,marginBottom:12,paddingBottom:4}}>
+        {TASK_SUBTABS.map(t=>(
+          <button key={t.key} onClick={()=>setSubTab(t.key)}
+            style={{display:'flex',alignItems:'center',gap:4,padding:'7px 12px',borderRadius:20,border:'1.5px solid',whiteSpace:'nowrap',cursor:'pointer',fontSize:12,fontWeight:700,flexShrink:0,
+              borderColor:subTab===t.key?'var(--accent)':'var(--border)',
+              background:subTab===t.key?'var(--accent-light)':'var(--bg)',
+              color:subTab===t.key?'var(--accent)':'var(--text-sub)'}}>
+            <span>{t.icon}</span><span>{t.label}</span>
           </button>
         ))}
       </div>
-      {filteredClients.length === 0
-        ? <EmptyState icon="👤" text="見込み客を追加してください" />
-        : filteredClients.map(cl => {
-          const st = CLIENT_STATUSES.find(s => s.key === (cl.status||'進行中')) || CLIENT_STATUSES[0];
-          return (
-            <div key={cl.id} className="card" style={{ marginBottom:8, borderLeft:`3px solid ${st.color}` }}>
-              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:6 }}>
-                <div style={{ fontSize:16, fontWeight:700 }}>{cl.name}</div>
-                <div style={{ display:'flex', gap:6, alignItems:'center' }}>
-                  {cl.prospectAC && <span style={{ fontSize:13, fontWeight:700, color:st.color }}>{cl.prospectAC}万AC</span>}
-                  <span style={{ fontSize:11, fontWeight:700, padding:'2px 8px', borderRadius:10, background:st.bg, color:st.color }}>{cl.status||'進行中'}</span>
-                </div>
-              </div>
-              {cl.prospectMonth && <div style={{ fontSize:12, color:'var(--text-sub)' }}>予定月：{cl.prospectMonth}</div>}
-              {cl.memo && <div style={{ fontSize:13, color:'var(--text-sub)', marginTop:4 }}>{cl.memo}</div>}
-              <div style={{ display:'flex', gap:8, marginTop:8 }}>
-                {CLIENT_STATUSES.map(s => (
-                  <button key={s.key} type="button" onClick={() => saveClient({...cl, status:s.key})}
-                    style={{ flex:1, padding:'6px 4px', borderRadius:8, border:`1.5px solid ${cl.status===s.key?s.color:'var(--border)'}`,
-                      background:cl.status===s.key?s.bg:'var(--bg)', color:cl.status===s.key?s.color:'var(--text-sub)',
-                      fontWeight:cl.status===s.key?700:500, fontSize:11, cursor:'pointer' }}>{s.key}</button>
-                ))}
-                <button onClick={() => { setEditingClient(cl); setShowClientForm(true); }}
-                  style={{ padding:'6px 10px', borderRadius:8, border:'1.5px solid var(--border)', background:'var(--bg)', fontSize:12, cursor:'pointer' }}>編集</button>
-                <button onClick={() => deleteClient(cl.id)}
-                  style={{ padding:'6px 10px', borderRadius:8, border:'none', background:'#FEF2F2', color:'var(--danger)', fontSize:12, cursor:'pointer' }}>削除</button>
-              </div>
-            </div>
-          );
-        })
-      }
 
-      {/* タスク */}
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', margin:'16px 0 8px' }}>
-        <div className="section-header" style={{ marginBottom:0, marginTop:0 }}>タスク（{pendingTasks.length}件）</div>
-        <button className="btn btn-primary btn-sm" onClick={() => { setEditingTask(null); setShowTaskForm(true); }}>＋ 追加</button>
-      </div>
-      {pendingTasks.length === 0 && doneTasks.length === 0
-        ? <EmptyState icon="✅" text="タスクを追加してください" />
-        : <>
-          {pendingTasks.map(t => (
-            <div key={t.id} className="card" style={{ marginBottom:8, display:'flex', alignItems:'flex-start', gap:12 }}>
-              <button onClick={() => toggleTask(t.id)}
-                style={{ width:24, height:24, borderRadius:6, border:'2px solid var(--border)', background:'var(--bg)',
-                  cursor:'pointer', flexShrink:0, marginTop:2, display:'flex', alignItems:'center', justifyContent:'center' }} />
-              <div style={{ flex:1 }}>
-                <div style={{ fontSize:15, fontWeight:600 }}>{t.title}</div>
-                {t.date && <div style={{ fontSize:12, color:'var(--text-sub)', marginTop:2 }}>📅 {fmtDate(t.date)}</div>}
-                {t.memo && <div style={{ fontSize:13, color:'var(--text-sub)', marginTop:4 }}>{t.memo}</div>}
-              </div>
-              <div style={{ display:'flex', gap:6, flexShrink:0 }}>
-                <button onClick={() => { setEditingTask(t); setShowTaskForm(true); }}
-                  style={{ padding:'4px 8px', borderRadius:6, border:'1.5px solid var(--border)', background:'var(--bg)', fontSize:12, cursor:'pointer' }}>編集</button>
-                <button onClick={() => deleteTask(t.id)}
-                  style={{ padding:'4px 8px', borderRadius:6, border:'none', background:'#FEF2F2', color:'var(--danger)', fontSize:12, cursor:'pointer' }}>削除</button>
-              </div>
-            </div>
-          ))}
-          {doneTasks.length > 0 && (
-            <div style={{ fontSize:12, color:'var(--text-sub)', textAlign:'center', padding:'8px', borderTop:'1px solid var(--border)', marginTop:8 }}>
-              完了済み {doneTasks.length}件（
-              <button onClick={() => doneTasks.forEach(t => deleteTask(t.id))}
-                style={{ background:'none', border:'none', color:'var(--danger)', cursor:'pointer', fontSize:12, textDecoration:'underline' }}>クリア</button>
-              ）
-            </div>
-          )}
-        </>
-      }
-
-      {/* 見込み客フォーム */}
-      {showClientForm && (
-        <div className="overlay" onClick={() => { setShowClientForm(false); setEditingClient(null); }}>
-          <div className="drawer" onClick={e => e.stopPropagation()}>
-            <div className="drawer-handle" />
-            <div className="drawer-title">{editingClient ? '見込み客を編集' : '見込み客を追加'}</div>
-            <ClientForm editing={editingClient} onSave={saveClient} onClose={() => { setShowClientForm(false); setEditingClient(null); }} />
+      {/* 今日タブ */}
+      {subTab==='today' && (
+        <div>
+          <div className="card" style={{background:'var(--accent-light)',border:'1.5px solid var(--accent)',marginBottom:10}}>
+            <div style={{fontSize:12,fontWeight:700,color:'var(--accent)',marginBottom:4}}>💰 見込みAC合計（進行中）</div>
+            <div style={{fontSize:32,fontWeight:800,color:'var(--accent)'}}>{totalAC.toLocaleString()} <span style={{fontSize:16}}>万円</span></div>
+            <div style={{fontSize:12,color:'var(--text-sub)',marginTop:2}}>{activeClients.length}人の進行中</div>
           </div>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',margin:'8px 0'}}>
+            <div className="section-header" style={{marginBottom:0,marginTop:0}}>タスク（{pendingTasks.length}件）</div>
+            <button className="btn btn-primary btn-sm" onClick={()=>{setEditingTask(null);setShowTaskForm(true)}}>＋ 追加</button>
+          </div>
+          {pendingTasks.length===0&&doneTasks.length===0
+            ? <EmptyState icon="✅" text="タスクを追加してください"/>
+            : <>
+              {pendingTasks.map(t=>(
+                <div key={t.id} className="card" style={{marginBottom:8,display:'flex',alignItems:'flex-start',gap:12}}>
+                  <button onClick={()=>toggleTask(t.id)}
+                    style={{width:24,height:24,borderRadius:6,border:'2px solid var(--border)',background:'var(--bg)',cursor:'pointer',flexShrink:0,marginTop:2,display:'flex',alignItems:'center',justifyContent:'center'}}/>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:15,fontWeight:600}}>{t.title}</div>
+                    <div style={{display:'flex',gap:6,marginTop:2,flexWrap:'wrap'}}>
+                      {t.date&&<span style={{fontSize:11,color:'var(--text-sub)'}}>📅 {fmtDate(t.date)}</span>}
+                      {(t.importance===1||t.importance===true||t.importance==='1')&&<span style={{fontSize:10,background:'#FEF2F2',color:'var(--danger)',padding:'1px 5px',borderRadius:4,fontWeight:700}}>重要</span>}
+                      {(t.urgency===1||t.urgency===true||t.urgency==='1')&&<span style={{fontSize:10,background:'#FEF3C7',color:'#D97706',padding:'1px 5px',borderRadius:4,fontWeight:700}}>緊急</span>}
+                    </div>
+                    {t.memo&&<div style={{fontSize:13,color:'var(--text-sub)',marginTop:4}}>{t.memo}</div>}
+                  </div>
+                  <div style={{display:'flex',gap:4,flexShrink:0}}>
+                    <button onClick={()=>{setEditingTask(t);setShowTaskForm(true)}} style={{padding:'4px 8px',borderRadius:6,border:'1.5px solid var(--border)',background:'var(--bg)',fontSize:12,cursor:'pointer'}}>編集</button>
+                    <button onClick={()=>deleteTask(t.id)} style={{padding:'4px 8px',borderRadius:6,border:'none',background:'#FEF2F2',color:'var(--danger)',fontSize:12,cursor:'pointer'}}>削除</button>
+                  </div>
+                </div>
+              ))}
+              {doneTasks.length>0&&<div style={{fontSize:12,color:'var(--text-sub)',textAlign:'center',padding:'8px',borderTop:'1px solid var(--border)',marginTop:8}}>
+                完了済み {doneTasks.length}件（<button onClick={()=>doneTasks.forEach(t=>deleteTask(t.id))} style={{background:'none',border:'none',color:'var(--danger)',cursor:'pointer',fontSize:12,textDecoration:'underline'}}>クリア</button>）
+              </div>}
+            </>}
         </div>
       )}
 
-      {/* タスクフォーム */}
-      {showTaskForm && (
-        <div className="overlay" onClick={() => { setShowTaskForm(false); setEditingTask(null); }}>
-          <div className="drawer" onClick={e => e.stopPropagation()}>
-            <div className="drawer-handle" />
-            <div className="drawer-title">{editingTask ? 'タスクを編集' : 'タスクを追加'}</div>
-            <TaskForm editing={editingTask} onSave={saveTask} onClose={() => { setShowTaskForm(false); setEditingTask(null); }} />
+      {/* マトリクスタブ */}
+      {subTab==='matrix' && <MatrixPanel tasks={tasks} setTasks={setTasks}/>}
+
+      {/* クライアントタブ */}
+      {subTab==='clients' && (
+        <div>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+            <div style={{fontSize:12,color:'var(--text-sub)'}}>見込み客 {clients.length}人</div>
+            <button className="btn btn-primary btn-sm" onClick={()=>{setEditingClient(null);setShowClientForm(true)}}>＋ 追加</button>
+          </div>
+          <div className="filter-chips" style={{marginBottom:8}}>
+            {['すべて',...CLIENT_STATUSES.map(s=>s.key)].map(st=>(
+              <button key={st} className={`chip ${clientFilter===st?'active':''}`} onClick={()=>setClientFilter(st)}>
+                {st}<span style={{marginLeft:4,fontSize:10}}>{st==='すべて'?clients.length:clients.filter(c=>(c.status||'進行中')===st).length}</span>
+              </button>
+            ))}
+          </div>
+          {filteredClients.length===0
+            ? <EmptyState icon="👤" text="見込み客を追加してください"/>
+            : filteredClients.map(cl=>{
+              const st=CLIENT_STATUSES.find(s=>s.key===(cl.status||'進行中'))||CLIENT_STATUSES[0];
+              return (
+                <div key={cl.id} className="card" style={{marginBottom:8,borderLeft:`3px solid ${st.color}`}}>
+                  <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}>
+                    <div style={{fontSize:16,fontWeight:700}}>{cl.name}</div>
+                    <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                      {cl.prospectAC&&<span style={{fontSize:13,fontWeight:700,color:st.color}}>{cl.prospectAC}万AC</span>}
+                      <span style={{fontSize:11,fontWeight:700,padding:'2px 8px',borderRadius:10,background:st.bg,color:st.color}}>{cl.status||'進行中'}</span>
+                    </div>
+                  </div>
+                  {cl.prospectMonth&&<div style={{fontSize:12,color:'var(--text-sub)'}}>予定月：{cl.prospectMonth}</div>}
+                  {cl.memo&&<div style={{fontSize:13,color:'var(--text-sub)',marginTop:4}}>{cl.memo}</div>}
+                  <div style={{display:'flex',gap:6,marginTop:8,flexWrap:'wrap'}}>
+                    {CLIENT_STATUSES.map(s=>(
+                      <button key={s.key} type="button" onClick={()=>saveClient({...cl,status:s.key})}
+                        style={{flex:1,padding:'5px 4px',borderRadius:8,border:`1.5px solid ${cl.status===s.key?s.color:'var(--border)'}`,
+                          background:cl.status===s.key?s.bg:'var(--bg)',color:cl.status===s.key?s.color:'var(--text-sub)',
+                          fontWeight:cl.status===s.key?700:500,fontSize:11,cursor:'pointer'}}>{s.key}</button>
+                    ))}
+                    <button onClick={()=>{setEditingClient(cl);setShowClientForm(true)}} style={{padding:'5px 10px',borderRadius:8,border:'1.5px solid var(--border)',background:'var(--bg)',fontSize:12,cursor:'pointer'}}>編集</button>
+                    <button onClick={()=>deleteClient(cl.id)} style={{padding:'5px 10px',borderRadius:8,border:'none',background:'#FEF2F2',color:'var(--danger)',fontSize:12,cursor:'pointer'}}>削除</button>
+                  </div>
+                </div>
+              );
+            })}
+        </div>
+      )}
+
+      {/* 神メモ */}
+      {subTab==='vision' && <VisionPanel vision={vision} setVision={setVision}/>}
+      {/* ガント */}
+      {subTab==='gantt' && <GanttPanel tasks={tasks}/>}
+      {/* サスペクト */}
+      {subTab==='suspects' && <SuspectsPanel suspects={suspects} setSuspects={setSuspects}/>}
+      {/* ログ */}
+      {subTab==='log' && <LogPanel logs={logs} setLogs={setLogs}/>}
+
+      {/* フォームモーダル */}
+      {showClientForm&&(
+        <div className="overlay" onClick={()=>{setShowClientForm(false);setEditingClient(null)}}>
+          <div className="drawer" onClick={e=>e.stopPropagation()}>
+            <div className="drawer-handle"/>
+            <div className="drawer-title">{editingClient?'見込み客を編集':'見込み客を追加'}</div>
+            <ClientForm editing={editingClient} onSave={saveClient} onClose={()=>{setShowClientForm(false);setEditingClient(null)}}/>
+          </div>
+        </div>
+      )}
+      {showTaskForm&&(
+        <div className="overlay" onClick={()=>{setShowTaskForm(false);setEditingTask(null)}}>
+          <div className="drawer" onClick={e=>e.stopPropagation()}>
+            <div className="drawer-handle"/>
+            <div className="drawer-title">{editingTask?'タスクを編集':'タスクを追加'}</div>
+            <TaskForm editing={editingTask} onSave={saveTask} onClose={()=>{setShowTaskForm(false);setEditingTask(null)}}/>
           </div>
         </div>
       )}
@@ -2628,14 +2958,30 @@ function ClientForm({ editing, onSave, onClose }) {
 }
 
 function TaskForm({ editing, onSave, onClose }) {
-  const [form, setForm] = useState({ id:'', title:'', date:'', memo:'', completed:false, ...(editing||{}) });
+  const [form, setForm] = useState({ id:'', title:'', date:'', memo:'', completed:false, importance:0, urgency:0, ...(editing||{}) });
   const si = k => e => setForm(f => ({...f, [k]:e.target.value}));
+  const tog = k => () => setForm(f => ({...f, [k]: f[k]?0:1}));
   const save = () => { if (!form.title.trim()) return; onSave({...form, id:form.id||uid()}); };
   return (
     <>
       <div className="form-group"><label className="form-label">タスク名 *</label><input className="form-input" placeholder="例：山田様に電話" value={form.title} onChange={si('title')} autoFocus /></div>
       <div className="form-group"><label className="form-label">期日</label><input className="form-input" type="date" value={form.date} onChange={si('date')} /></div>
-      <div className="form-group"><label className="form-label">メモ</label><textarea className="form-textarea" style={{minHeight:70}} placeholder="詳細・備考" value={form.memo} onChange={si('memo')} /></div>
+      <div className="form-group">
+        <label className="form-label">重要度・緊急度（マトリクス用）</label>
+        <div style={{display:'flex',gap:8}}>
+          <button type="button" onClick={tog('importance')}
+            style={{flex:1,padding:'10px',borderRadius:10,border:`1.5px solid ${form.importance?'var(--danger)':'var(--border)'}`,
+              background:form.importance?'#FEF2F2':'var(--bg)',color:form.importance?'var(--danger)':'var(--text-sub)',fontWeight:700,cursor:'pointer'}}>
+            {form.importance?'✓ 重要':'重要ではない'}
+          </button>
+          <button type="button" onClick={tog('urgency')}
+            style={{flex:1,padding:'10px',borderRadius:10,border:`1.5px solid ${form.urgency?'#D97706':'var(--border)'}`,
+              background:form.urgency?'#FEF3C7':'var(--bg)',color:form.urgency?'#D97706':'var(--text-sub)',fontWeight:700,cursor:'pointer'}}>
+            {form.urgency?'✓ 緊急':'緊急ではない'}
+          </button>
+        </div>
+      </div>
+      <div className="form-group"><label className="form-label">メモ</label><textarea className="form-textarea" style={{minHeight:60}} placeholder="詳細・備考" value={form.memo} onChange={si('memo')} /></div>
       <div style={{display:'flex',gap:10,marginTop:8}}>
         <button className="btn btn-outline btn-full" onClick={onClose}>キャンセル</button>
         <button className="btn btn-primary btn-full" onClick={save}>保存</button>
@@ -2682,9 +3028,12 @@ function App() {
   // 商談メモ（新規）
   const [memos, setMemos] = useLS('nexus_memos_v1', []);
   const [kpiSettings, setKpiSettings] = useLS('nexus_kpi_v1', { avgCommission:200000, closeRate:50, proposalRate:70, apptRate:60 });
-  // タスク・クライアント（app.htmlと同じキーで引継ぎ）
-  const [tasks, setTasks] = useLS('tasks', []);
-  const [clients, setClients] = useLS('clients', []);
+  // タスク・クライアント・その他（app.htmlと同じキーで引継ぎ）
+  const [tasks, setTasks]       = useLS('tasks', []);
+  const [clients, setClients]   = useLS('clients', []);
+  const [vision, setVision]     = useLS('vision', {});
+  const [suspects, setSuspects] = useLS('suspects', []);
+  const [logs, setLogs]         = useLS('logs', []);
 
   const [tab, setTab] = useState('dashboard');
   const [selectedCustomer, setSelectedCustomer] = useState(null);
@@ -2756,7 +3105,9 @@ function App() {
           <NegotiationTab memos={memos} customers={customers} onSelect={setSelectedMemo} />
         )}
         {tab === 'task' && (
-          <TaskTab tasks={tasks} setTasks={setTasks} clients={clients} setClients={setClients} />
+          <TaskTab tasks={tasks} setTasks={setTasks} clients={clients} setClients={setClients}
+            vision={vision} setVision={setVision} suspects={suspects} setSuspects={setSuspects}
+            logs={logs} setLogs={setLogs} />
         )}
       </div>
 
