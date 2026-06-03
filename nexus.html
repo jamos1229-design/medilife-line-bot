@@ -2878,6 +2878,142 @@ function MatrixPanel({ tasks, clients }) {
   );
 }
 
+// ── ClientsTabInner（検索・見込み月・AC順ソート）─────────────
+function ClientsTabInner({ clients, tasks, onAdd, onEdit, onDelete }) {
+  const [search, setSearch]           = useState('');
+  const [sort, setSort]               = useState('name');
+  const [statusFilter, setStatusFilter] = useState('進行中');
+
+  const openTasks = id => tasks.filter(t => t.clientId===id && !t.completed).length;
+
+  const filtered = clients
+    .filter(c => statusFilter==='すべて' ? true : (c.status||'進行中')===statusFilter)
+    .filter(c =>
+      c.name.includes(search) ||
+      (c.helpWith||'').includes(search) ||
+      (c.memo||'').includes(search) ||
+      (c.prospectAC||'').toString().includes(search) ||
+      (c.prospectMonth||'').includes(search)
+    )
+    .sort((a,b) => {
+      if (sort==='ac')    return (Number(b.prospectAC)||0) - (Number(a.prospectAC)||0);
+      if (sort==='month') return (a.prospectMonth||'未定').localeCompare(b.prospectMonth||'未定');
+      return a.name.localeCompare(b.name,'ja');
+    });
+
+  return (
+    <div>
+      {/* ステータスフィルター */}
+      <div style={{position:'sticky',top:0,zIndex:10,background:'var(--bg)',paddingBottom:8}}>
+        <div style={{display:'flex',gap:4,marginBottom:8,overflowX:'auto',paddingBottom:2}}>
+          {['進行中','成約','断り','完了','すべて'].map(st => {
+            const info = CLIENT_STATUSES.find(s=>s.key===st);
+            const active = statusFilter===st;
+            return (
+              <button key={st} onClick={()=>setStatusFilter(st)} style={{
+                flexShrink:0, padding:'6px 14px', borderRadius:20, border:'1.5px solid',
+                fontSize:12, fontWeight:700, cursor:'pointer',
+                borderColor: active ? (info?.color||'var(--accent)') : 'var(--border)',
+                background:  active ? (info?.bg||'var(--accent-light)') : 'var(--bg)',
+                color:       active ? (info?.color||'var(--accent)') : 'var(--text-sub)',
+              }}>
+                {st}
+                <span style={{marginLeft:4,fontSize:11}}>
+                  {st==='すべて' ? clients.length : clients.filter(c=>(c.status||'進行中')===st).length}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* 検索バー */}
+        <div style={{position:'relative',marginBottom:8}}>
+          <span style={{position:'absolute',left:12,top:'50%',transform:'translateY(-50%)',fontSize:15}}>🔍</span>
+          <input
+            style={{width:'100%',padding:'10px 12px 10px 36px',border:'1.5px solid var(--border)',
+              borderRadius:10,fontSize:15,background:'#fff',outline:'none'}}
+            placeholder="名前・メモ・見込み月で検索..."
+            value={search} onChange={e=>setSearch(e.target.value)}
+          />
+          {search && (
+            <button onClick={()=>setSearch('')} style={{position:'absolute',right:10,top:'50%',
+              transform:'translateY(-50%)',background:'none',border:'none',fontSize:16,color:'var(--text-sub)',cursor:'pointer'}}>×</button>
+          )}
+        </div>
+
+        {/* 件数 + ソート */}
+        <div style={{display:'flex',gap:6,alignItems:'center',marginBottom:4}}>
+          <span style={{fontSize:12,color:'var(--text-sub)'}}>
+            {filtered.length}件{search && ` / 全${clients.length}件`}
+          </span>
+          <div style={{marginLeft:'auto',display:'flex',gap:4}}>
+            {[['name','名前'],['month','見込み月'],['ac','AC順']].map(([k,l]) => (
+              <button key={k} onClick={()=>setSort(k)} style={{
+                padding:'4px 10px',borderRadius:6,border:'none',cursor:'pointer',fontSize:11,
+                background: sort===k ? 'var(--accent)' : 'var(--bg)',
+                color:      sort===k ? '#fff' : 'var(--text-sub)',
+                fontWeight: sort===k ? 700 : 400,
+              }}>{l}</button>
+            ))}
+          </div>
+          <button className="btn btn-primary btn-sm" onClick={onAdd}>＋ 追加</button>
+        </div>
+      </div>
+
+      {/* リスト */}
+      {filtered.length===0
+        ? <div className="empty"><div className="empty-icon">👤</div><div>クライアントなし</div></div>
+        : <div className="card">
+            {filtered.map(c => {
+              const st = CLIENT_STATUSES.find(s=>s.key===(c.status||'進行中'));
+              const ot = openTasks(c.id);
+              return (
+                <div key={c.id} style={{padding:'12px 0',borderBottom:'1px solid var(--border)'}}>
+                  <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:6}}>
+                    <div style={{display:'flex',alignItems:'center',gap:7,flexWrap:'wrap'}}>
+                      <span style={{fontSize:16,fontWeight:700}}>{c.name}</span>
+                      {ot>0 && <span style={{background:'var(--accent)',color:'#fff',borderRadius:10,padding:'1px 7px',fontSize:11,fontWeight:700}}>{ot}</span>}
+                      {st && <span style={{fontSize:11,fontWeight:700,padding:'2px 8px',borderRadius:10,background:st.bg,color:st.color}}>{st.key}</span>}
+                    </div>
+                    <div style={{display:'flex',alignItems:'center',gap:4,flexShrink:0}}>
+                      {c.axis && <AxisBadge axis={c.axis}/>}
+                      <button onClick={()=>onEdit(c)} style={{padding:'5px 9px',borderRadius:8,border:'1.5px solid var(--border)',background:'var(--bg)',fontSize:12,cursor:'pointer',fontWeight:600}}>✎</button>
+                      <button onClick={()=>onDelete(c.id)} style={{padding:'5px 9px',borderRadius:8,border:'none',background:'#FEF2F2',color:'var(--danger)',fontSize:12,cursor:'pointer',fontWeight:600}}>×</button>
+                    </div>
+                  </div>
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6,marginTop:8}}>
+                    <div style={{background:'var(--bg)',borderRadius:8,padding:'7px 10px'}}>
+                      <div style={{fontSize:10,fontWeight:700,color:'var(--text-sub)',marginBottom:2}}>何月の見込み</div>
+                      <div style={{fontSize:13,fontWeight:600}}>{c.prospectMonth||'未定'}</div>
+                    </div>
+                    <div style={{background:'var(--bg)',borderRadius:8,padding:'7px 10px'}}>
+                      <div style={{fontSize:10,fontWeight:700,color:'var(--text-sub)',marginBottom:2}}>見込みAC</div>
+                      <div style={{fontSize:15,fontWeight:800,color:'var(--accent)'}}>
+                        {c.prospectAC ? `${Number(c.prospectAC).toLocaleString()}万円` : '—'}
+                      </div>
+                    </div>
+                    {c.helpWith && (
+                      <div style={{gridColumn:'1/-1',background:'var(--bg)',borderRadius:8,padding:'7px 10px'}}>
+                        <div style={{fontSize:10,fontWeight:700,color:'var(--text-sub)',marginBottom:2}}>お役に立てること</div>
+                        <div style={{fontSize:13,color:'var(--text)',whiteSpace:'pre-wrap',lineHeight:1.5}}>{c.helpWith}</div>
+                      </div>
+                    )}
+                    {c.memo && (
+                      <div style={{gridColumn:'1/-1',background:'var(--bg)',borderRadius:8,padding:'7px 10px'}}>
+                        <div style={{fontSize:10,fontWeight:700,color:'var(--text-sub)',marginBottom:2}}>メモ</div>
+                        <div style={{fontSize:13,color:'var(--text)',whiteSpace:'pre-wrap',lineHeight:1.5}}>{c.memo}</div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+      }
+    </div>
+  );
+}
+
 // ── ログ ──────────────────────────────────────────────────────
 const LOG_CATS = ['面談','電話','メール','アポ','提案','成約','保全','その他'];
 
@@ -3120,47 +3256,12 @@ function TaskTab({ tasks, setTasks, clients, setClients, vision, setVision, susp
 
       {/* クライアントタブ */}
       {subTab==='clients' && (
-        <div>
-          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
-            <div style={{fontSize:12,color:'var(--text-sub)'}}>見込み客 {clients.length}人</div>
-            <button className="btn btn-primary btn-sm" onClick={()=>{setEditingClient(null);setShowClientForm(true)}}>＋ 追加</button>
-          </div>
-          <div className="filter-chips" style={{marginBottom:8}}>
-            {['すべて',...CLIENT_STATUSES.map(s=>s.key)].map(st=>(
-              <button key={st} className={`chip ${clientFilter===st?'active':''}`} onClick={()=>setClientFilter(st)}>
-                {st}<span style={{marginLeft:4,fontSize:10}}>{st==='すべて'?clients.length:clients.filter(c=>(c.status||'進行中')===st).length}</span>
-              </button>
-            ))}
-          </div>
-          {filteredClients.length===0
-            ? <EmptyState icon="👤" text="見込み客を追加してください"/>
-            : filteredClients.map(cl=>{
-              const st=CLIENT_STATUSES.find(s=>s.key===(cl.status||'進行中'))||CLIENT_STATUSES[0];
-              return (
-                <div key={cl.id} className="card" style={{marginBottom:8,borderLeft:`3px solid ${st.color}`}}>
-                  <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}>
-                    <div style={{fontSize:16,fontWeight:700}}>{cl.name}</div>
-                    <div style={{display:'flex',gap:6,alignItems:'center'}}>
-                      {cl.prospectAC&&<span style={{fontSize:13,fontWeight:700,color:st.color}}>{cl.prospectAC}万AC</span>}
-                      <span style={{fontSize:11,fontWeight:700,padding:'2px 8px',borderRadius:10,background:st.bg,color:st.color}}>{cl.status||'進行中'}</span>
-                    </div>
-                  </div>
-                  {cl.prospectMonth&&<div style={{fontSize:12,color:'var(--text-sub)'}}>予定月：{cl.prospectMonth}</div>}
-                  {cl.memo&&<div style={{fontSize:13,color:'var(--text-sub)',marginTop:4}}>{cl.memo}</div>}
-                  <div style={{display:'flex',gap:6,marginTop:8,flexWrap:'wrap'}}>
-                    {CLIENT_STATUSES.map(s=>(
-                      <button key={s.key} type="button" onClick={()=>saveClient({...cl,status:s.key})}
-                        style={{flex:1,padding:'5px 4px',borderRadius:8,border:`1.5px solid ${cl.status===s.key?s.color:'var(--border)'}`,
-                          background:cl.status===s.key?s.bg:'var(--bg)',color:cl.status===s.key?s.color:'var(--text-sub)',
-                          fontWeight:cl.status===s.key?700:500,fontSize:11,cursor:'pointer'}}>{s.key}</button>
-                    ))}
-                    <button onClick={()=>{setEditingClient(cl);setShowClientForm(true)}} style={{padding:'5px 10px',borderRadius:8,border:'1.5px solid var(--border)',background:'var(--bg)',fontSize:12,cursor:'pointer'}}>編集</button>
-                    <button onClick={()=>deleteClient(cl.id)} style={{padding:'5px 10px',borderRadius:8,border:'none',background:'#FEF2F2',color:'var(--danger)',fontSize:12,cursor:'pointer'}}>削除</button>
-                  </div>
-                </div>
-              );
-            })}
-        </div>
+        <ClientsTabInner
+          clients={clients} tasks={tasks}
+          onAdd={()=>{setEditingClient(null);setShowClientForm(true);}}
+          onEdit={cl=>{setEditingClient(cl);setShowClientForm(true);}}
+          onDelete={deleteClient}
+        />
       )}
 
       {/* 神メモ */}
