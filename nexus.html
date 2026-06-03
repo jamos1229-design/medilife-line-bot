@@ -2823,97 +2823,56 @@ const MATRIX_QUADS = [
   {key:'00',label:'減らす',    desc:'非重要×非緊急',color:'#9CA3AF',bg:'#F3F4F6',imp:false,urg:false},
 ];
 
-function MatrixPanel({ tasks, setTasks }) {
-  const [selected, setSelected] = useState(null); // 選択中のquadrant key
-  const pending = tasks.filter(t=>!t.completed);
-  const getQ = t => {
-    const imp = t.importance===1||t.importance===true||t.importance==='1';
-    const urg = t.urgency===1||t.urgency===true||t.urgency==='1';
-    return `${imp?1:0}${urg?1:0}`;
-  };
+function MatrixPanel({ tasks, clients }) {
+  const active = tasks.filter(t => !t.completed);
+  const cn = id => clients.find(c => c.id === id)?.name;
 
-  const complete = id => setTasks(prev=>prev.map(t=>t.id===id?{...t,completed:true}:t));
+  const quads = [
+    { imp:1, urg:1, cls:'mc-q1', badge:'🔴', label:'すぐやる',  sub:'重要 × 緊急' },
+    { imp:1, urg:0, cls:'mc-q2', badge:'🔵', label:'計画する',  sub:'重要 × 非緊急' },
+    { imp:0, urg:1, cls:'mc-q3', badge:'🟡', label:'委任する',  sub:'通常 × 緊急' },
+    { imp:0, urg:0, cls:'mc-q4', badge:'🟢', label:'減らす',    sub:'通常 × 非緊急' },
+  ];
 
-  // 選択したQuadrantのタスク詳細
-  if (selected) {
-    const q = MATRIX_QUADS.find(x=>x.key===selected);
-    const qtasks = pending.filter(t=>getQ(t)===q.key);
-    return (
-      <div>
-        <button onClick={()=>setSelected(null)}
-          style={{background:'none',border:'none',color:'var(--text-sub)',fontWeight:700,fontSize:15,cursor:'pointer',marginBottom:12,padding:0}}>
-          ← 戻る
-        </button>
-        <div className="card" style={{borderLeft:`4px solid ${q.color}`,marginBottom:8}}>
-          <div style={{fontSize:16,fontWeight:800,color:q.color,marginBottom:2}}>{q.label}</div>
-          <div style={{fontSize:12,color:'var(--text-sub)',marginBottom:12}}>{q.desc} · {qtasks.length}件</div>
-          {qtasks.length===0
-            ? <EmptyState icon="✅" text="このカテゴリのタスクはありません"/>
-            : qtasks.map(t=>(
-              <div key={t.id} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 12px',background:'var(--bg)',borderRadius:10,marginBottom:6}}>
-                <button onClick={()=>complete(t.id)}
-                  style={{width:24,height:24,borderRadius:6,border:`2px solid ${q.color}`,background:'var(--bg)',cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center'}}/>
-                <div style={{flex:1}}>
-                  <div style={{fontSize:14,fontWeight:600}}>{t.title}</div>
-                  {t.date&&<div style={{fontSize:11,color:'var(--text-sub)',marginTop:2}}>📅 {fmtDate(t.date)}</div>}
-                  {t.memo&&<div style={{fontSize:12,color:'var(--text-sub)',marginTop:2}}>{t.memo}</div>}
-                </div>
-              </div>
-            ))
-          }
-        </div>
-      </div>
-    );
-  }
-
-  // 2×2グリッド概要
   return (
     <div>
-      <div style={{fontSize:11,color:'var(--text-sub)',marginBottom:10}}>
-        タスクに重要度・緊急度をつけると自動分類されます。セルをタップで詳細。
+      <div style={{fontSize:20,fontWeight:800,marginBottom:14,letterSpacing:'-0.4px'}}>タスクマトリクス</div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',marginBottom:6,paddingLeft:2}}>
+        <div style={{textAlign:'center',fontSize:11,fontWeight:700,color:'#DC2626',padding:'4px 0'}}>← 緊急</div>
+        <div style={{textAlign:'center',fontSize:11,fontWeight:700,color:'var(--text-sub)',padding:'4px 0'}}>非緊急 →</div>
       </div>
-      {/* 縦軸ラベル */}
-      <div style={{display:'grid',gridTemplateColumns:'36px 1fr 1fr',gridTemplateRows:'28px 1fr 1fr',gap:4}}>
-        {/* 空白コーナー */}
-        <div/>
-        {/* 横軸ラベル（緊急・非緊急） */}
-        <div style={{textAlign:'center',fontSize:11,fontWeight:700,color:'#D97706',display:'flex',alignItems:'center',justifyContent:'center',background:'#FEF3C7',borderRadius:8}}>⚡ 緊急</div>
-        <div style={{textAlign:'center',fontSize:11,fontWeight:700,color:'var(--text-sub)',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--bg)',borderRadius:8}}>非緊急</div>
-        {/* 重要行 */}
-        <div style={{display:'flex',alignItems:'center',justifyContent:'center',background:'#FEF2F2',borderRadius:8,writingMode:'vertical-rl'}}>
-          <span style={{fontSize:10,fontWeight:700,color:'var(--danger)',transform:'rotate(180deg)'}}>重要</span>
-        </div>
-        {MATRIX_QUADS.filter(q=>q.imp).map(q=>{
-          const count = pending.filter(t=>getQ(t)===q.key).length;
+
+      <div className="matrix-grid">
+        {quads.map(q => {
+          const items = active.filter(t => {
+            const imp = t.importance===1||t.importance===true||t.importance==='1' ? 1 : 0;
+            const urg = t.urgency===1||t.urgency===true||t.urgency==='1' ? 1 : 0;
+            return imp===q.imp && urg===q.urg;
+          });
           return (
-            <button key={q.key} onClick={()=>setSelected(q.key)}
-              style={{padding:'14px 10px',borderRadius:12,border:`2px solid ${count>0?q.color:'var(--border)'}`,
-                background:count>0?q.bg:'var(--bg)',cursor:'pointer',textAlign:'center'}}>
-              <div style={{fontSize:13,fontWeight:800,color:q.color,marginBottom:4}}>{q.label}</div>
-              <div style={{fontSize:26,fontWeight:800,color:count>0?q.color:'var(--text-sub)'}}>{count}</div>
-              <div style={{fontSize:10,color:'var(--text-sub)'}}>件</div>
-            </button>
-          );
-        })}
-        {/* 非重要行 */}
-        <div style={{display:'flex',alignItems:'center',justifyContent:'center',background:'#F3F4F6',borderRadius:8}}>
-          <span style={{fontSize:10,fontWeight:700,color:'var(--text-sub)',writingMode:'vertical-rl',transform:'rotate(180deg)'}}>非重要</span>
-        </div>
-        {MATRIX_QUADS.filter(q=>!q.imp).map(q=>{
-          const count = pending.filter(t=>getQ(t)===q.key).length;
-          return (
-            <button key={q.key} onClick={()=>setSelected(q.key)}
-              style={{padding:'14px 10px',borderRadius:12,border:`2px solid ${count>0?q.color:'var(--border)'}`,
-                background:count>0?q.bg:'var(--bg)',cursor:'pointer',textAlign:'center'}}>
-              <div style={{fontSize:13,fontWeight:800,color:q.color,marginBottom:4}}>{q.label}</div>
-              <div style={{fontSize:26,fontWeight:800,color:count>0?q.color:'var(--text-sub)'}}>{count}</div>
-              <div style={{fontSize:10,color:'var(--text-sub)'}}>件</div>
-            </button>
+            <div key={q.label} className={`matrix-cell ${q.cls}`}>
+              <div className="mc-label">{q.badge} {q.label}</div>
+              <div className="mc-sub">{q.sub}</div>
+              {items.length === 0
+                ? <div style={{fontSize:11,opacity:0.35}}>タスクなし</div>
+                : items.map(t => (
+                    <div key={t.id} className="mc-task">
+                      · {t.title}
+                      {cn(t.clientId) && <span style={{opacity:0.6}}> ({cn(t.clientId)})</span>}
+                      {t.date && <span style={{opacity:0.5,fontSize:10}}> {fmtDate(t.date)}</span>}
+                    </div>
+                  ))
+              }
+            </div>
           );
         })}
       </div>
-      <div style={{fontSize:11,color:'var(--text-sub)',textAlign:'center',marginTop:8}}>
-        ※タスク追加時に「重要」「緊急」を設定してください
+
+      <div style={{marginTop:12,padding:'10px 12px',background:'var(--surface)',borderRadius:10,border:'1px solid var(--border)'}}>
+        <div style={{fontSize:11,color:'var(--text-sub)',lineHeight:1.7}}>
+          タスク追加時に重要度・緊急度を設定するとここに自動分類されます。
+        </div>
       </div>
     </div>
   );
@@ -3157,7 +3116,7 @@ function TaskTab({ tasks, setTasks, clients, setClients, vision, setVision, susp
       )}
 
       {/* マトリクスタブ */}
-      {subTab==='matrix' && <MatrixPanel tasks={tasks} setTasks={setTasks}/>}
+      {subTab==='matrix' && <MatrixPanel tasks={tasks} clients={clients}/>}
 
       {/* クライアントタブ */}
       {subTab==='clients' && (
