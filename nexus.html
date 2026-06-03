@@ -3097,6 +3097,79 @@ function TaskForm({ editing, onSave, onClose }) {
 }
 
 // ── CSV Export ────────────────────────────────────────────────
+function importJSON(file, setCustomers) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const data = JSON.parse(e.target.result);
+      let imported = [];
+
+      // 旧app.html形式: { clients: [...] } または直接配列
+      const raw = Array.isArray(data) ? data
+        : (data.clients && Array.isArray(data.clients)) ? data.clients
+        : null;
+
+      if (raw) {
+        // 旧フォーマット(ml_clients_v1) → 新フォーマット(customers_v1)変換
+        imported = raw.map(c => ({
+          id: c.id || String(Date.now() + Math.random()),
+          customerType: '個人',
+          name: c.name || '',
+          age: c.age || '',
+          gender: '',
+          birthdate: '',
+          phone: c.phone || '',
+          email: '',
+          postalCode: '',
+          address: c.address || '',
+          occupation: c.occupation || '',
+          workplace: c.workplace || '',
+          status: c.status || '未接触',
+          contactMethod: '電話',
+          lastContact: '',
+          nextAppt: '',
+          memo: c.memo || '',
+          lineRegistered: false,
+          contracts: [],
+          suspects: [],
+          referredBy: c.referrer || '',
+        }));
+      } else if (data.customers && Array.isArray(data.customers)) {
+        // nexus形式のJSONエクスポート
+        imported = data.customers;
+      } else {
+        alert('対応していないファイル形式です');
+        return;
+      }
+
+      if (imported.length === 0) {
+        alert('インポートするデータがありません');
+        return;
+      }
+
+      setCustomers(prev => {
+        const existingIds = new Set(prev.map(c => c.id));
+        const newOnes = imported.filter(c => !existingIds.has(c.id));
+        const merged = [...prev, ...newOnes];
+        alert(`インポート完了：${newOnes.length}件追加（既存${prev.length}件）`);
+        return merged;
+      });
+    } catch {
+      alert('JSONの読み込みに失敗しました');
+    }
+  };
+  reader.readAsText(file, 'UTF-8');
+}
+
+function exportJSON(customers) {
+  const data = JSON.stringify({ customers }, null, 2);
+  const blob = new Blob([data], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url;
+  a.download = `nexus_customers_${todayStr()}.json`;
+  a.click(); URL.revokeObjectURL(url);
+}
+
 function exportCSV(customers) {
   const headers = ['氏名', '年齢', '生年月日', '電話番号', 'メールアドレス', '郵便番号', '住所', '職業', '勤務先', 'LINE登録', 'ステータス', '接触方法', '最終接触日', '次回アポイント', '契約数', '証券番号一覧', '払込方法一覧', '通貨一覧', '面談メモ'];
   const rows = customers.map(c => {
@@ -3186,8 +3259,17 @@ function App() {
       <div className="header">
         <div className="header-row">
           <h1 style={{ fontSize:18 }}>MEDILIFE NEXUS</h1>
-          <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+          <div style={{ display:'flex', gap:6, alignItems:'center' }}>
             <span className="header-sub">{customers.length}名</span>
+            <label style={{ fontSize:11, padding:'5px 10px', borderRadius:8, border:'1px solid var(--accent)', background:'var(--accent-light)', color:'var(--accent)', cursor:'pointer', fontWeight:600 }}>
+              📥JSON
+              <input type="file" accept=".json" style={{ display:'none' }}
+                onChange={e => { if (e.target.files[0]) { importJSON(e.target.files[0], setCustomers); e.target.value=''; } }} />
+            </label>
+            <button onClick={() => exportJSON(customers)}
+              style={{ fontSize:11, padding:'5px 10px', borderRadius:8, border:'1px solid var(--border)', background:'#fff', color:'var(--text-sub)', cursor:'pointer', fontWeight:600 }}>
+              JSON
+            </button>
             <button onClick={() => exportCSV(customers)}
               style={{ fontSize:11, padding:'5px 10px', borderRadius:8, border:'1px solid var(--border)', background:'#fff', color:'var(--text-sub)', cursor:'pointer', fontWeight:600 }}>
               CSV
