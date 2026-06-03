@@ -3668,64 +3668,51 @@ function TaskForm({ editing, onSave, onClose }) {
   );
 }
 
-// ── CSV Export ────────────────────────────────────────────────
-function importJSON(file, setCustomers) {
+// ── JSON Import（全データ対応）────────────────────────────────
+function importJSON(file, handlers) {
+  // handlers = { setCustomers, setTasks, setClients, setVision, setSuspects, setSales, setLogs }
   const reader = new FileReader();
   reader.onload = e => {
     try {
       const data = JSON.parse(e.target.result);
-      let imported = [];
 
-      // 旧app.html形式: { clients: [...] } または直接配列
-      const raw = Array.isArray(data) ? data
-        : (data.clients && Array.isArray(data.clients)) ? data.clients
-        : null;
-
-      if (raw) {
-        // 旧フォーマット(ml_clients_v1) → 新フォーマット(customers_v1)変換
-        imported = raw.map(c => ({
-          id: c.id || String(Date.now() + Math.random()),
-          customerType: '個人',
-          name: c.name || '',
-          age: c.age || '',
-          gender: '',
-          birthdate: '',
-          phone: c.phone || '',
-          email: '',
-          postalCode: '',
-          address: c.address || '',
-          occupation: c.occupation || '',
-          workplace: c.workplace || '',
-          status: c.status || '未接触',
-          contactMethod: '電話',
-          lastContact: '',
-          nextAppt: '',
-          memo: c.memo || '',
-          lineRegistered: false,
-          contracts: [],
-          suspects: [],
-          referredBy: c.referrer || '',
-        }));
-      } else if (data.customers && Array.isArray(data.customers)) {
-        // nexus形式のJSONエクスポート
-        imported = data.customers;
-      } else {
-        alert('対応していないファイル形式です');
+      // ① app.html バックアップ形式
+      //    { tasks, clients, suspects, vision, sales, logs, exportedAt, version }
+      if (data.tasks || data.logs || (data.clients && !data.customers)) {
+        const msgs = [];
+        if (data.tasks    && handlers.setTasks)    { handlers.setTasks(data.tasks);       msgs.push(`タスク${data.tasks.length}件`); }
+        if (data.clients  && handlers.setClients)  { handlers.setClients(data.clients);   msgs.push(`クライアント${data.clients.length}件`); }
+        if (data.suspects && handlers.setSuspects) { handlers.setSuspects(data.suspects); msgs.push(`サスペクト${data.suspects.length}件`); }
+        if (data.vision   && handlers.setVision)   { handlers.setVision(data.vision); }
+        if (data.sales    && handlers.setSales)    { handlers.setSales(data.sales); }
+        if (data.logs     && handlers.setLogs)     { handlers.setLogs(data.logs);         msgs.push(`ログ${data.logs.length}件`); }
+        alert(`✅ バックアップ復元完了\n${msgs.join(' / ')}`);
         return;
       }
 
-      if (imported.length === 0) {
-        alert('インポートするデータがありません');
+      // ② nexus.html JSON エクスポート形式 { customers: [...] }
+      if (data.customers && Array.isArray(data.customers)) {
+        handlers.setCustomers(prev => {
+          const existingIds = new Set(prev.map(c => c.id));
+          const newOnes = data.customers.filter(c => !existingIds.has(c.id));
+          alert(`✅ 顧客インポート完了：${newOnes.length}件追加`);
+          return [...prev, ...newOnes];
+        });
         return;
       }
 
-      setCustomers(prev => {
-        const existingIds = new Set(prev.map(c => c.id));
-        const newOnes = imported.filter(c => !existingIds.has(c.id));
-        const merged = [...prev, ...newOnes];
-        alert(`インポート完了：${newOnes.length}件追加（既存${prev.length}件）`);
-        return merged;
-      });
+      // ③ 直接配列（顧客データ）
+      if (Array.isArray(data)) {
+        handlers.setCustomers(prev => {
+          const existingIds = new Set(prev.map(c => c.id));
+          const newOnes = data.filter(c => !existingIds.has(c.id));
+          alert(`✅ 顧客インポート完了：${newOnes.length}件追加`);
+          return [...prev, ...newOnes];
+        });
+        return;
+      }
+
+      alert('対応していないファイル形式です');
     } catch {
       alert('JSONの読み込みに失敗しました');
     }
@@ -3925,7 +3912,7 @@ function App() {
             <label style={{ fontSize:11, padding:'5px 10px', borderRadius:8, border:'1px solid var(--accent)', background:'var(--accent-light)', color:'var(--accent)', cursor:'pointer', fontWeight:600 }}>
               📥JSON
               <input type="file" accept=".json" style={{ display:'none' }}
-                onChange={e => { if (e.target.files[0]) { importJSON(e.target.files[0], setCustomers); e.target.value=''; } }} />
+                onChange={e => { if (e.target.files[0]) { importJSON(e.target.files[0], { setCustomers, setTasks, setClients, setVision, setSuspects, setSales, setLogs }); e.target.value=''; } }} />
             </label>
             <label style={{ fontSize:11, padding:'5px 10px', borderRadius:8, border:'1px solid var(--accent)', background:'var(--accent-light)', color:'var(--accent)', cursor:'pointer', fontWeight:600 }}>
               📥CSV
