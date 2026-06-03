@@ -2352,19 +2352,51 @@ function NegotiationForm({ editing, customers, onSave, onClose }) {
 // ── 商談メモ Detail ───────────────────────────────────────────
 function NegotiationDetail({ memo, customers, onEdit, onDelete, onClose, onRegisterAsCustomer }) {
   const [confirmDel, setConfirmDel] = useState(false);
+  const [toast, setToast] = useState('');
   const customer = customers.find(c => c.id === memo.customerId);
   const displayName = customer ? customer.name : (memo.personName || '—');
 
-  const copyToKeep = () => {
-    const text = `【商談メモ】${memo.date} ${displayName}\n\n${memo.memo}`.trim();
+  const showToast = msg => {
+    setToast(msg);
+    setTimeout(() => setToast(''), 3000);
+  };
+
+  const copyText = (text, msg) => {
     if (navigator.clipboard) {
-      navigator.clipboard.writeText(text).then(() => {
-        const msg = '📋 コピーしました！Google Keepに貼り付けてください';
-        alert(msg);
-        setTimeout(() => window.open('https://keep.google.com', '_blank'), 300);
-      });
+      navigator.clipboard.writeText(text).then(() => showToast(msg));
+    } else {
+      const el = document.createElement('textarea');
+      el.value = text; document.body.appendChild(el); el.select();
+      document.execCommand('copy'); document.body.removeChild(el);
+      showToast(msg);
     }
   };
+
+  const summary = `【商談メモ】
+氏名: ${displayName}
+面談日: ${memo.date}
+${memo.memo}`.trim();
+
+  const copyPrompt = type => {
+    const prompts = {
+      referral: `以下の商談記録をもとに、この顧客から紹介をもらうための具体的なアドバイスをください。タイミング・セリフ例・紹介してもらいやすいターゲット像を含めて日本語で出力してください。\n\n${summary}`,
+      instagram: `以下の商談記録をもとに、FP・保険営業のInstagram投稿文を作成してください。顧客が特定されないよう配慮しつつ、フォロワーの共感を呼ぶ内容にしてください。ハッシュタグも含めてください。\n\n${summary}`,
+      next: `以下の商談記録をもとに、次回商談の準備事項・確認すべきこと・提案内容のアドバイスを具体的に日本語で出力してください。\n\n${summary}`,
+    };
+    copyText(prompts[type], '📋 コピーしました！Claude.aiに貼り付けてください');
+  };
+
+  const copyToKeep = () => {
+    copyText(`【商談メモ】${memo.date} ${displayName}\n\n${memo.memo}`.trim(),
+      '📋 コピーしました！Google Keepに貼り付けてください');
+    setTimeout(() => window.open('https://keep.google.com', '_blank'), 400);
+  };
+
+  const AI_BTNS = [
+    { type:'referral',  icon:'🤝', label:'紹介獲得アドバイスをコピー' },
+    { type:'instagram', icon:'📸', label:'Instagram投稿ネタをコピー' },
+    { type:'next',      icon:'🎯', label:'次回商談の準備をコピー' },
+  ];
 
   return (
     <div className="full-screen">
@@ -2388,17 +2420,53 @@ function NegotiationDetail({ memo, customers, onEdit, onDelete, onClose, onRegis
 
         {/* メモ本文 */}
         <div className="section-header">商談メモ</div>
-        <div className="card">
+        <div className="card" style={{ marginBottom:14 }}>
           <div style={{ fontSize:15, lineHeight:1.8, whiteSpace:'pre-wrap', color:'var(--text)' }}>
             {memo.memo || '（メモなし）'}
           </div>
         </div>
 
-        {/* Google Keepボタン */}
-        <button className="btn btn-full" style={{ marginTop:8, background:'#FFF9C4', color:'#F57F17', border:'1.5px solid #F9A825', fontWeight:700, fontSize:15, borderRadius:12 }}
+        {/* AIプロンプトコピー */}
+        <div className="card" style={{ marginBottom:10, background:'#F8F7FF', border:'1.5px solid #C4B5FD' }}>
+          <div style={{ fontSize:12, fontWeight:700, color:'#7C3AED', marginBottom:4 }}>🤖 AIプロンプト</div>
+          <div style={{ fontSize:11, color:'var(--text-sub)', marginBottom:10 }}>
+            💡 ボタンを押してコピー → Claude.aiに貼り付けて使う
+          </div>
+          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+            {AI_BTNS.map(b => (
+              <button key={b.type} onClick={() => copyPrompt(b.type)} style={{
+                width:'100%', padding:'12px 14px', borderRadius:10,
+                border:'1.5px solid #C4B5FD', background:'#fff',
+                fontSize:14, fontWeight:700, color:'#7C3AED',
+                cursor:'pointer', textAlign:'left',
+                display:'flex', alignItems:'center', gap:8,
+              }}>
+                <span style={{ fontSize:18 }}>{b.icon}</span>
+                {b.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Google Keep */}
+        <button className="btn btn-full" style={{ marginTop:4, background:'#FFF9C4', color:'#F57F17', border:'1.5px solid #F9A825', fontWeight:700, fontSize:14, borderRadius:12 }}
           onClick={copyToKeep}>
           📒 Google Keepにコピー
         </button>
+
+        {/* トースト通知 */}
+        {toast && (
+          <div style={{
+            position:'fixed', bottom:'calc(var(--nav-h) + var(--safe-b) + 16px)',
+            left:'50%', transform:'translateX(-50%)',
+            background:'#22C55E', color:'#fff', borderRadius:12,
+            padding:'12px 20px', fontSize:14, fontWeight:600,
+            boxShadow:'0 4px 16px rgba(0,0,0,0.2)', zIndex:100,
+            whiteSpace:'nowrap',
+          }}>
+            {toast}
+          </div>
+        )}
       </div>
 
       {confirmDel && (
