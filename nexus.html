@@ -2444,9 +2444,150 @@ const CLIENT_STATUSES = [
   { key:'完了',   color:'#9CA3AF', bg:'#F3F4F6' },
 ];
 
-// ── サスペクト（app.html互換）────────────────────────────────
-const SUSPECT_STATUSES = ['未接触','接触済み','育成中','アポ済','成約','断り'];
-const LIFE_STAGES = ['単身','結婚','妊娠・出産','子育て','住宅購入','教育費','老後準備','退職','相続','その他'];
+// ── app.html互換定数・ユーティリティ ─────────────────────────
+const JP_DAY = ['日','月','火','水','木','金','土'];
+const todayFull = () => {
+  const d = new Date();
+  return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日（${JP_DAY[d.getDay()]}）`;
+};
+const toGCalUrl = (task) => {
+  const title = encodeURIComponent(task.title);
+  let dates = '';
+  if (task.date) {
+    const d = task.date.replace(/-/g, '');
+    const next = new Date(task.date); next.setDate(next.getDate() + 1);
+    const nd = next.toISOString().split('T')[0].replace(/-/g, '');
+    dates = `&dates=${d}/${nd}`;
+  }
+  return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}${dates}`;
+};
+const KM_AXIS_MAP = {
+  'ロマン':   { color: '#7C3AED', bg: '#F5F3FF' },
+  'ソロバン': { color: '#2563EB', bg: '#EFF6FF' },
+  'チャージ': { color: '#059669', bg: '#ECFDF5' },
+};
+const KM_AXES = ['ロマン', 'ソロバン', 'チャージ'];
+const KM_BANDS = [
+  { leftPeriod:'3年以内', rightPeriod:'6ヶ月以内', axisName:'ロマン', axisSub:'ミッション・ビジョン・クレド', axisColor:'#7C3AED', axisBg:'#F5F3FF', splitDays:180, centerWorkHint:'最終的に仕事上でどうなっていたいか', centerPrivateHint:'プライベートでどうなっていたいか', taskHint:'実現したいこと・しないといけないこと' },
+  { leftPeriod:'2年以内', rightPeriod:'3ヶ月〜1ヶ月以内', axisName:'ソロバン', axisSub:'本業', axisColor:'#2563EB', axisBg:'#EFF6FF', splitDays:90, centerWorkHint:'何でお金を頂いているのか', centerPrivateHint:'プライベートで何が中心になっているのか', taskHint:'実現したいこと・しないといけないこと' },
+  { leftPeriod:'1年以内', rightPeriod:'1週間〜本日', axisName:'チャージ', axisSub:'成長や喜び', axisColor:'#059669', axisBg:'#ECFDF5', splitDays:7, centerWorkHint:'目標を叶えるためにどんな学習をするのか', centerPrivateHint:'自分や家族へのご褒美・してあげたいこと', taskHint:'仕事で何をするのか' },
+];
+const AxisBadge = ({ axis }) => {
+  if (!axis) return null;
+  const a = KM_AXIS_MAP[axis]; if (!a) return null;
+  return <span style={{ display:'inline-flex', alignItems:'center', padding:'2px 7px', borderRadius:5, fontSize:11, fontWeight:700, background:a.bg, color:a.color }}>{axis}</span>;
+};
+const MONTHS = ['未定','1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
+const SUSPECT_STATUSES = ['未接触','接触済み','育成中'];
+const LIFE_STAGES = ['未設定','独身','既婚(子なし)','子育て中','子独立後','定年前','定年後'];
+const RELATIONSHIPS = ['未設定','友人','職場','地域','家族・親族','SNS','その他'];
+const HELP_CATS = ['医療','生命','相続','損保','その他'];
+
+// ── SalesTracker ──────────────────────────────────────────────
+function SalesTracker({ sales, onChange, clients }) {
+  const [editing, setEditing] = React.useState(false);
+  const [form, setForm] = React.useState(sales);
+
+  const target  = Number(sales.target)  || 0;
+  const current = Number(sales.current) || 0;
+  const pct     = target > 0 ? Math.min(Math.round(current / target * 100), 999) : 0;
+  const achieved = target > 0 && current >= target;
+  const fmt = v => Number(v).toLocaleString('ja-JP');
+
+  const activeClients = (clients || []).filter(c => (c.status || '進行中') === '進行中');
+  const totalAC = activeClients.reduce((sum, c) => sum + (Number(c.prospectAC) || 0), 0);
+  const acClients = activeClients.filter(c => Number(c.prospectAC) > 0).length;
+
+  const open = () => { setForm(sales); setEditing(true); };
+  const save = () => { onChange(form); setEditing(false); };
+
+  return (
+    <div className="card" style={{ marginBottom:12, position:'relative', overflow:'hidden' }}>
+      {target > 0 && (
+        <div style={{ position:'absolute', top:0, left:0, bottom:0, width:`${Math.min(pct,100)}%`,
+          background: achieved ? 'linear-gradient(90deg,#D1FAE5,#A7F3D0)' : 'linear-gradient(90deg,#EEF2FF,#C7D2FE)',
+          transition:'width 0.6s ease', zIndex:0 }} />
+      )}
+      <div style={{ position:'relative', zIndex:1 }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:6 }}>
+          <div style={{ fontSize:13, fontWeight:700, color:'var(--text-sub)' }}>
+            💰 売上トラッカー
+            {sales.label && <span style={{ marginLeft:6, fontWeight:500 }}>（{sales.label}）</span>}
+          </div>
+          <button onClick={open} style={{ fontSize:11, padding:'3px 10px', borderRadius:6,
+            border:'1px solid var(--border)', background:'rgba(255,255,255,0.8)',
+            color:'var(--text-sub)', cursor:'pointer', fontWeight:600 }}>設定</button>
+        </div>
+
+        {target === 0 ? (
+          <div style={{ textAlign:'center', color:'var(--text-sub)', fontSize:13, padding:'8px 0' }}>
+            「設定」から目標額を入力してください
+          </div>
+        ) : (
+          <>
+            <div style={{ display:'flex', alignItems:'baseline', gap:6, marginBottom:6 }}>
+              <span style={{ fontSize:26, fontWeight:800, color: achieved ? '#059669' : 'var(--accent)' }}>
+                ¥{fmt(current)}
+              </span>
+              <span style={{ fontSize:13, color:'var(--text-sub)' }}>/ ¥{fmt(target)}</span>
+              {achieved && <span style={{ fontSize:18, marginLeft:4 }}>🎉</span>}
+            </div>
+            <div style={{ background:'rgba(0,0,0,0.08)', borderRadius:6, height:8, overflow:'hidden', marginBottom:4 }}>
+              <div style={{ height:'100%', borderRadius:6, width:`${Math.min(pct,100)}%`,
+                background: achieved ? '#10B981' : 'var(--accent)', transition:'width 0.6s ease' }} />
+            </div>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <span style={{ fontSize:12, color:'var(--text-sub)' }}>
+                {achieved ? '🎉 目標達成！' : `残り ¥${fmt(Math.max(target - current, 0))}`}
+              </span>
+              <span style={{ fontSize:13, fontWeight:700, color: achieved ? '#059669' : 'var(--accent)' }}>{pct}%</span>
+            </div>
+          </>
+        )}
+
+        <div style={{ marginTop:10, paddingTop:10, borderTop:'1px solid rgba(0,0,0,0.07)',
+          display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+          <div style={{ fontSize:12, color:'var(--text-sub)', fontWeight:600 }}>
+            📋 見込みAC合計{acClients > 0 && <span style={{ marginLeft:4, fontSize:11 }}>（{acClients}件）</span>}
+          </div>
+          <div style={{ fontSize:16, fontWeight:800, color:'#8B5CF6' }}>
+            {totalAC > 0 ? `${fmt(totalAC)} 万円` : <span style={{ fontSize:12, color:'var(--text-sub)', fontWeight:500 }}>未入力</span>}
+          </div>
+        </div>
+      </div>
+
+      {editing && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)',
+          display:'flex', alignItems:'flex-end', justifyContent:'center', zIndex:200 }}
+          onClick={() => setEditing(false)}>
+          <div style={{ background:'#fff', borderRadius:'16px 16px 0 0', padding:24,
+            width:'100%', maxWidth:430 }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize:16, fontWeight:700, marginBottom:16 }}>💰 売上トラッカー設定</div>
+            {[
+              { label:'期間ラベル（例：今月・6月）', key:'label', type:'text', placeholder:'今月' },
+              { label:'目標額（円）', key:'target', type:'number', placeholder:'例: 500000' },
+              { label:'現在の売上（円）', key:'current', type:'number', placeholder:'例: 320000' },
+            ].map(f => (
+              <div key={f.key} style={{ marginBottom:14 }}>
+                <label style={{ fontSize:12, fontWeight:600, color:'var(--text-sub)', display:'block', marginBottom:4 }}>{f.label}</label>
+                <input type={f.type} inputMode={f.type==='number' ? 'numeric' : 'text'} placeholder={f.placeholder}
+                  value={form[f.key] || ''}
+                  onChange={e => setForm(p => ({...p, [f.key]: e.target.value}))}
+                  style={{ width:'100%', padding:'10px 12px', border:'1.5px solid var(--border)', borderRadius:8, fontSize:15 }} />
+              </div>
+            ))}
+            <div style={{ display:'flex', gap:8, marginTop:8 }}>
+              <button onClick={() => setEditing(false)} style={{ flex:1, padding:'12px', border:'1px solid var(--border)',
+                borderRadius:10, background:'#fff', fontSize:15, cursor:'pointer' }}>キャンセル</button>
+              <button onClick={save} style={{ flex:2, padding:'12px', border:'none',
+                borderRadius:10, background:'var(--accent)', color:'#fff', fontSize:15, fontWeight:700, cursor:'pointer' }}>保存</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function SuspectsPanel({ suspects, setSuspects }) {
   const [filter, setFilter] = useState('すべて');
@@ -2861,13 +3002,14 @@ const TASK_SUBTABS = [
   {key:'log',    label:'ログ',    icon:'📝'},
 ];
 
-function TaskTab({ tasks, setTasks, clients, setClients, vision, setVision, suspects, setSuspects, logs, setLogs }) {
+function TaskTab({ tasks, setTasks, clients, setClients, vision, setVision, suspects, setSuspects, logs, setLogs, sales, setSales }) {
   const [subTab, setSubTab] = useState('today');
   const [clientFilter, setClientFilter] = useState('進行中');
   const [showClientForm, setShowClientForm] = useState(false);
   const [editingClient, setEditingClient] = useState(null);
   const [showTaskForm, setShowTaskForm] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
+  const [showDone, setShowDone] = useState(false);
 
   // 見込みAC合計（進行中のみ）
   const activeClients = clients.filter(c => (c.status || '進行中') === '進行中');
@@ -2918,41 +3060,99 @@ function TaskTab({ tasks, setTasks, clients, setClients, vision, setVision, susp
       {/* 今日タブ */}
       {subTab==='today' && (
         <div>
-          <div className="card" style={{background:'var(--accent-light)',border:'1.5px solid var(--accent)',marginBottom:10}}>
-            <div style={{fontSize:12,fontWeight:700,color:'var(--accent)',marginBottom:4}}>💰 見込みAC合計（進行中）</div>
-            <div style={{fontSize:32,fontWeight:800,color:'var(--accent)'}}>{totalAC.toLocaleString()} <span style={{fontSize:16}}>万円</span></div>
-            <div style={{fontSize:12,color:'var(--text-sub)',marginTop:2}}>{activeClients.length}人の進行中</div>
-          </div>
-          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',margin:'8px 0'}}>
-            <div className="section-header" style={{marginBottom:0,marginTop:0}}>タスク（{pendingTasks.length}件）</div>
-            <button className="btn btn-primary btn-sm" onClick={()=>{setEditingTask(null);setShowTaskForm(true)}}>＋ 追加</button>
-          </div>
-          {pendingTasks.length===0&&doneTasks.length===0
-            ? <EmptyState icon="✅" text="タスクを追加してください"/>
-            : <>
-              {pendingTasks.map(t=>(
-                <div key={t.id} className="card" style={{marginBottom:8,display:'flex',alignItems:'flex-start',gap:12}}>
-                  <button onClick={()=>toggleTask(t.id)}
-                    style={{width:24,height:24,borderRadius:6,border:'2px solid var(--border)',background:'var(--bg)',cursor:'pointer',flexShrink:0,marginTop:2,display:'flex',alignItems:'center',justifyContent:'center'}}/>
-                  <div style={{flex:1}}>
-                    <div style={{fontSize:15,fontWeight:600}}>{t.title}</div>
-                    <div style={{display:'flex',gap:6,marginTop:2,flexWrap:'wrap'}}>
-                      {t.date&&<span style={{fontSize:11,color:'var(--text-sub)'}}>📅 {fmtDate(t.date)}</span>}
-                      {(t.importance===1||t.importance===true||t.importance==='1')&&<span style={{fontSize:10,background:'#FEF2F2',color:'var(--danger)',padding:'1px 5px',borderRadius:4,fontWeight:700}}>重要</span>}
-                      {(t.urgency===1||t.urgency===true||t.urgency==='1')&&<span style={{fontSize:10,background:'#FEF3C7',color:'#D97706',padding:'1px 5px',borderRadius:4,fontWeight:700}}>緊急</span>}
+          <div style={{fontSize:13,color:'var(--text-sub)',fontWeight:500,marginBottom:10}}>{todayFull()}</div>
+
+          {/* 売上トラッカー */}
+          <SalesTracker sales={sales} onChange={setSales} clients={clients} />
+
+          {/* 期限切れタスク */}
+          {(() => {
+            const td = todayStr();
+            const overdue = pendingTasks.filter(t => t.date && t.date < td);
+            if (overdue.length === 0) return null;
+            return (
+              <div className="card" style={{background:'#FEF2F2',border:'1.5px solid #FECACA',marginBottom:10}}>
+                <div style={{fontSize:11,fontWeight:700,color:'#DC2626',marginBottom:8}}>⚠ 未完了（期限切れ {overdue.length}件）</div>
+                {overdue.map(t => (
+                  <div key={t.id} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 0',borderBottom:'1px solid rgba(0,0,0,0.06)'}}>
+                    <button onClick={()=>toggleTask(t.id)} style={{width:22,height:22,borderRadius:6,border:'2px solid #FECACA',background:'#FEF2F2',cursor:'pointer',flexShrink:0}}/>
+                    <div style={{flex:1,cursor:'pointer'}} onClick={()=>{setEditingTask(t);setShowTaskForm(true)}}>
+                      <div style={{fontSize:14,fontWeight:500}}>{t.title}</div>
+                      <span style={{fontSize:11,background:'#FECACA',color:'#DC2626',padding:'1px 5px',borderRadius:4}}>{fmtDate(t.date)}</span>
                     </div>
-                    {t.memo&&<div style={{fontSize:13,color:'var(--text-sub)',marginTop:4}}>{t.memo}</div>}
+                    <button onClick={()=>deleteTask(t.id)} style={{background:'none',border:'none',color:'#CCC',cursor:'pointer',fontSize:18,padding:'0 4px'}}>×</button>
                   </div>
-                  <div style={{display:'flex',gap:4,flexShrink:0}}>
-                    <button onClick={()=>{setEditingTask(t);setShowTaskForm(true)}} style={{padding:'4px 8px',borderRadius:6,border:'1.5px solid var(--border)',background:'var(--bg)',fontSize:12,cursor:'pointer'}}>編集</button>
-                    <button onClick={()=>deleteTask(t.id)} style={{padding:'4px 8px',borderRadius:6,border:'none',background:'#FEF2F2',color:'var(--danger)',fontSize:12,cursor:'pointer'}}>削除</button>
+                ))}
+              </div>
+            );
+          })()}
+
+          {/* 今日のタスク */}
+          <div className="card" style={{marginBottom:10}}>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+              <div style={{fontSize:11,fontWeight:700,color:'var(--text-sub)',letterSpacing:'0.6px'}}>TODAY</div>
+              <button className="btn btn-primary btn-sm" onClick={()=>{setEditingTask(null);setShowTaskForm(true)}}>＋ 追加</button>
+            </div>
+            {(() => {
+              const td = todayStr();
+              const todayTasks = pendingTasks.filter(t => t.date === td);
+              const undated    = pendingTasks.filter(t => !t.date);
+              const upcoming   = pendingTasks.filter(t => t.date && t.date > td);
+              const clientName = id => clients.find(c=>c.id===id)?.name;
+              const TaskRow = ({ t }) => (
+                <div style={{display:'flex',alignItems:'flex-start',gap:10,padding:'9px 0',borderBottom:'1px solid var(--border)'}}>
+                  <div onClick={()=>toggleTask(t.id)}
+                    style={{width:22,height:22,borderRadius:6,border:'2px solid var(--border)',cursor:'pointer',flexShrink:0,marginTop:1,display:'flex',alignItems:'center',justifyContent:'center',background:'var(--bg)'}}/>
+                  <div style={{flex:1,minWidth:0,cursor:'pointer'}} onClick={()=>{setEditingTask(t);setShowTaskForm(true)}}>
+                    <div style={{fontSize:15,fontWeight:500}}>{t.title}</div>
+                    <div style={{display:'flex',gap:4,marginTop:4,flexWrap:'wrap'}}>
+                      {t.date && t.date !== td && <span style={{fontSize:11,background:'#F0F0F5',color:'#555',padding:'1px 6px',borderRadius:4}}>{fmtDate(t.date)}</span>}
+                      {(t.importance===1||t.importance===true) && <span style={{fontSize:11,background:'#FEF2F2',color:'#DC2626',padding:'1px 5px',borderRadius:4,fontWeight:700}}>重要</span>}
+                      {(t.urgency===1||t.urgency===true) && <span style={{fontSize:11,background:'#FFF7ED',color:'#C2410C',padding:'1px 5px',borderRadius:4,fontWeight:700}}>緊急</span>}
+                      {clientName(t.clientId) && <span style={{fontSize:11,background:'var(--accent-light)',color:'var(--accent)',padding:'1px 6px',borderRadius:4,fontWeight:600}}>{clientName(t.clientId)}</span>}
+                      {t.axis && <AxisBadge axis={t.axis} />}
+                    </div>
                   </div>
+                  <a href={toGCalUrl(t)} target="_blank" rel="noreferrer"
+                    style={{color:'#AAA',fontSize:16,padding:'4px 4px',textDecoration:'none',lineHeight:1}}>📅</a>
+                  <button onClick={()=>deleteTask(t.id)} style={{background:'none',border:'none',color:'#CCC',cursor:'pointer',fontSize:18,padding:'0 4px'}}>×</button>
+                </div>
+              );
+              return (
+                <>
+                  {todayTasks.length===0 && <div style={{textAlign:'center',padding:'12px 0',color:'var(--text-sub)',fontSize:13}}>✓ 今日のタスクなし</div>}
+                  {todayTasks.map(t=><TaskRow key={t.id} t={t}/>)}
+                  {upcoming.length>0 && <div style={{fontSize:11,fontWeight:700,color:'var(--text-sub)',marginTop:10,marginBottom:4}}>今後の予定</div>}
+                  {upcoming.map(t=><TaskRow key={t.id} t={t}/>)}
+                  {undated.length>0 && <div style={{fontSize:11,fontWeight:700,color:'var(--text-sub)',marginTop:10,marginBottom:4}}>📋 日付未定</div>}
+                  {undated.map(t=><TaskRow key={t.id} t={t}/>)}
+                </>
+              );
+            })()}
+          </div>
+
+          {/* 完了フォルダー */}
+          {doneTasks.length>0 && (
+            <div className="card">
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer'}}
+                onClick={()=>setShowDone(v=>!v)}>
+                <span style={{fontSize:11,fontWeight:700,color:'var(--text-sub)'}}>
+                  ✅ 完了フォルダー <span style={{background:'var(--success)',color:'#fff',borderRadius:10,padding:'1px 7px',fontSize:12,fontWeight:700,marginLeft:4}}>{doneTasks.length}</span>
+                </span>
+                <span style={{fontSize:13,color:'var(--text-sub)'}}>{showDone?'▲':'▼'}</span>
+              </div>
+              {showDone && doneTasks.map(t=>(
+                <div key={t.id} style={{display:'flex',alignItems:'center',gap:8,padding:'9px 0',borderTop:'1px solid var(--border)'}}>
+                  <div style={{width:22,height:22,borderRadius:6,background:'var(--accent)',border:'2px solid var(--accent)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                    <span style={{color:'#fff',fontSize:12,fontWeight:800}}>✓</span>
+                  </div>
+                  <div style={{flex:1,fontSize:14,fontWeight:500,textDecoration:'line-through',color:'var(--text-sub)'}}>{t.title}</div>
+                  <button onClick={()=>toggleTask(t.id)} style={{fontSize:12,fontWeight:700,padding:'4px 10px',borderRadius:8,border:'1.5px solid var(--accent)',background:'var(--accent-light)',color:'var(--accent)',cursor:'pointer'}}>↩ 戻す</button>
+                  <button onClick={()=>deleteTask(t.id)} style={{fontSize:12,fontWeight:700,padding:'4px 10px',borderRadius:8,border:'1.5px solid var(--danger)',background:'#FEF2F2',color:'var(--danger)',cursor:'pointer'}}>🗑</button>
                 </div>
               ))}
-              {doneTasks.length>0&&<div style={{fontSize:12,color:'var(--text-sub)',textAlign:'center',padding:'8px',borderTop:'1px solid var(--border)',marginTop:8}}>
-                完了済み {doneTasks.length}件（<button onClick={()=>doneTasks.forEach(t=>deleteTask(t.id))} style={{background:'none',border:'none',color:'var(--danger)',cursor:'pointer',fontSize:12,textDecoration:'underline'}}>クリア</button>）
-              </div>}
-            </>}
+            </div>
+          )}
         </div>
       )}
 
@@ -3273,11 +3473,12 @@ function App() {
   const [memos, setMemos] = useLS('nexus_memos_v1', []);
   const [kpiSettings, setKpiSettings] = useLS('nexus_kpi_v1', { avgCommission:200000, closeRate:50, proposalRate:70, apptRate:60 });
   // タスク・クライアント・その他（app.htmlと同じキーで引継ぎ）
-  const [tasks, setTasks]       = useLS('tasks', []);
-  const [clients, setClients]   = useLS('clients', []);
-  const [vision, setVision]     = useLS('vision', {});
-  const [suspects, setSuspects] = useLS('suspects', []);
-  const [logs, setLogs]         = useLS('logs', []);
+  const [tasks, setTasks]       = useLS('ml_tasks_v1', []);
+  const [clients, setClients]   = useLS('ml_clients_v1', []);
+  const [vision, setVision]     = useLS('ml_vision_v1', {});
+  const [suspects, setSuspects] = useLS('ml_suspects_v1', []);
+  const [logs, setLogs]         = useLS('ml_logs_v1', []);
+  const [sales, setSales]       = useLS('ml_sales_v1', { target:0, current:0, label:'今月' });
 
   const [tab, setTab] = useState('dashboard');
   const [selectedCustomer, setSelectedCustomer] = useState(null);
@@ -3365,7 +3566,7 @@ function App() {
         {tab === 'task' && (
           <TaskTab tasks={tasks} setTasks={setTasks} clients={clients} setClients={setClients}
             vision={vision} setVision={setVision} suspects={suspects} setSuspects={setSuspects}
-            logs={logs} setLogs={setLogs} />
+            logs={logs} setLogs={setLogs} sales={sales} setSales={setSales} />
         )}
       </div>
 
