@@ -3717,33 +3717,94 @@ function TaskTab({ tasks, setTasks, clients, setClients, vision, setVision, susp
             </div>
             {(() => {
               const td = todayStr();
-              const todayTasks = pendingTasks.filter(t => t.date === td);
-              const undated    = pendingTasks.filter(t => !t.date);
-              const upcoming   = pendingTasks.filter(t => t.date && t.date > td);
-              const clientName = id => clients.find(c=>c.id===id)?.name;
-              const TaskRow = ({ t }) => (
-                <div style={{display:'flex',alignItems:'flex-start',gap:10,padding:'9px 0',borderBottom:'1px solid var(--border)'}}>
-                  <div onClick={()=>toggleTask(t.id)}
-                    style={{width:22,height:22,borderRadius:6,border:'2px solid var(--border)',cursor:'pointer',flexShrink:0,marginTop:1,display:'flex',alignItems:'center',justifyContent:'center',background:'var(--bg)'}}/>
-                  <div style={{flex:1,minWidth:0,cursor:'pointer'}} onClick={()=>{setEditingTask(t);setShowTaskForm(true)}}>
-                    <div style={{fontSize:15,fontWeight:500}}>{t.title}</div>
-                    <div style={{display:'flex',gap:4,marginTop:4,flexWrap:'wrap'}}>
-                      {t.date && t.date !== td && <span style={{fontSize:11,background:'#F0F0F5',color:'#555',padding:'1px 6px',borderRadius:4}}>{fmtDate(t.date)}</span>}
-                      {(t.importance===1||t.importance===true) && <span style={{fontSize:11,background:'#FEF2F2',color:'#DC2626',padding:'1px 5px',borderRadius:4,fontWeight:700}}>重要</span>}
-                      {(t.urgency===1||t.urgency===true) && <span style={{fontSize:11,background:'#FFF7ED',color:'#C2410C',padding:'1px 5px',borderRadius:4,fontWeight:700}}>緊急</span>}
-                      {clientName(t.clientId) && <span style={{fontSize:11,background:'var(--accent-light)',color:'var(--accent)',padding:'1px 6px',borderRadius:4,fontWeight:600}}>{clientName(t.clientId)}</span>}
-                      {t.axis && <AxisBadge axis={t.axis} />}
+              const isRecurring = t => t.recurrence && t.recurrence !== 'none';
+
+              // 繰り返しタスク（毎日 or 今日が該当日）
+              const recurringToday = tasks.filter(t => {
+                if (!isRecurring(t) || t.completed) return false;
+                if (t.recurrence === 'daily') return true;
+                if (t.recurrence === 'monthly' && t.date) {
+                  return new Date(t.date + 'T00:00:00').getDate() === new Date().getDate();
+                }
+                return false;
+              });
+
+              const onceOnly    = pendingTasks.filter(t => !isRecurring(t));
+              const todayTasks  = onceOnly.filter(t => t.date === td);
+              const overdueTasks= onceOnly.filter(t => t.date && t.date < td);
+              const upcoming    = onceOnly.filter(t => t.date && t.date > td);
+              const undated     = onceOnly.filter(t => !t.date);
+              const clientName  = id => clients.find(c => c.id === id)?.name;
+
+              const toggleStep = (taskId, stepId) => {
+                setTasks(prev => prev.map(t => t.id !== taskId ? t : {
+                  ...t, steps: (t.steps||[]).map(s => s.id===stepId ? {...s, done:!s.done} : s)
+                }));
+              };
+
+              const TaskRow = ({ t, hideDate }) => {
+                const steps = t.steps || [];
+                const doneCount = steps.filter(s => s.done).length;
+                const recLabel = t.recurrence==='daily' ? '🔁 毎日'
+                  : t.recurrence==='monthly' ? `📅 毎月${new Date(t.date+'T00:00:00').getDate()}日` : null;
+                return (
+                  <div style={{borderBottom:'1px solid var(--border)'}}>
+                    <div style={{display:'flex',alignItems:'flex-start',gap:10,padding:'9px 0'}}>
+                      <div onClick={()=>toggleTask(t.id)}
+                        style={{width:22,height:22,borderRadius:6,border:'2px solid var(--border)',cursor:'pointer',flexShrink:0,marginTop:2,display:'flex',alignItems:'center',justifyContent:'center',background:'var(--bg)'}}/>
+                      <div style={{flex:1,minWidth:0,cursor:'pointer'}} onClick={()=>{setEditingTask(t);setShowTaskForm(true)}}>
+                        <div style={{fontSize:15,fontWeight:500}}>{t.title}</div>
+                        <div style={{display:'flex',gap:4,marginTop:4,flexWrap:'wrap'}}>
+                          {recLabel && <span style={{fontSize:11,background:'#ECFDF5',color:'#059669',border:'1px solid #A7F3D0',borderRadius:4,padding:'1px 5px',fontWeight:600}}>{recLabel}</span>}
+                          {!hideDate && t.date && t.date !== td && <span style={{fontSize:11,background:'#F0F0F5',color:'#555',padding:'1px 6px',borderRadius:4}}>{fmtDate(t.date)}</span>}
+                          {(t.importance===1||t.importance===true) && <span style={{fontSize:11,background:'#FEF2F2',color:'#DC2626',padding:'1px 5px',borderRadius:4,fontWeight:700}}>重要</span>}
+                          {(t.urgency===1||t.urgency===true) && <span style={{fontSize:11,background:'#FFF7ED',color:'#C2410C',padding:'1px 5px',borderRadius:4,fontWeight:700}}>緊急</span>}
+                          {clientName(t.clientId) && <span style={{fontSize:11,background:'var(--accent-light)',color:'var(--accent)',padding:'1px 6px',borderRadius:4,fontWeight:600}}>{clientName(t.clientId)}</span>}
+                          {t.axis && <AxisBadge axis={t.axis} />}
+                          {steps.length>0 && <span style={{fontSize:11,background:'#EEF2FF',color:'var(--accent)',borderRadius:4,padding:'1px 6px',fontWeight:600}}>🪜 {doneCount}/{steps.length}</span>}
+                        </div>
+                      </div>
+                      <a href={toGCalUrl(t)} target="_blank" rel="noreferrer"
+                        style={{color:'#AAA',fontSize:15,padding:'4px 2px',textDecoration:'none',lineHeight:1}}>📅</a>
+                      <button onClick={()=>deleteTask(t.id)} style={{background:'none',border:'none',color:'#CCC',cursor:'pointer',fontSize:18,padding:'0 4px'}}>×</button>
                     </div>
+                    {/* ベビーステップ */}
+                    {steps.length>0 && (
+                      <div style={{paddingLeft:32,paddingBottom:8}}>
+                        {steps.map(step => (
+                          <div key={step.id} onClick={()=>toggleStep(t.id,step.id)}
+                            style={{display:'flex',alignItems:'center',gap:7,padding:'4px 0',cursor:'pointer',borderTop:'1px solid var(--border)'}}>
+                            <div style={{width:14,height:14,borderRadius:3,flexShrink:0,
+                              border:step.done?'none':'2px solid var(--border)',
+                              background:step.done?'var(--success)':'transparent',
+                              display:'flex',alignItems:'center',justifyContent:'center'}}>
+                              {step.done && <span style={{color:'#fff',fontSize:10,lineHeight:1}}>✓</span>}
+                            </div>
+                            <span style={{fontSize:12,color:step.done?'var(--text-sub)':'var(--text)',textDecoration:step.done?'line-through':'none'}}>{step.text}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                  <a href={toGCalUrl(t)} target="_blank" rel="noreferrer"
-                    style={{color:'#AAA',fontSize:16,padding:'4px 4px',textDecoration:'none',lineHeight:1}}>📅</a>
-                  <button onClick={()=>deleteTask(t.id)} style={{background:'none',border:'none',color:'#CCC',cursor:'pointer',fontSize:18,padding:'0 4px'}}>×</button>
-                </div>
-              );
+                );
+              };
+
               return (
                 <>
-                  {todayTasks.length===0 && <div style={{textAlign:'center',padding:'12px 0',color:'var(--text-sub)',fontSize:13}}>✓ 今日のタスクなし</div>}
-                  {todayTasks.map(t=><TaskRow key={t.id} t={t}/>)}
+                  {recurringToday.length>0 && (
+                    <div style={{marginBottom:8}}>
+                      <div style={{fontSize:11,fontWeight:700,color:'#059669',marginBottom:4}}>🔁 定期タスク</div>
+                      {recurringToday.map(t=><TaskRow key={t.id} t={t} hideDate />)}
+                    </div>
+                  )}
+                  {overdueTasks.length>0 && (
+                    <div style={{marginBottom:8,background:'#FEF2F2',borderRadius:10,padding:'8px 10px',border:'1px solid #FECACA'}}>
+                      <div style={{fontSize:11,fontWeight:700,color:'#DC2626',marginBottom:4}}>⚠ 期限切れ {overdueTasks.length}件</div>
+                      {overdueTasks.map(t=><TaskRow key={t.id} t={t}/>)}
+                    </div>
+                  )}
+                  {todayTasks.length===0 && recurringToday.length===0 && <div style={{textAlign:'center',padding:'12px 0',color:'var(--text-sub)',fontSize:13}}>✓ 今日のタスクなし</div>}
+                  {todayTasks.map(t=><TaskRow key={t.id} t={t} hideDate />)}
                   {upcoming.length>0 && <div style={{fontSize:11,fontWeight:700,color:'var(--text-sub)',marginTop:10,marginBottom:4}}>今後の予定</div>}
                   {upcoming.map(t=><TaskRow key={t.id} t={t}/>)}
                   {undated.length>0 && <div style={{fontSize:11,fontWeight:700,color:'var(--text-sub)',marginTop:10,marginBottom:4}}>📋 日付未定</div>}
@@ -3815,7 +3876,7 @@ function TaskTab({ tasks, setTasks, clients, setClients, vision, setVision, susp
           <div className="drawer" onClick={e=>e.stopPropagation()}>
             <div className="drawer-handle"/>
             <div className="drawer-title">{editingTask?'タスクを編集':'タスクを追加'}</div>
-            <TaskForm editing={editingTask} onSave={saveTask} onClose={()=>{setShowTaskForm(false);setEditingTask(null)}}/>
+            <TaskForm editing={editingTask} clients={clients} onSave={saveTask} onClose={()=>{setShowTaskForm(false);setEditingTask(null)}}/>
           </div>
         </div>
       )}
@@ -3850,31 +3911,159 @@ function ClientForm({ editing, onSave, onClose }) {
   );
 }
 
-function TaskForm({ editing, onSave, onClose }) {
-  const [form, setForm] = useState({ id:'', title:'', date:'', memo:'', completed:false, importance:0, urgency:0, ...(editing||{}) });
-  const si = k => e => setForm(f => ({...f, [k]:e.target.value}));
-  const tog = k => () => setForm(f => ({...f, [k]: f[k]?0:1}));
-  const save = () => { if (!form.title.trim()) return; onSave({...form, id:form.id||uid()}); };
+// ── タスクフォーム（フル機能版 app.html互換）────────────────
+function TaskForm({ editing, clients, onSave, onClose }) {
+  const [form, setForm] = useState({
+    title:'', date:'', importance:0, urgency:0,
+    clientId:'', rowType:'work', axis:'', recurrence:'none', completed:false,
+    steps:[], memo:'',
+    ...(editing || {}),
+  });
+  const s = k => v => setForm(f => ({ ...f, [k]: v }));
+  const [stepInput, setStepInput] = useState('');
+
+  const addStep = () => {
+    const txt = stepInput.trim();
+    if (!txt) return;
+    setForm(f => ({ ...f, steps: [...(f.steps||[]), { id: uid(), text: txt, done: false }] }));
+    setStepInput('');
+  };
+  const removeStep = id => setForm(f => ({ ...f, steps: (f.steps||[]).filter(s => s.id !== id) }));
+  const moveStep = (idx, dir) => setForm(f => {
+    const arr = [...(f.steps||[])];
+    const to = idx + dir;
+    if (to < 0 || to >= arr.length) return f;
+    [arr[idx], arr[to]] = [arr[to], arr[idx]];
+    return { ...f, steps: arr };
+  });
+
+  const save = () => { if (!form.title.trim()) return; onSave({ ...form, id: form.id || uid() }); onClose(); };
+
+  const btnStyle = (active, color='var(--accent)', bg='var(--accent-light)') => ({
+    flex:1, padding:'9px 6px', borderRadius:9, border:`1.5px solid ${active ? color : 'var(--border)'}`,
+    background: active ? bg : 'var(--bg)', fontSize:13, fontWeight:600, cursor:'pointer',
+    color: active ? color : 'var(--text-sub)', textAlign:'center',
+  });
+
   return (
     <>
-      <div className="form-group"><label className="form-label">タスク名 *</label><input className="form-input" placeholder="例：山田様に電話" value={form.title} onChange={si('title')} autoFocus /></div>
-      <div className="form-group"><label className="form-label">期日</label><input className="form-input" type="date" value={form.date} onChange={si('date')} /></div>
+      {/* タスク名 */}
       <div className="form-group">
-        <label className="form-label">重要度・緊急度（マトリクス用）</label>
-        <div style={{display:'flex',gap:8}}>
-          <button type="button" onClick={tog('importance')}
-            style={{flex:1,padding:'10px',borderRadius:10,border:`1.5px solid ${form.importance?'var(--danger)':'var(--border)'}`,
-              background:form.importance?'#FEF2F2':'var(--bg)',color:form.importance?'var(--danger)':'var(--text-sub)',fontWeight:700,cursor:'pointer'}}>
-            {form.importance?'✓ 重要':'重要ではない'}
-          </button>
-          <button type="button" onClick={tog('urgency')}
-            style={{flex:1,padding:'10px',borderRadius:10,border:`1.5px solid ${form.urgency?'#D97706':'var(--border)'}`,
-              background:form.urgency?'#FEF3C7':'var(--bg)',color:form.urgency?'#D97706':'var(--text-sub)',fontWeight:700,cursor:'pointer'}}>
-            {form.urgency?'✓ 緊急':'緊急ではない'}
-          </button>
+        <label className="form-label">タスク名</label>
+        <input className="form-input" placeholder="タスク名を入力..." value={form.title}
+          onChange={e => s('title')(e.target.value)} autoFocus />
+      </div>
+
+      {/* 繰り返し */}
+      <div className="form-group">
+        <label className="form-label">繰り返し</label>
+        <div className="toggle-group">
+          {[['none','なし'],['daily','🔁 毎日'],['monthly','📅 毎月']].map(([k,l]) => (
+            <button key={k} style={btnStyle(form.recurrence===k||(!form.recurrence&&k==='none'))}
+              onClick={() => s('recurrence')(k)}>{l}</button>
+          ))}
         </div>
       </div>
-      <div className="form-group"><label className="form-label">メモ</label><textarea className="form-textarea" style={{minHeight:60}} placeholder="詳細・備考" value={form.memo} onChange={si('memo')} /></div>
+
+      {/* 日付（毎日以外） */}
+      {form.recurrence !== 'daily' && (
+        <div className="form-group">
+          <label className="form-label">{form.recurrence==='monthly' ? '繰り返し日（毎月この日）' : '日付（任意）'}</label>
+          <input className="form-input" type="date" value={form.date||''}
+            onChange={e => s('date')(e.target.value)} />
+        </div>
+      )}
+
+      {/* 重要度 */}
+      <div className="form-group">
+        <label className="form-label">重要度</label>
+        <div className="toggle-group">
+          <button style={btnStyle(form.importance===1,'#DC2626','#FEF2F2')}
+            onClick={() => s('importance')(1)}>🔴 重要</button>
+          <button style={btnStyle(form.importance===0||!form.importance)}
+            onClick={() => s('importance')(0)}>⚪ 通常</button>
+        </div>
+      </div>
+
+      {/* 緊急度 */}
+      <div className="form-group">
+        <label className="form-label">緊急度</label>
+        <div className="toggle-group">
+          <button style={btnStyle(form.urgency===1,'#DC2626','#FEF2F2')}
+            onClick={() => s('urgency')(1)}>⚡ 緊急</button>
+          <button style={btnStyle(form.urgency===0||!form.urgency)}
+            onClick={() => s('urgency')(0)}>🕐 通常</button>
+        </div>
+      </div>
+
+      {/* 神メモ軸 */}
+      <div className="form-group">
+        <label className="form-label">神メモ軸（任意）</label>
+        <div className="toggle-group">
+          <button style={btnStyle(!form.axis)} onClick={() => s('axis')('')}>なし</button>
+          {KM_AXES.map(ax => {
+            const a = KM_AXIS_MAP[ax];
+            return (
+              <button key={ax} style={form.axis===ax
+                ? {flex:1,padding:'9px 6px',borderRadius:9,border:`1.5px solid ${a.color}`,background:a.bg,color:a.color,fontSize:13,fontWeight:700,cursor:'pointer'}
+                : btnStyle(false)}
+                onClick={() => s('axis')(ax)}>{ax}</button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 区分（神メモ軸がある時） */}
+      {form.axis && (
+        <div className="form-group">
+          <label className="form-label">神メモの区分</label>
+          <div className="toggle-group">
+            <button style={btnStyle(form.rowType==='work')} onClick={() => s('rowType')('work')}>💼 仕事上</button>
+            <button style={btnStyle(form.rowType==='private')} onClick={() => s('rowType')('private')}>🌱 プライベート</button>
+          </div>
+        </div>
+      )}
+
+      {/* クライアント */}
+      {(clients||[]).length > 0 && (
+        <div className="form-group">
+          <label className="form-label">クライアント（任意）</label>
+          <select className="form-select" value={form.clientId||''}
+            onChange={e => s('clientId')(e.target.value)}>
+            <option value="">なし</option>
+            {(clients||[]).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+      )}
+
+      {/* ベビーステップ */}
+      <div className="form-group">
+        <label className="form-label">🪜 ベビーステップ（任意）</label>
+        <div style={{fontSize:12,color:'var(--text-sub)',marginBottom:8}}>タスクを小さなステップに分けて書けます</div>
+        {(form.steps||[]).map((step, idx) => (
+          <div key={step.id} style={{display:'flex',alignItems:'center',gap:6,padding:'7px 8px',marginBottom:4,background:'var(--bg)',borderRadius:8,border:'1px solid var(--border)'}}>
+            <span style={{fontSize:13,color:'var(--text-sub)',flexShrink:0}}>・</span>
+            <span style={{flex:1,fontSize:13}}>{step.text}</span>
+            <button onClick={() => moveStep(idx,-1)} style={{background:'none',border:'none',color:'#BBB',cursor:'pointer',fontSize:12,padding:'0 2px'}}>↑</button>
+            <button onClick={() => moveStep(idx, 1)} style={{background:'none',border:'none',color:'#BBB',cursor:'pointer',fontSize:12,padding:'0 2px'}}>↓</button>
+            <button onClick={() => removeStep(step.id)} style={{background:'none',border:'none',color:'#CCC',cursor:'pointer',fontSize:15,padding:'0 2px'}}>×</button>
+          </div>
+        ))}
+        <div style={{display:'flex',gap:6,marginTop:4}}>
+          <input className="form-input" style={{flex:1,marginBottom:0}} placeholder="例：資料を印刷する"
+            value={stepInput} onChange={e => setStepInput(e.target.value)}
+            onKeyDown={e => e.key==='Enter' && addStep()} />
+          <button onClick={addStep} style={{padding:'0 14px',borderRadius:8,border:'none',background:'var(--accent)',color:'#fff',fontSize:18,cursor:'pointer',flexShrink:0}}>＋</button>
+        </div>
+      </div>
+
+      {/* メモ */}
+      <div className="form-group">
+        <label className="form-label">メモ</label>
+        <textarea className="form-textarea" style={{minHeight:60}} placeholder="詳細・備考"
+          value={form.memo||''} onChange={e => s('memo')(e.target.value)} />
+      </div>
+
       <div style={{display:'flex',gap:10,marginTop:8}}>
         <button className="btn btn-outline btn-full" onClick={onClose}>キャンセル</button>
         <button className="btn btn-primary btn-full" onClick={save}>保存</button>
