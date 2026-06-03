@@ -1147,68 +1147,72 @@ function CustomerSelect({ label, value, onChange, customers, multi = false }) {
           <span style={{ color: 'var(--text-sub)', fontSize: 13, flexShrink: 0 }}>▼</span>
         </button>
       ) : (
-        <div>
-          <div style={{ position: 'relative' }}>
-            <input autoFocus className="form-input"
-              placeholder="名前で検索..." value={query}
-              onChange={e => setQuery(e.target.value)}
-              style={{ borderColor: 'var(--accent)', borderRadius: '12px 12px 0 0', marginBottom: 0 }} />
-            {query && (
-              <button type="button" onClick={() => setQuery('')}
-                style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
-                  background: '#C7C7CC', border: 'none', borderRadius: '50%',
-                  width: 20, height: 20, color: '#fff', fontSize: 13, cursor: 'pointer',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
-            )}
-          </div>
-          <div style={{ border: '1.5px solid var(--accent)', borderTop: 'none',
-            borderRadius: '0 0 12px 12px', background: '#fff',
-            maxHeight: 220, overflowY: 'auto', position: 'relative', zIndex: 101 }}>
-            {/* なし（単一のみ） */}
-            {!multi && (
-              <button type="button" onClick={() => { onChange(''); setOpen(false); }}
-                style={{ display: 'block', width: '100%', padding: '12px 16px', border: 'none',
-                  background: selectedIds.length === 0 ? 'var(--accent-light)' : '#fff',
-                  color: selectedIds.length === 0 ? 'var(--accent)' : 'var(--text-sub)',
-                  fontWeight: selectedIds.length === 0 ? 700 : 400, fontSize: 15,
-                  textAlign: 'left', cursor: 'pointer', borderBottom: '1px solid var(--border)' }}>
-                — なし —
+        <div style={{ position: 'relative' }}>
+          {/* 外タップで閉じるオーバーレイ（リストより低いzIndex） */}
+          <div style={{ position: 'fixed', inset: 0, zIndex: 200 }}
+            onClick={() => setOpen(false)} />
+
+          {/* 検索 + リスト（オーバーレイより高いzIndex） */}
+          <div style={{ position: 'relative', zIndex: 201 }}>
+            <div style={{ position: 'relative' }}>
+              <input autoFocus className="form-input"
+                placeholder="名前で検索..." value={query}
+                onChange={e => setQuery(e.target.value)}
+                style={{ borderColor: 'var(--accent)', borderRadius: '12px 12px 0 0', marginBottom: 0 }} />
+              {query && (
+                <button type="button" onClick={() => setQuery('')}
+                  style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
+                    background: '#C7C7CC', border: 'none', borderRadius: '50%',
+                    width: 20, height: 20, color: '#fff', fontSize: 13, cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
+              )}
+            </div>
+            <div style={{ border: '1.5px solid var(--accent)', borderTop: 'none',
+              borderRadius: '0 0 12px 12px', background: '#fff',
+              maxHeight: 220, overflowY: 'auto' }}>
+              {!multi && (
+                <button type="button" onClick={() => { onChange(''); setOpen(false); }}
+                  style={{ display: 'block', width: '100%', padding: '12px 16px', border: 'none',
+                    background: selectedIds.length === 0 ? 'var(--accent-light)' : '#fff',
+                    color: selectedIds.length === 0 ? 'var(--accent)' : 'var(--text-sub)',
+                    fontWeight: selectedIds.length === 0 ? 700 : 400, fontSize: 15,
+                    textAlign: 'left', cursor: 'pointer', borderBottom: '1px solid var(--border)' }}>
+                  — なし —
+                </button>
+              )}
+              {filtered.length === 0 && (
+                <div style={{ padding: '12px 16px', color: 'var(--text-sub)', fontSize: 14 }}>該当なし</div>
+              )}
+              {filtered.map(c => {
+                const sel = selectedIds.includes(c.id);
+                return (
+                  <button key={c.id} type="button" onClick={() => toggle(c.id)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '12px 16px',
+                      border: 'none', background: sel ? 'var(--accent-light)' : '#fff',
+                      color: sel ? 'var(--accent)' : 'var(--text)',
+                      fontWeight: sel ? 700 : 500, fontSize: 15,
+                      textAlign: 'left', cursor: 'pointer', borderBottom: '1px solid var(--border)' }}>
+                    {multi && (
+                      <span style={{ width: 20, height: 20, borderRadius: 6, flexShrink: 0,
+                        border: `2px solid ${sel ? 'var(--accent)' : 'var(--border)'}`,
+                        background: sel ? 'var(--accent)' : '#fff',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, color: '#fff' }}>
+                        {sel ? '✓' : ''}
+                      </span>
+                    )}
+                    <span>{c.name}</span>
+                    {c.age && <span style={{ fontSize: 12, color: 'var(--text-sub)' }}>{c.age}歳</span>}
+                  </button>
+                );
+              })}
+            </div>
+            {multi && (
+              <button type="button" onClick={() => setOpen(false)}
+                className="btn btn-primary btn-full" style={{ marginTop: 8, borderRadius: 10 }}>
+                完了（{selectedIds.length}人選択中）
               </button>
             )}
-            {filtered.length === 0 && (
-              <div style={{ padding: '12px 16px', color: 'var(--text-sub)', fontSize: 14 }}>該当なし</div>
-            )}
-            {filtered.map(c => {
-              const sel = selectedIds.includes(c.id);
-              return (
-                <button key={c.id} type="button" onClick={() => toggle(c.id)}
-                  style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '12px 16px',
-                    border: 'none', background: sel ? 'var(--accent-light)' : '#fff',
-                    color: sel ? 'var(--accent)' : 'var(--text)',
-                    fontWeight: sel ? 700 : 500, fontSize: 15,
-                    textAlign: 'left', cursor: 'pointer', borderBottom: '1px solid var(--border)' }}>
-                  {multi && (
-                    <span style={{ width: 20, height: 20, borderRadius: 6, border: `2px solid ${sel ? 'var(--accent)' : 'var(--border)'}`,
-                      background: sel ? 'var(--accent)' : '#fff', flexShrink: 0,
-                      display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, color: '#fff' }}>
-                      {sel ? '✓' : ''}
-                    </span>
-                  )}
-                  <span>{c.name}</span>
-                  {c.age && <span style={{ fontSize: 12, color: 'var(--text-sub)' }}>{c.age}歳</span>}
-                </button>
-              );
-            })}
           </div>
-          {/* 複数選択は「完了」ボタンで閉じる */}
-          {multi && (
-            <button type="button" onClick={() => setOpen(false)}
-              className="btn btn-primary btn-full" style={{ marginTop: 8, borderRadius: 10 }}>
-              完了（{selectedIds.length}人選択中）
-            </button>
-          )}
-          {/* 外タップで閉じる */}
-          <div style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={() => { if (!multi) setOpen(false); }} />
         </div>
       )}
     </div>
