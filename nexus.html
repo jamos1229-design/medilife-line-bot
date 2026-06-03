@@ -2290,9 +2290,40 @@ function AppointmentTab({ customers, onSelect }) {
   );
 }
 
+// ── 商談テンプレート ──────────────────────────────────────────
+const MEMO_TEMPLATE = `【職業・年収】
+
+【家族構成】
+
+【きっかけ・ニーズ】
+
+【刺さったポイント】
+
+【提案商品・金額】
+
+【結果】
+
+【次回アクション】
+
+【雑談・印象】
+`;
+
+const RESULT_OPTIONS = ['継続中', '成約', '見送り', '保留', '紹介待ち'];
+
+// 温度感表示
+const TempDisplay = ({ temp }) => {
+  if (!temp) return null;
+  const n = Number(temp);
+  return (
+    <span style={{ fontSize:16, letterSpacing:1 }}>
+      {'🔥'.repeat(n)}{'⬜'.repeat(5 - n)}
+    </span>
+  );
+};
+
 // ── 商談メモ Form ─────────────────────────────────────────────
 function NegotiationForm({ editing, customers, onSave, onClose }) {
-  const blank = { id: '', date: todayStr(), customerId: '', personName: '', memo: '' };
+  const blank = { id:'', date:todayStr(), customerId:'', personName:'', memo:'', temp:3, result:'継続中' };
   const [form, setForm] = useState({ ...blank, ...(editing || {}) });
   const s = k => v => setForm(f => ({ ...f, [k]: v }));
   const si = k => e => s(k)(e.target.value);
@@ -2303,7 +2334,10 @@ function NegotiationForm({ editing, customers, onSave, onClose }) {
     onClose();
   };
 
-  const selectedCustomer = customers.find(c => c.id === form.customerId);
+  const applyTemplate = () => {
+    if (form.memo.trim() && !window.confirm('メモを商談テンプレートで上書きしますか？')) return;
+    setForm(f => ({ ...f, memo: MEMO_TEMPLATE }));
+  };
 
   return (
     <div className="full-screen">
@@ -2313,14 +2347,12 @@ function NegotiationForm({ editing, customers, onSave, onClose }) {
         <button className="btn btn-primary btn-sm" onClick={save}>保存</button>
       </div>
       <div className="full-content">
+
+        {/* 相手 */}
         <div className="section-header">相手</div>
         <div className="card">
-          <CustomerSelect
-            label="既存顧客から選ぶ"
-            value={form.customerId}
-            onChange={v => s('customerId')(v)}
-            customers={customers}
-          />
+          <CustomerSelect label="既存顧客から選ぶ" value={form.customerId}
+            onChange={v => s('customerId')(v)} customers={customers} />
           {!form.customerId && (
             <div className="form-group" style={{ marginTop:14, marginBottom:0 }}>
               <label className="form-label">または名前を入力（新規の場合）</label>
@@ -2329,18 +2361,55 @@ function NegotiationForm({ editing, customers, onSave, onClose }) {
           )}
         </div>
 
+        {/* 商談情報 */}
         <div className="section-header">商談情報</div>
         <div className="card">
           <div className="form-group">
             <label className="form-label">商談日</label>
             <input className="form-input" type="date" value={form.date} onChange={si('date')} />
           </div>
-          <div className="form-group" style={{ marginBottom:0 }}>
-            <label className="form-label">メモ（Geminiの書き起こしを貼り付け）</label>
-            <textarea className="form-textarea" style={{ minHeight:200 }}
-              placeholder="Geminiで書き起こしたテキストをここに貼り付け..."
-              value={form.memo} onChange={si('memo')} />
+
+          {/* 結果 */}
+          <div className="form-group">
+            <label className="form-label">結果</label>
+            <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+              {RESULT_OPTIONS.map(r => (
+                <button key={r} onClick={() => s('result')(r)} style={{
+                  padding:'6px 12px', borderRadius:20, border:'1.5px solid', fontSize:12, fontWeight:700, cursor:'pointer',
+                  borderColor: form.result===r ? (r==='成約'?'#16A34A':r==='見送り'?'#DC2626':'var(--accent)') : 'var(--border)',
+                  background:  form.result===r ? (r==='成約'?'#DCFCE7':r==='見送り'?'#FEE2E2':'var(--accent-light)') : 'var(--bg)',
+                  color:       form.result===r ? (r==='成約'?'#16A34A':r==='見送り'?'#DC2626':'var(--accent)') : 'var(--text-sub)',
+                }}>{r}</button>
+              ))}
+            </div>
           </div>
+
+          {/* 温度感 */}
+          <div className="form-group" style={{ marginBottom:0 }}>
+            <label className="form-label">温度感（{form.temp || 3}/5）<TempDisplay temp={form.temp || 3} /></label>
+            <input type="range" min="1" max="5" step="1"
+              value={form.temp || 3}
+              onChange={e => s('temp')(Number(e.target.value))}
+              style={{ width:'100%', accentColor:'var(--accent)', marginTop:4 }} />
+            <div style={{ display:'flex', justifyContent:'space-between', fontSize:10, color:'var(--text-sub)', marginTop:2 }}>
+              <span>冷たい</span><span>熱い</span>
+            </div>
+          </div>
+        </div>
+
+        {/* メモ */}
+        <div className="section-header" style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+          <span>メモ</span>
+          <button onClick={applyTemplate} style={{
+            fontSize:11, padding:'4px 10px', borderRadius:8,
+            border:'1.5px solid var(--accent)', background:'var(--accent-light)',
+            color:'var(--accent)', cursor:'pointer', fontWeight:700,
+          }}>📋 テンプレート挿入</button>
+        </div>
+        <div className="card">
+          <textarea className="form-textarea" style={{ minHeight:240 }}
+            placeholder="Geminiで書き起こしたテキストを貼り付け、またはテンプレートを使ってください..."
+            value={form.memo} onChange={si('memo')} />
         </div>
 
         <button className="btn btn-primary btn-full" style={{ marginTop:8 }} onClick={save}>保存する</button>
@@ -2350,7 +2419,7 @@ function NegotiationForm({ editing, customers, onSave, onClose }) {
 }
 
 // ── 商談メモ Detail ───────────────────────────────────────────
-function NegotiationDetail({ memo, customers, onEdit, onDelete, onClose, onRegisterAsCustomer }) {
+function NegotiationDetail({ memo, customers, onEdit, onDelete, onClose, onRegisterAsCustomer, onAddTask }) {
   const [confirmDel, setConfirmDel] = useState(false);
   const [toast, setToast] = useState('');
   const customer = customers.find(c => c.id === memo.customerId);
@@ -2410,12 +2479,44 @@ ${memo.memo}`.trim();
         {/* ヘッダー */}
         <div className="card" style={{ marginBottom:10 }}>
           <div style={{ fontSize:22, fontWeight:800, marginBottom:4 }}>{displayName}</div>
-          <div style={{ fontSize:14, color:'var(--text-sub)', marginBottom:10 }}>📅 {fmtDateFull(memo.date)}</div>
+          <div style={{ fontSize:14, color:'var(--text-sub)', marginBottom:8 }}>📅 {fmtDateFull(memo.date)}</div>
+          <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', marginBottom: (!customer && memo.personName) ? 10 : 0 }}>
+            {memo.result && (
+              <span style={{
+                fontSize:12, fontWeight:700, padding:'3px 10px', borderRadius:12,
+                background: memo.result==='成約'?'#DCFCE7':memo.result==='見送り'?'#FEE2E2':'var(--accent-light)',
+                color: memo.result==='成約'?'#16A34A':memo.result==='見送り'?'#DC2626':'var(--accent)',
+              }}>{memo.result}</span>
+            )}
+            {memo.temp && <TempDisplay temp={memo.temp} />}
+          </div>
           {!customer && memo.personName && (
             <button className="btn btn-primary btn-sm" onClick={() => onRegisterAsCustomer(memo)}>
               👤 顧客として登録 →
             </button>
           )}
+        </div>
+
+        {/* フォローアップリマインダー */}
+        <div className="card" style={{ marginBottom:10, background:'#F0FDF4', border:'1.5px solid #BBF7D0' }}>
+          <div style={{ fontSize:12, fontWeight:700, color:'#16A34A', marginBottom:8 }}>⏰ フォローアップリマインダー</div>
+          <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+            {[['3日後', 3], ['1週間後', 7], ['2週間後', 14], ['1ヶ月後', 30]].map(([label, days]) => {
+              const date = new Date(); date.setDate(date.getDate() + days);
+              const dateStr = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
+              return (
+                <button key={label} onClick={() => {
+                  onAddTask({ id:uid(), title:`${displayName} フォローアップ`, date:dateStr, importance:1, urgency:0, completed:false, memo:`商談日：${memo.date}` });
+                  showToast(`✅ ${label}のタスクを追加しました`);
+                }} style={{
+                  padding:'7px 12px', borderRadius:20, border:'1.5px solid #BBF7D0',
+                  background:'#fff', fontSize:12, fontWeight:700, color:'#16A34A', cursor:'pointer',
+                }}>
+                  {label}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {/* メモ本文 */}
@@ -2513,6 +2614,31 @@ function NegotiationTab({ memos, setMemos, customers, onSelect }) {
               onChange={e => { if (e.target.files[0]) { importShodanCSV(e.target.files[0], setMemos); e.target.value=''; } }} />
           </label>
         </div>
+        {/* 成約率トラッカー */}
+        {memos.length > 0 && (() => {
+          const total   = memos.length;
+          const won     = memos.filter(m => m.result === '成約').length;
+          const lost    = memos.filter(m => m.result === '見送り').length;
+          const rate    = total > 0 ? Math.round(won / total * 100) : 0;
+          const avgTemp = memos.filter(m => m.temp).length > 0
+            ? (memos.filter(m => m.temp).reduce((s, m) => s + Number(m.temp), 0) / memos.filter(m => m.temp).length).toFixed(1)
+            : null;
+          return (
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr', gap:6, marginBottom:8 }}>
+              {[
+                { label:'商談数', value:total, color:'var(--accent)' },
+                { label:'成約',   value:won,   color:'#16A34A' },
+                { label:'見送り', value:lost,  color:'#DC2626' },
+                { label:'成約率', value:`${rate}%`, color: rate>=50?'#16A34A':'var(--accent)' },
+              ].map(item => (
+                <div key={item.label} style={{ background:'var(--surface)', borderRadius:10, padding:'8px 6px', textAlign:'center', border:'1px solid var(--border)' }}>
+                  <div style={{ fontSize:16, fontWeight:800, color:item.color }}>{item.value}</div>
+                  <div style={{ fontSize:10, color:'var(--text-sub)', fontWeight:600 }}>{item.label}</div>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
         <div style={{ fontSize:12, color:'var(--text-sub)', marginBottom:8 }}>{filtered.length}件</div>
       </div>
 
@@ -2524,13 +2650,23 @@ function NegotiationTab({ memos, setMemos, customers, onSelect }) {
           return (
             <div key={m.id} className="customer-card" onClick={() => onSelect(m)}>
               <div className="customer-card-top">
-                <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
                   <div className="customer-name">{name}</div>
+                  {m.result && (
+                    <span style={{
+                      fontSize:11, fontWeight:700, padding:'2px 8px', borderRadius:10,
+                      background: m.result==='成約'?'#DCFCE7':m.result==='見送り'?'#FEE2E2':'var(--accent-light)',
+                      color: m.result==='成約'?'#16A34A':m.result==='見送り'?'#DC2626':'var(--accent)',
+                    }}>{m.result}</span>
+                  )}
                   {!c && m.personName && (
                     <span className="badge" style={{ background:'#FEF3C7', color:'#D97706' }}>未登録</span>
                   )}
                 </div>
-                <div style={{ fontSize:12, color:'var(--text-sub)', whiteSpace:'nowrap' }}>{fmtDate(m.date)}</div>
+                <div style={{ display:'flex', alignItems:'center', gap:6, flexShrink:0 }}>
+                  {m.temp && <TempDisplay temp={m.temp} />}
+                  <div style={{ fontSize:12, color:'var(--text-sub)' }}>{fmtDate(m.date)}</div>
+                </div>
               </div>
               {m.memo && (
                 <div style={{ fontSize:13, color:'var(--text-sub)', marginTop:4, overflow:'hidden',
@@ -4152,6 +4288,7 @@ function App() {
           onDelete={id => { deleteMemo(id); setSelectedMemo(null); }}
           onClose={() => setSelectedMemo(null)}
           onRegisterAsCustomer={m => { setSelectedMemo(null); registerMemoAsCustomer(m); }}
+          onAddTask={t => setTasks(prev => [t, ...prev])}
         />
       )}
 
