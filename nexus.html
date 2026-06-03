@@ -2624,89 +2624,255 @@ function SalesTracker({ sales, onChange, clients }) {
   );
 }
 
-function SuspectsPanel({ suspects, setSuspects }) {
-  const [filter, setFilter] = useState('すべて');
-  const [showForm, setShowForm] = useState(false);
-  const [editing, setEditing] = useState(null);
+// ── サスペクト（app.html完全互換）───────────────────────────
+const SUSPECT_STATUS_COLOR = { '未接触':'#6B7280', '接触済み':'#2563EB', '育成中':'#059669' };
+const SUSPECT_STATUS_BG    = { '未接触':'#F3F4F6', '接触済み':'#EFF6FF', '育成中':'#ECFDF5' };
 
-  const filtered = suspects.filter(s => filter === 'すべて' || s.status === filter);
-  const save = sp => {
-    setSuspects(prev => {
-      const idx = prev.findIndex(x => x.id === sp.id);
-      return idx >= 0 ? prev.map((x,i)=>i===idx?sp:x) : [...prev, sp];
-    });
-    setShowForm(false); setEditing(null);
-  };
-  const del = id => setSuspects(prev => prev.filter(x => x.id !== id));
+function SuspectDrawer({ editing, onSave, onClose }) {
+  const thisYear = new Date().getFullYear();
+  const years  = Array.from({length:6}, (_,i) => thisYear + i);
+  const months = Array.from({length:12}, (_,i) => i + 1);
+
+  const [form, setForm] = useState({
+    name:'', status:'未接触', phone:'', occupation:'', jobType:'',
+    workplace:'', referrer:'', relationship:'未設定', helpCats:[],
+    lifeStage:'未設定', approachYear:'', approachMonth:'', memo:'',
+    ...(editing || {}),
+  });
+  const s = k => v => setForm(f => ({...f, [k]:v}));
+  const toggleHelpCat = cat => setForm(f => {
+    const cats = f.helpCats || [];
+    return {...f, helpCats: cats.includes(cat) ? cats.filter(c=>c!==cat) : [...cats, cat]};
+  });
 
   return (
-    <div>
-      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
-        <div style={{fontSize:12,color:'var(--text-sub)'}}>サスペクト {suspects.length}人</div>
-        <button className="btn btn-primary btn-sm" onClick={()=>{setEditing(null);setShowForm(true)}}>＋ 追加</button>
-      </div>
-      <div className="filter-chips" style={{marginBottom:8}}>
-        {['すべて',...SUSPECT_STATUSES].map(s=>(
-          <button key={s} className={`chip ${filter===s?'active':''}`} onClick={()=>setFilter(s)}>{s}</button>
-        ))}
-      </div>
-      {filtered.length===0 ? <EmptyState icon="👤" text="サスペクトを追加してください" /> : filtered.map(sp=>(
-        <div key={sp.id} className="card" style={{marginBottom:8}}>
-          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:4}}>
-            <div style={{fontSize:16,fontWeight:700}}>{sp.name}
-              {sp.age && <span style={{fontSize:12,color:'var(--text-sub)',marginLeft:6}}>{sp.age}歳</span>}
-            </div>
-            <div style={{display:'flex',gap:6}}>
-              <span style={{fontSize:11,padding:'2px 8px',borderRadius:10,background:'var(--accent-light)',color:'var(--accent)',fontWeight:700}}>{sp.status||'未接触'}</span>
-              <button onClick={()=>{setEditing(sp);setShowForm(true)}} style={{padding:'3px 8px',borderRadius:6,border:'1.5px solid var(--border)',background:'var(--bg)',fontSize:12,cursor:'pointer'}}>編集</button>
-              <button onClick={()=>del(sp.id)} style={{padding:'3px 8px',borderRadius:6,border:'none',background:'#FEF2F2',color:'var(--danger)',fontSize:12,cursor:'pointer'}}>削除</button>
-            </div>
-          </div>
-          {sp.lifeStage && <span style={{fontSize:11,background:'#F3F4F6',color:'var(--text-sub)',padding:'1px 7px',borderRadius:6}}>{sp.lifeStage}</span>}
-          {sp.approachDate && <div style={{fontSize:12,color:'var(--text-sub)',marginTop:4}}>📅 アプローチ：{fmtDateFull(sp.approachDate)}</div>}
-          {sp.memo && <div style={{fontSize:13,color:'var(--text-sub)',marginTop:4}}>{sp.memo}</div>}
-        </div>
-      ))}
-      {showForm && (
-        <div className="overlay" onClick={()=>{setShowForm(false);setEditing(null)}}>
-          <div className="drawer" onClick={e=>e.stopPropagation()}>
-            <div className="drawer-handle"/>
-            <div className="drawer-title">{editing?'サスペクト編集':'サスペクト追加'}</div>
-            <SuspectFormApp editing={editing} onSave={save} onClose={()=>{setShowForm(false);setEditing(null)}} />
+    <div className="overlay" onClick={e => e.target===e.currentTarget && onClose()}>
+      <div className="drawer">
+        <div className="drawer-handle"/>
+        <div className="drawer-title">{editing ? 'サスペクト編集' : 'サスペクト追加'}</div>
+
+        <div className="form-group">
+          <label className="form-label">ステータス</label>
+          <div className="toggle-group">
+            {SUSPECT_STATUSES.map(st => (
+              <button key={st} className="toggle-btn"
+                style={form.status===st ? {borderColor:SUSPECT_STATUS_COLOR[st],background:SUSPECT_STATUS_BG[st],color:SUSPECT_STATUS_COLOR[st]} : {}}
+                onClick={() => s('status')(st)}>{st}</button>
+            ))}
           </div>
         </div>
-      )}
+
+        <div className="form-group">
+          <label className="form-label">名前</label>
+          <input className="form-input" placeholder="氏名を入力..." value={form.name}
+            onChange={e => s('name')(e.target.value)} autoFocus />
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">連絡先（電話番号など）</label>
+          <input className="form-input" placeholder="090-0000-0000" value={form.phone}
+            onChange={e => s('phone')(e.target.value)} />
+        </div>
+
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+          <div className="form-group">
+            <label className="form-label">職業</label>
+            <input className="form-input" placeholder="会社員など" value={form.occupation}
+              onChange={e => s('occupation')(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">職種</label>
+            <input className="form-input" placeholder="営業・ITなど" value={form.jobType}
+              onChange={e => s('jobType')(e.target.value)} />
+          </div>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">勤務先</label>
+          <input className="form-input" placeholder="会社名" value={form.workplace}
+            onChange={e => s('workplace')(e.target.value)} />
+        </div>
+
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+          <div className="form-group">
+            <label className="form-label">紹介者</label>
+            <input className="form-input" placeholder="紹介者名" value={form.referrer}
+              onChange={e => s('referrer')(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">関係性</label>
+            <select className="form-select" value={form.relationship} onChange={e => s('relationship')(e.target.value)}>
+              {RELATIONSHIPS.map(r => <option key={r} value={r}>{r}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">お役に立てる分類（複数可）</label>
+          <div className="toggle-group" style={{flexWrap:'wrap'}}>
+            {HELP_CATS.map(cat => (
+              <button key={cat} className={`toggle-btn ${(form.helpCats||[]).includes(cat) ? 'sel-blue' : ''}`}
+                onClick={() => toggleHelpCat(cat)}>{cat}</button>
+            ))}
+          </div>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">ライフステージ</label>
+          <select className="form-select" value={form.lifeStage} onChange={e => s('lifeStage')(e.target.value)}>
+            {LIFE_STAGES.map(l => <option key={l} value={l}>{l}</option>)}
+          </select>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">アプローチ時期</label>
+          <div style={{display:'flex',gap:8,alignItems:'center'}}>
+            <select className="form-select" style={{flex:1}} value={form.approachYear} onChange={e => s('approachYear')(e.target.value)}>
+              <option value="">年</option>
+              {years.map(y => <option key={y} value={y}>{y}年</option>)}
+            </select>
+            <select className="form-select" style={{flex:1}} value={form.approachMonth} onChange={e => s('approachMonth')(e.target.value)}>
+              <option value="">月</option>
+              {months.map(m => <option key={m} value={m}>{m}月</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">メモ</label>
+          <textarea className="form-textarea" placeholder="気づいたこと・会話メモなど..."
+            value={form.memo} onChange={e => s('memo')(e.target.value)} />
+        </div>
+
+        <button className="btn btn-primary btn-full" style={{marginTop:4}}
+          onClick={() => { if (!form.name.trim()) return; onSave({...form, id:form.id||uid()}); onClose(); }}>
+          保存
+        </button>
+      </div>
     </div>
   );
 }
 
-function SuspectFormApp({ editing, onSave, onClose }) {
-  const [form, setForm] = useState({id:'',name:'',age:'',status:'未接触',lifeStage:'',approachDate:'',memo:'',...(editing||{})});
-  const si = k => e => setForm(f=>({...f,[k]:e.target.value}));
-  const save = () => { if(!form.name.trim()) return; onSave({...form,id:form.id||uid()}); };
+function SuspectsPanel({ suspects, setSuspects }) {
+  const [filterStatus, setFilterStatus] = useState('すべて');
+  const [expandedId, setExpandedId]     = useState(null);
+  const [showForm, setShowForm]         = useState(false);
+  const [editing, setEditing]           = useState(null);
+
+  const filtered = filterStatus==='すべて' ? suspects : suspects.filter(s => s.status===filterStatus);
+  const approachStr = s => {
+    if (!s.approachYear && !s.approachMonth) return null;
+    return `${s.approachYear||''}年 ${s.approachMonth||''}月頃`;
+  };
+  const save = sp => {
+    setSuspects(prev => {
+      const idx = prev.findIndex(x=>x.id===sp.id);
+      return idx>=0 ? prev.map((x,i)=>i===idx?sp:x) : [...prev, sp];
+    });
+    setShowForm(false); setEditing(null);
+  };
+  const del = id => setSuspects(prev => prev.filter(x=>x.id!==id));
+
   return (
-    <>
-      <div className="form-row" style={{marginBottom:8}}>
-        <div><label className="form-label">名前 *</label><input className="form-input" placeholder="例：田中太郎" value={form.name} onChange={si('name')} autoFocus/></div>
-        <div><label className="form-label">年齢</label><input className="form-input" type="number" placeholder="例：35" value={form.age} onChange={si('age')}/></div>
+    <div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+        <div style={{fontSize:20,fontWeight:800,letterSpacing:'-0.4px'}}>サスペクトリスト</div>
+        <button className="btn btn-primary" style={{padding:'6px 14px',fontSize:13}} onClick={()=>{setEditing(null);setShowForm(true)}}>＋ 追加</button>
       </div>
-      <div className="form-group"><label className="form-label">ステータス</label>
-        <div className="toggle-group">{SUSPECT_STATUSES.slice(0,4).map(s=>(
-          <button key={s} type="button" className={`toggle-btn ${form.status===s?'sel':''}`} onClick={()=>setForm(f=>({...f,status:s}))} style={{minWidth:'unset',flex:'none',padding:'8px 10px',fontSize:12}}>{s}</button>
-        ))}</div>
+
+      <div className="toggle-group" style={{marginBottom:14}}>
+        {['すべて',...SUSPECT_STATUSES].map(st => (
+          <button key={st} className="toggle-btn"
+            style={filterStatus===st ? (st==='すべて'
+              ? {borderColor:'var(--accent)',background:'var(--accent-light)',color:'var(--accent)'}
+              : {borderColor:SUSPECT_STATUS_COLOR[st],background:SUSPECT_STATUS_BG[st],color:SUSPECT_STATUS_COLOR[st]}) : {}}
+            onClick={() => setFilterStatus(st)}>{st}</button>
+        ))}
       </div>
-      <div className="form-group"><label className="form-label">ライフステージ</label>
-        <div className="toggle-group">{LIFE_STAGES.map(s=>(
-          <button key={s} type="button" className={`toggle-btn ${form.lifeStage===s?'sel':''}`} onClick={()=>setForm(f=>({...f,lifeStage:f.lifeStage===s?'':s}))} style={{minWidth:'unset',flex:'none',padding:'7px 8px',fontSize:11}}>{s}</button>
-        ))}</div>
-      </div>
-      <div className="form-group"><label className="form-label">アプローチ予定日</label><input className="form-input" type="date" value={form.approachDate} onChange={si('approachDate')}/></div>
-      <div className="form-group"><label className="form-label">メモ</label><textarea className="form-textarea" style={{minHeight:60}} placeholder="保険状況・ニーズ・紹介元など" value={form.memo} onChange={si('memo')}/></div>
-      <div style={{display:'flex',gap:10,marginTop:8}}>
-        <button className="btn btn-outline btn-full" onClick={onClose}>キャンセル</button>
-        <button className="btn btn-primary btn-full" onClick={save}>保存</button>
-      </div>
-    </>
+
+      {filtered.length===0 ? (
+        <div className="empty">
+          <div className="empty-icon">🎯</div>
+          <div>{filterStatus==='すべて' ? 'サスペクトを追加してください' : `${filterStatus}のサスペクトはいません`}</div>
+        </div>
+      ) : (
+        <div style={{display:'flex',flexDirection:'column',gap:10}}>
+          {filtered.map(s => {
+            const isOpen = expandedId===s.id;
+            const sc = SUSPECT_STATUS_COLOR[s.status] || '#6B7280';
+            const sb = SUSPECT_STATUS_BG[s.status]    || '#F3F4F6';
+            return (
+              <div key={s.id} className="card" style={{padding:0,overflow:'hidden'}}>
+                <div style={{display:'flex',alignItems:'center',gap:10,padding:'12px 14px',cursor:'pointer'}}
+                  onClick={() => setExpandedId(isOpen ? null : s.id)}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:'flex',alignItems:'center',gap:7,flexWrap:'wrap'}}>
+                      <span style={{fontSize:15,fontWeight:700}}>{s.name}</span>
+                      <span style={{fontSize:11,fontWeight:700,padding:'2px 8px',borderRadius:10,
+                        color:sc,background:sb,border:`1px solid ${sc}33`}}>{s.status}</span>
+                    </div>
+                    <div style={{fontSize:12,color:'var(--text-sub)',marginTop:3,display:'flex',gap:8,flexWrap:'wrap'}}>
+                      {s.workplace && <span>🏢 {s.workplace}</span>}
+                      {approachStr(s) && <span>📅 {approachStr(s)}</span>}
+                      {s.referrer   && <span>👤 {s.referrer}紹介</span>}
+                    </div>
+                    {(s.helpCats||[]).length>0 && (
+                      <div style={{display:'flex',gap:4,marginTop:5,flexWrap:'wrap'}}>
+                        {s.helpCats.map(c => (
+                          <span key={c} style={{fontSize:10,padding:'1px 6px',borderRadius:4,
+                            background:'var(--accent-light)',color:'var(--accent)',fontWeight:600}}>{c}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <span style={{color:'var(--text-sub)',fontSize:13}}>{isOpen?'▲':'▼'}</span>
+                </div>
+
+                {isOpen && (
+                  <div style={{borderTop:'1px solid var(--border)',padding:'12px 14px',background:'var(--bg)'}}>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:10}}>
+                      {[
+                        ['連絡先', s.phone],
+                        ['職業',   s.occupation],
+                        ['職種',   s.jobType],
+                        ['関係性', s.relationship!=='未設定' ? s.relationship : null],
+                        ['ライフS', s.lifeStage!=='未設定' ? s.lifeStage : null],
+                      ].filter(([,v])=>v).map(([label,val])=>(
+                        <div key={label}>
+                          <div style={{fontSize:10,color:'var(--text-sub)',fontWeight:600}}>{label}</div>
+                          <div style={{fontSize:13,fontWeight:500,marginTop:1}}>{val}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {s.memo && (
+                      <div style={{marginBottom:10}}>
+                        <div style={{fontSize:10,color:'var(--text-sub)',fontWeight:600,marginBottom:2}}>メモ</div>
+                        <div style={{fontSize:13,lineHeight:1.6}}>{s.memo}</div>
+                      </div>
+                    )}
+                    <div style={{display:'flex',gap:8}}>
+                      <button className="btn btn-primary" style={{flex:1,fontSize:13}}
+                        onClick={()=>{setEditing(s);setShowForm(true)}}>編集</button>
+                      <button style={{flex:1,fontSize:13,padding:'10px',borderRadius:10,border:'1.5px solid var(--danger)',
+                        background:'#FEF2F2',color:'var(--danger)',cursor:'pointer',fontWeight:600}}
+                        onClick={()=>{ if(window.confirm(`${s.name}を削除しますか？`)){del(s.id);setExpandedId(null);} }}>削除</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {showForm && (
+        <SuspectDrawer
+          editing={editing}
+          onSave={save}
+          onClose={()=>{setShowForm(false);setEditing(null)}}
+        />
+      )}
+    </div>
   );
 }
 
@@ -2829,62 +2995,134 @@ function VisionPanel({ vision, setVision, tasks, clients }) {
 }
 
 // ── ガントチャート ────────────────────────────────────────────
-function GanttPanel({ tasks }) {
-  const today = new Date(); today.setHours(0,0,0,0);
-  // 今日から8週間（56日）
-  const days = Array.from({length:56},(_,i)=>{
-    const d = new Date(today); d.setDate(d.getDate()+i); return d;
+function GanttPanel({ tasks, clients }) {
+  const CELL_W    = 34;
+  const LABEL_W   = 108;
+  const DAYS_BEFORE = 4;
+  const DAYS_TOTAL  = 56;
+
+  const todayD = new Date(); todayD.setHours(0,0,0,0);
+  const startD = new Date(todayD); startD.setDate(startD.getDate() - DAYS_BEFORE);
+  const toStr  = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const todaySt = toStr(todayD);
+
+  const dates = Array.from({length:DAYS_TOTAL}, (_,i) => {
+    const d = new Date(startD); d.setDate(d.getDate()+i); return d;
   });
-  const weeks = [];
-  for(let i=0;i<56;i+=7) weeks.push(days.slice(i,i+7));
 
-  const withDate = tasks.filter(t=>t.date && !t.completed);
-  const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const monthGroups = [];
+  dates.forEach((d,i) => {
+    const label = `${d.getMonth()+1}月`;
+    if (!monthGroups.length || monthGroups[monthGroups.length-1].label !== label) {
+      monthGroups.push({label, start:i, count:1});
+    } else { monthGroups[monthGroups.length-1].count++; }
+  });
 
-  if(withDate.length===0) return <EmptyState icon="📅" text="期日付きタスクがありません" />;
+  const clientName = id => (clients||[]).find(c=>c.id===id)?.name;
+  const scheduled = [...tasks]
+    .filter(t => t.date && (!t.recurrence || t.recurrence==='none'))
+    .sort((a,b) => a.date.localeCompare(b.date));
+
+  const dotColor = t => {
+    if (t.completed) return '#D1D5DB';
+    if (t.axis && KM_AXIS_MAP[t.axis]) return KM_AXIS_MAP[t.axis].color;
+    if (t.importance===1||t.importance===true) return '#EF4444';
+    return 'var(--accent)';
+  };
+
+  const scrollRef = React.useRef(null);
+  React.useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollLeft = DAYS_BEFORE * CELL_W - 8;
+  }, []);
 
   return (
-    <div style={{overflowX:'auto'}}>
-      {weeks.map((week,wi)=>{
-        const tasksInWeek = withDate.filter(t=>week.some(d=>fmt(d)===t.date));
-        if(tasksInWeek.length===0) return null;
-        return (
-          <div key={wi} className="card" style={{marginBottom:8}}>
-            <div style={{fontSize:12,fontWeight:700,color:'var(--text-sub)',marginBottom:8}}>
-              {week[0].getMonth()+1}/{week[0].getDate()} 〜 {week[6].getMonth()+1}/{week[6].getDate()}
+    <div>
+      <div style={{fontSize:20,fontWeight:800,marginBottom:14,letterSpacing:'-0.4px'}}>ガントチャート</div>
+      <p style={{fontSize:12,color:'var(--text-sub)',marginBottom:10,lineHeight:1.6}}>
+        タスクの締切日を横軸で確認。横スクロールで8週先まで見えます。
+      </p>
+      {scheduled.length===0 ? (
+        <div className="empty" style={{marginTop:40}}>
+          <div className="empty-icon">📊</div>
+          <div>日付付きのタスクを追加すると<br/>ここに表示されます</div>
+        </div>
+      ) : (
+        <div style={{overflowX:'auto',WebkitOverflowScrolling:'touch',borderRadius:12,border:'1px solid var(--border)'}} ref={scrollRef}>
+          <div style={{minWidth:LABEL_W + CELL_W*DAYS_TOTAL}}>
+
+            {/* 月ヘッダー */}
+            <div style={{display:'flex',background:'#fff',borderBottom:'1px solid var(--border)'}}>
+              <div style={{width:LABEL_W,flexShrink:0}}/>
+              {monthGroups.map((mg,i)=>(
+                <div key={i} style={{width:CELL_W*mg.count,flexShrink:0,fontSize:10,fontWeight:800,
+                  color:'var(--accent)',padding:'4px 6px',borderLeft:i>0?'2px solid var(--accent)':'none'}}>
+                  {mg.label}
+                </div>
+              ))}
             </div>
-            <div style={{display:'flex',gap:2,marginBottom:8}}>
-              {week.map((d,di)=>{
-                const isToday = fmt(d)===fmt(today);
-                const hasTasks = tasksInWeek.some(t=>t.date===fmt(d));
+
+            {/* 日付ヘッダー */}
+            <div style={{display:'flex',background:'#fff',borderBottom:'2px solid var(--border)'}}>
+              <div style={{width:LABEL_W,flexShrink:0,fontSize:10,fontWeight:600,color:'var(--text-sub)',
+                padding:'4px 8px',display:'flex',alignItems:'center'}}>タスク名</div>
+              {dates.map((d,i)=>{
+                const isToday = toStr(d)===todaySt;
+                const isSun   = d.getDay()===0;
+                const isSat   = d.getDay()===6;
                 return (
-                  <div key={di} style={{flex:1,textAlign:'center',padding:'4px 2px',borderRadius:6,
-                    background:isToday?'var(--accent)':hasTasks?'var(--accent-light)':'var(--bg)',
-                    color:isToday?'#fff':hasTasks?'var(--accent)':'var(--text-sub)',fontSize:11,fontWeight:isToday?800:400}}>
-                    <div>{['日','月','火','水','木','金','土'][d.getDay()]}</div>
-                    <div style={{fontWeight:700}}>{d.getDate()}</div>
-                    {hasTasks&&<div style={{width:5,height:5,borderRadius:'50%',background:isToday?'#fff':'var(--accent)',margin:'2px auto 0'}}/>}
+                  <div key={i} style={{width:CELL_W,flexShrink:0,textAlign:'center',padding:'3px 0',
+                    borderLeft:'1px solid var(--border)',
+                    background:isToday?'var(--accent)':isSun?'#FEF2F2':isSat?'#EFF6FF':''}}>
+                    <div style={{fontSize:9,fontWeight:700,
+                      color:isToday?'#fff':isSun?'#EF4444':isSat?'#2563EB':'var(--text-sub)'}}>
+                      {JP_DAY[d.getDay()]}
+                    </div>
+                    <div style={{fontSize:11,fontWeight:isToday?800:500,
+                      color:isToday?'#fff':isSun?'#EF4444':isSat?'#2563EB':'var(--text)'}}>
+                      {d.getDate()}
+                    </div>
                   </div>
                 );
               })}
             </div>
-            {tasksInWeek.map(t=>{
-              const td = new Date(t.date); td.setHours(0,0,0,0);
-              const overdue = td < today;
-              return (
-                <div key={t.id} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 10px',
-                  background:overdue?'#FEF2F2':'var(--bg)',borderRadius:8,marginBottom:4}}>
-                  <span style={{fontSize:12,fontWeight:700,color:overdue?'var(--danger)':'var(--text-sub)',whiteSpace:'nowrap'}}>
-                    {new Date(t.date).getMonth()+1}/{new Date(t.date).getDate()}
-                  </span>
-                  <span style={{fontSize:14,flex:1}}>{t.title}</span>
-                  {overdue&&<span style={{fontSize:10,color:'var(--danger)',fontWeight:700}}>期限切れ</span>}
+
+            {/* タスク行 */}
+            {scheduled.map((t,ti)=>(
+              <div key={t.id} style={{display:'flex',alignItems:'center',
+                borderBottom:ti<scheduled.length-1?'1px solid var(--border)':'none',minHeight:44}}>
+                <div style={{width:LABEL_W,flexShrink:0,padding:'6px 8px',
+                  borderRight:'1px solid var(--border)',alignSelf:'stretch',
+                  display:'flex',flexDirection:'column',justifyContent:'center'}}>
+                  <div style={{fontSize:12,fontWeight:600,lineHeight:1.3,
+                    whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',
+                    color:t.completed?'var(--text-sub)':'var(--text)',
+                    textDecoration:t.completed?'line-through':'none'}}>{t.title}</div>
+                  {clientName(t.clientId) && (
+                    <div style={{fontSize:10,color:'var(--text-sub)',marginTop:2,
+                      whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                      👤 {clientName(t.clientId)}
+                    </div>
+                  )}
                 </div>
-              );
-            })}
+                {dates.map((d,i)=>{
+                  const ds=toStr(d), isToday=ds===todaySt, isSun=d.getDay()===0, isSat=d.getDay()===6, hit=t.date===ds;
+                  return (
+                    <div key={i} style={{width:CELL_W,flexShrink:0,height:44,
+                      display:'flex',alignItems:'center',justifyContent:'center',
+                      borderLeft:'1px solid var(--border)',
+                      background:isToday?'#EEEEFF':isSun?'#FFF8F8':isSat?'#F5F9FF':ti%2===1?'#FAFAFA':''}}>
+                      {hit && (
+                        <div style={{width:14,height:14,borderRadius:'50%',
+                          background:dotColor(t),boxShadow:`0 0 0 4px ${dotColor(t)}30`}}/>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
           </div>
-        );
-      }).filter(Boolean)}
+        </div>
+      )}
     </div>
   );
 }
@@ -3341,7 +3579,7 @@ function TaskTab({ tasks, setTasks, clients, setClients, vision, setVision, susp
       {/* 神メモ */}
       {subTab==='vision' && <VisionPanel vision={vision} setVision={setVision} tasks={tasks} clients={clients}/>}
       {/* ガント */}
-      {subTab==='gantt' && <GanttPanel tasks={tasks}/>}
+      {subTab==='gantt' && <GanttPanel tasks={tasks} clients={clients}/>}
       {/* サスペクト */}
       {subTab==='suspects' && <SuspectsPanel suspects={suspects} setSuspects={setSuspects}/>}
       {/* ログ */}
