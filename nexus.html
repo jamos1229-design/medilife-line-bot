@@ -2419,7 +2419,7 @@ function NegotiationDetail({ memo, customers, onEdit, onDelete, onClose, onRegis
 }
 
 // ── 商談メモ Tab ──────────────────────────────────────────────
-function NegotiationTab({ memos, customers, onSelect }) {
+function NegotiationTab({ memos, setMemos, customers, onSelect }) {
   const [search, setSearch] = useState('');
   const filtered = [...memos]
     .filter(m => {
@@ -2433,10 +2433,17 @@ function NegotiationTab({ memos, customers, onSelect }) {
   return (
     <div>
       <div style={{ position:'sticky', top:0, background:'var(--bg)', zIndex:5, paddingBottom:4 }}>
-        <div className="search-wrap">
-          <span>🔍</span>
-          <input className="search-input" placeholder="名前・メモで検索..." value={search} onChange={e => setSearch(e.target.value)} />
-          {search && <button className="search-clear" onClick={() => setSearch('')}>×</button>}
+        <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:6 }}>
+          <div className="search-wrap" style={{ flex:1, margin:0 }}>
+            <span>🔍</span>
+            <input className="search-input" placeholder="名前・メモで検索..." value={search} onChange={e => setSearch(e.target.value)} />
+            {search && <button className="search-clear" onClick={() => setSearch('')}>×</button>}
+          </div>
+          <label style={{ fontSize:11, padding:'6px 10px', borderRadius:8, border:'1px solid var(--accent)', background:'var(--accent-light)', color:'var(--accent)', cursor:'pointer', fontWeight:600, whiteSpace:'nowrap' }}>
+            📥 商談CSV
+            <input type="file" accept=".csv" style={{ display:'none' }}
+              onChange={e => { if (e.target.files[0]) { importShodanCSV(e.target.files[0], setMemos); e.target.value=''; } }} />
+          </label>
         </div>
         <div style={{ fontSize:12, color:'var(--text-sub)', marginBottom:8 }}>{filtered.length}件</div>
       </div>
@@ -3808,6 +3815,75 @@ function importCSV(file, setCustomers) {
   reader.readAsText(file, 'UTF-8');
 }
 
+// ── 商談メモCSVインポート（shodan3.html形式）─────────────────
+function importShodanCSV(file, setMemos) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const text = e.target.result.replace(/^﻿/, '');
+      const lines = text.split(/\r?\n/).filter(l => l.trim());
+      if (lines.length < 2) { alert('データがありません'); return; }
+
+      const headers = lines[0].split(',').map(h => h.replace(/^"|"$/g, '').trim());
+      const parseVal = v => (v || '').replace(/^"|"$/g, '').replace(/""/g, '"').trim();
+
+      const imported = lines.slice(1).map(line => {
+        const cols = [];
+        let cur = '', inQ = false;
+        for (let i = 0; i < line.length; i++) {
+          const ch = line[i];
+          if (ch === '"') { inQ = !inQ; }
+          else if (ch === ',' && !inQ) { cols.push(cur); cur = ''; }
+          else { cur += ch; }
+        }
+        cols.push(cur);
+
+        const get = key => parseVal(cols[headers.indexOf(key)] || '');
+        const personName = get('顧客名');
+        if (!personName) return null;
+
+        // shodan3フィールドをmemoテキストにまとめる
+        const parts = [
+          get('場所')       && `📍 場所：${get('場所')}`,
+          get('職業・年収') && `💼 職業・年収：${get('職業・年収')}`,
+          get('家族構成')   && `👨‍👩‍👧 家族構成：${get('家族構成')}`,
+          get('きっかけ')   && `💡 きっかけ：${get('きっかけ')}`,
+          get('ニーズ')     && `🎯 ニーズ：${get('ニーズ')}`,
+          get('刺さったポイント') && `✨ 刺さったポイント：${get('刺さったポイント')}`,
+          get('ツール')     && `🛠 ツール：${get('ツール')}`,
+          get('商品・金額') && `💰 商品・金額：${get('商品・金額')}`,
+          get('結果')       && `📊 結果：${get('結果')}`,
+          get('告知・注意') && `⚠️ 告知・注意：${get('告知・注意')}`,
+          get('次回アクション') && `➡️ 次回アクション：${get('次回アクション')}`,
+          get('温度感')     && `🌡 温度感：${get('温度感')}`,
+          get('雑談メモ')   && `💬 雑談メモ：${get('雑談メモ')}`,
+          get('印象・気づき') && `📝 印象・気づき：${get('印象・気づき')}`,
+        ].filter(Boolean).join('\n');
+
+        return {
+          id: get('ID') || String(Date.now() + Math.random()),
+          date: get('面談日') || todayStr(),
+          customerId: '',
+          personName,
+          memo: parts,
+        };
+      }).filter(Boolean);
+
+      if (imported.length === 0) { alert('インポートできる行がありません'); return; }
+
+      setMemos(prev => {
+        const existingIds = new Set(prev.map(m => m.id));
+        const newOnes = imported.filter(m => !existingIds.has(m.id));
+        alert(`✅ 商談メモ インポート完了：${newOnes.length}件追加`);
+        return [...prev, ...newOnes];
+      });
+    } catch(err) {
+      alert('CSVの読み込みに失敗しました: ' + err.message);
+    }
+  };
+  reader.readAsText(file, 'UTF-8');
+}
+
 function exportJSON(customers) {
   const data = JSON.stringify({ customers }, null, 2);
   const blob = new Blob([data], { type: 'application/json' });
@@ -3943,7 +4019,7 @@ function App() {
           <CustomerListTab customers={customers} onSelect={setSelectedCustomer} onAdd={openNewCustomer} />
         )}
         {tab === 'memo' && (
-          <NegotiationTab memos={memos} customers={customers} onSelect={setSelectedMemo} />
+          <NegotiationTab memos={memos} setMemos={setMemos} customers={customers} onSelect={setSelectedMemo} />
         )}
         {tab === 'task' && (
           <TaskTab tasks={tasks} setTasks={setTasks} clients={clients} setClients={setClients}
