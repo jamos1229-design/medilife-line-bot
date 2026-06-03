@@ -3161,6 +3161,71 @@ function importJSON(file, setCustomers) {
   reader.readAsText(file, 'UTF-8');
 }
 
+function importCSV(file, setCustomers) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const text = e.target.result.replace(/^﻿/, ''); // BOM除去
+      const lines = text.split(/\r?\n/).filter(l => l.trim());
+      if (lines.length < 2) { alert('データがありません'); return; }
+
+      const headers = lines[0].split(',').map(h => h.replace(/^"|"$/g, '').trim());
+      const parseVal = v => v.replace(/^"|"$/g, '').replace(/""/g, '"').trim();
+
+      const imported = lines.slice(1).map(line => {
+        // カンマ区切り（引用符内のカンマを考慮）
+        const cols = [];
+        let cur = '', inQ = false;
+        for (let i = 0; i < line.length; i++) {
+          const ch = line[i];
+          if (ch === '"') { inQ = !inQ; }
+          else if (ch === ',' && !inQ) { cols.push(cur); cur = ''; }
+          else { cur += ch; }
+        }
+        cols.push(cur);
+
+        const get = key => parseVal(cols[headers.indexOf(key)] || '');
+        const name = get('氏名') || get('name') || get('名前');
+        if (!name) return null;
+        return {
+          id: String(Date.now() + Math.random()),
+          customerType: '個人',
+          name,
+          age: get('年齢') || get('age') || '',
+          gender: get('性別') || '',
+          birthdate: get('生年月日') || '',
+          phone: get('電話番号') || get('phone') || '',
+          email: get('メールアドレス') || get('email') || '',
+          postalCode: get('郵便番号') || '',
+          address: get('住所') || get('address') || '',
+          occupation: get('職業') || get('occupation') || '',
+          workplace: get('勤務先') || get('workplace') || '',
+          status: get('ステータス') || get('status') || '未接触',
+          contactMethod: get('接触方法') || '電話',
+          lastContact: get('最終接触日') || '',
+          nextAppt: get('次回アポイント') || '',
+          memo: get('面談メモ') || get('memo') || '',
+          lineRegistered: get('LINE登録') === '登録済',
+          contracts: [],
+          suspects: [],
+          referredBy: '',
+        };
+      }).filter(Boolean);
+
+      if (imported.length === 0) { alert('インポートできる行がありません'); return; }
+
+      setCustomers(prev => {
+        const merged = [...prev, ...imported];
+        alert(`インポート完了：${imported.length}件追加`);
+        return merged;
+      });
+    } catch(err) {
+      alert('CSVの読み込みに失敗しました: ' + err.message);
+    }
+  };
+  reader.readAsText(file, 'UTF-8');
+}
+
 function exportJSON(customers) {
   const data = JSON.stringify({ customers }, null, 2);
   const blob = new Blob([data], { type: 'application/json' });
@@ -3265,6 +3330,11 @@ function App() {
               📥JSON
               <input type="file" accept=".json" style={{ display:'none' }}
                 onChange={e => { if (e.target.files[0]) { importJSON(e.target.files[0], setCustomers); e.target.value=''; } }} />
+            </label>
+            <label style={{ fontSize:11, padding:'5px 10px', borderRadius:8, border:'1px solid var(--accent)', background:'var(--accent-light)', color:'var(--accent)', cursor:'pointer', fontWeight:600 }}>
+              📥CSV
+              <input type="file" accept=".csv" style={{ display:'none' }}
+                onChange={e => { if (e.target.files[0]) { importCSV(e.target.files[0], setCustomers); e.target.value=''; } }} />
             </label>
             <button onClick={() => exportJSON(customers)}
               style={{ fontSize:11, padding:'5px 10px', borderRadius:8, border:'1px solid var(--border)', background:'#fff', color:'var(--text-sub)', cursor:'pointer', fontWeight:600 }}>
