@@ -4204,23 +4204,31 @@ function App() {
           <h1 style={{ fontSize:18 }}>MEDILIFE NEXUS</h1>
           <div style={{ display:'flex', gap:6, alignItems:'center' }}>
             <span className="header-sub">{customers.length}名</span>
+            {/* iOSでも確実に動く：localStorageから直接読み込み */}
+            <button onClick={() => {
+              try {
+                const raw = localStorage.getItem('customers_v1');
+                if (!raw) { alert('旧アプリのデータが見つかりません。\n同じSafariで ins.html / kokyaku.html を一度開いてから試してください。'); return; }
+                const data = JSON.parse(raw);
+                if (!Array.isArray(data) || data.length === 0) { alert('データが空です。'); return; }
+                setCustomers(prev => {
+                  const existingIds = new Set(prev.map(c => c.id));
+                  const newOnes = data.filter(c => !existingIds.has(c.id));
+                  alert(`✅ 読み込み完了：${newOnes.length}件追加（既存${prev.length}件）`);
+                  return [...prev, ...newOnes];
+                });
+              } catch(err) { alert('読み込みに失敗しました: ' + err.message); }
+            }} style={{ fontSize:11, padding:'5px 10px', borderRadius:8, border:'1.5px solid #16A34A', background:'#DCFCE7', color:'#16A34A', cursor:'pointer', fontWeight:700, whiteSpace:'nowrap' }}>
+              📲 既契約を読込
+            </button>
             <label style={{ fontSize:11, padding:'5px 10px', borderRadius:8, border:'1px solid var(--accent)', background:'var(--accent-light)', color:'var(--accent)', cursor:'pointer', fontWeight:600 }}>
               📥JSON
               <input type="file" accept=".json" style={{ display:'none' }}
                 onChange={e => { if (e.target.files[0]) { importJSON(e.target.files[0], { setCustomers, setTasks, setClients, setVision, setSuspects, setSales, setLogs }); e.target.value=''; } }} />
             </label>
-            <label style={{ fontSize:11, padding:'5px 10px', borderRadius:8, border:'1px solid var(--accent)', background:'var(--accent-light)', color:'var(--accent)', cursor:'pointer', fontWeight:600 }}>
-              📥CSV
-              <input type="file" accept=".csv" style={{ display:'none' }}
-                onChange={e => { if (e.target.files[0]) { importCSV(e.target.files[0], setCustomers); e.target.value=''; } }} />
-            </label>
             <button onClick={() => exportJSON(customers)}
               style={{ fontSize:11, padding:'5px 10px', borderRadius:8, border:'1px solid var(--border)', background:'#fff', color:'var(--text-sub)', cursor:'pointer', fontWeight:600 }}>
               JSON
-            </button>
-            <button onClick={() => exportCSV(customers)}
-              style={{ fontSize:11, padding:'5px 10px', borderRadius:8, border:'1px solid var(--border)', background:'#fff', color:'var(--text-sub)', cursor:'pointer', fontWeight:600 }}>
-              CSV
             </button>
           </div>
         </div>
