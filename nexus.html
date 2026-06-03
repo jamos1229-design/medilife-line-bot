@@ -304,6 +304,41 @@
       letter-spacing: 0.5px;
       margin-bottom: 8px; margin-top: 6px; padding-left: 4px;
     }
+
+    /* ── Matrix ── */
+    .matrix-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .matrix-cell { border-radius: 12px; padding: 12px; min-height: 110px; }
+    .mc-q1 { background: #FEF2F2; border: 1.5px solid #FECACA; }
+    .mc-q2 { background: #EFF6FF; border: 1.5px solid #BFDBFE; }
+    .mc-q3 { background: #FFFBEB; border: 1.5px solid #FDE68A; }
+    .mc-q4 { background: #F0FDF4; border: 1.5px solid #BBF7D0; }
+    .mc-label { font-size: 12px; font-weight: 800; margin-bottom: 2px; }
+    .mc-q1 .mc-label { color: #DC2626; }
+    .mc-q2 .mc-label { color: #2563EB; }
+    .mc-q3 .mc-label { color: #D97706; }
+    .mc-q4 .mc-label { color: #16A34A; }
+    .mc-sub { font-size: 10px; opacity: 0.6; margin-bottom: 8px; font-weight: 500; }
+    .mc-task { font-size: 12px; padding: 3px 0; border-bottom: 1px solid rgba(0,0,0,0.06); line-height: 1.4; }
+    .mc-task:last-child { border-bottom: none; }
+
+    /* ── 神メモ Vision ── */
+    .km-band { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; margin-bottom: 14px; }
+    .km-grid { display: grid; grid-template-columns: 1fr 1.5fr 1fr; }
+    .km-head-cell { padding: 8px 6px; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); text-align: center; }
+    .km-head-cell:last-child { border-right: none; }
+    .km-head-tag { font-size: 9px; font-weight: 700; color: var(--text-sub); letter-spacing: 0.4px; }
+    .km-head-period { font-size: 12px; font-weight: 800; color: var(--text); margin-top: 1px; }
+    .km-head-axis { font-size: 15px; font-weight: 800; margin-top: 1px; }
+    .km-head-sub { font-size: 9px; font-weight: 500; opacity: 0.65; margin-top: 1px; }
+    .km-data-cell { padding: 8px 6px; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); }
+    .km-data-cell:last-child { border-right: none; }
+    .km-data-cell.km-last-row { border-bottom: none; }
+    .km-data-label { font-size: 9px; font-weight: 700; color: var(--text-sub); margin-bottom: 4px; letter-spacing: 0.3px; }
+    .km-data-hint { font-size: 9px; color: var(--text-sub); line-height: 1.4; margin-bottom: 5px; }
+    .km-ta { width: 100%; border: 1.5px solid var(--border); background: var(--bg); border-radius: 6px; padding: 6px; font-size: 11px; font-family: inherit; color: var(--text); resize: none; outline: none; min-height: 68px; line-height: 1.4; transition: border-color 0.15s, background 0.15s; }
+    .km-ta:focus { border-color: var(--accent); background: var(--surface); }
+    .km-ta::placeholder { color: #C4C4CC; font-size: 10px; }
+    .km-ta-center { background: var(--surface); }
   </style>
 </head>
 <body>
@@ -2682,74 +2717,113 @@ const VISION_TYPES = ['仕事','プライベート'];
 const AXIS_ICONS = { ロマン:'🌟', ソロバン:'💰', チャージ:'⚡' };
 const AXIS_COLORS = { ロマン:'#7C3AED', ソロバン:'#059669', チャージ:'#DC2626' };
 
-function VisionPanel({ vision, setVision }) {
-  const [selected, setSelected] = useState(null); // {axis, type}
+function VisionPanel({ vision, setVision, tasks, clients }) {
+  const rows = [
+    { key:'work',    label:'仕事上' },
+    { key:'private', label:'プライベート' },
+  ];
+  const updateVision = (key, val) => setVision(prev => ({...prev, [key]: val}));
 
-  // 選択セルの編集モード
-  if (selected) {
-    const key = `${selected.axis}_${selected.type}`;
-    return (
-      <div>
-        <button onClick={() => setSelected(null)}
-          style={{background:'none',border:'none',color:'var(--text-sub)',fontWeight:700,fontSize:15,cursor:'pointer',marginBottom:12,padding:0}}>
-          ← 戻る
-        </button>
-        <div className="card" style={{borderTop:`3px solid ${AXIS_COLORS[selected.axis]}`}}>
-          <div style={{fontSize:16,fontWeight:800,marginBottom:4,color:AXIS_COLORS[selected.axis]}}>
-            {AXIS_ICONS[selected.axis]} {selected.axis} × {selected.type}
-          </div>
-          <textarea className="form-textarea" style={{minHeight:200}}
-            placeholder={`${selected.axis}×${selected.type}のビジョン・目標・想いを書く...`}
-            value={vision[key]||''}
-            onChange={e => setVision(prev=>({...prev,[key]:e.target.value}))}
-            autoFocus />
-        </div>
-      </div>
-    );
-  }
-
-  // グリッド一覧
   return (
     <div>
-      <div style={{fontSize:12,color:'var(--text-sub)',marginBottom:12}}>
-        セルをタップして編集 / 3軸×仕事・プライベート
-      </div>
-      {/* ヘッダー行 */}
-      <div style={{display:'grid',gridTemplateColumns:'60px 1fr 1fr',gap:4,marginBottom:4}}>
-        <div/>
-        {VISION_TYPES.map(t=>(
-          <div key={t} style={{textAlign:'center',fontSize:12,fontWeight:700,color:'var(--text-sub)',padding:'4px 0'}}>{t}</div>
-        ))}
-      </div>
-      {/* 軸ごとの行 */}
-      {VISION_AXES.map(axis=>(
-        <div key={axis} style={{display:'grid',gridTemplateColumns:'60px 1fr 1fr',gap:4,marginBottom:4}}>
-          {/* 軸ラベル */}
-          <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',
-            background:AXIS_COLORS[axis]+'20',borderRadius:10,padding:'8px 4px'}}>
-            <span style={{fontSize:18}}>{AXIS_ICONS[axis]}</span>
-            <span style={{fontSize:10,fontWeight:800,color:AXIS_COLORS[axis],marginTop:2}}>{axis}</span>
-          </div>
-          {/* 各セル */}
-          {VISION_TYPES.map(type=>{
-            const key = `${axis}_${type}`;
-            const val = vision[key]||'';
-            return (
-              <button key={type} onClick={()=>setSelected({axis,type})}
-                style={{textAlign:'left',padding:'10px 10px',borderRadius:10,cursor:'pointer',minHeight:80,
-                  border:`1.5px solid ${val?AXIS_COLORS[axis]:'var(--border)'}`,
-                  background:val?AXIS_COLORS[axis]+'10':'var(--bg)',
-                  display:'flex',flexDirection:'column',justifyContent:'space-between'}}>
-                <div style={{fontSize:12,color:val?AXIS_COLORS[axis]:'var(--text-sub)',lineHeight:1.4,
-                  overflow:'hidden',display:'-webkit-box',WebkitLineClamp:3,WebkitBoxOrient:'vertical'}}>
-                  {val || <span style={{opacity:0.4}}>タップして入力...</span>}
+      <div style={{fontSize:20,fontWeight:800,marginBottom:14,letterSpacing:'-0.4px'}}>神メモ</div>
+      <p style={{fontSize:12,color:'var(--text-sub)',marginBottom:14,lineHeight:1.6}}>
+        神センター（中央）にビジョンを書き、左右のタスクでそれを実現する
+      </p>
+
+      {KM_BANDS.map((band, bi) => {
+        const isLast = bi === KM_BANDS.length - 1;
+        return (
+          <div key={bi} className="km-band">
+            {/* ヘッダー行 */}
+            <div className="km-grid">
+              <div className="km-head-cell" style={{background:'var(--bg)'}}>
+                <div className="km-head-tag">タスク</div>
+                <div className="km-head-period">{band.leftPeriod}</div>
+              </div>
+              <div className="km-head-cell" style={{background:band.axisBg}}>
+                <div className="km-head-tag" style={{color:band.axisColor}}>神センター</div>
+                <div className="km-head-axis" style={{color:band.axisColor}}>{band.axisName}</div>
+                <div className="km-head-sub" style={{color:band.axisColor}}>{band.axisSub}</div>
+              </div>
+              <div className="km-head-cell" style={{background:'var(--bg)'}}>
+                <div className="km-head-tag">タスク</div>
+                <div className="km-head-period">{band.rightPeriod}</div>
+              </div>
+            </div>
+
+            {/* 仕事上・プライベート 行 */}
+            {rows.map((row, ri) => {
+              const lastRow = ri === rows.length - 1;
+              const lKey = `km_${bi}_left_${row.key}`;
+              const cKey = `km_${bi}_center_${row.key}`;
+              const rKey = `km_${bi}_right_${row.key}`;
+              const centerHint = row.key==='work' ? band.centerWorkHint : band.centerPrivateHint;
+              const rowType = row.key;
+
+              const axTasks = (tasks||[]).filter(t =>
+                !t.completed && t.axis===band.axisName && (t.rowType||'work')===rowType
+              );
+              const leftTasks  = axTasks.filter(t => { const d=daysUntil(t.date); return d!==null && d>band.splitDays; });
+              const rightTasks = axTasks.filter(t => { const d=daysUntil(t.date); return d===null || d<=band.splitDays; });
+              const relClients = (clients||[]).filter(c => c.axis===band.axisName && (c.rowType||'work')===rowType);
+
+              const TaskList = ({ items }) => items.length===0 ? null : (
+                <div style={{marginTop:5,display:'flex',flexDirection:'column',gap:3}}>
+                  {items.map(t => (
+                    <div key={t.id} style={{lineHeight:1.4,padding:'3px 5px',borderRadius:4,
+                      background:band.axisBg,borderLeft:`2px solid ${band.axisColor}`}}>
+                      <div style={{fontSize:10,color:band.axisColor,fontWeight:700}}>📌 {t.title}</div>
+                      {t.date
+                        ? <div style={{fontSize:9,color:band.axisColor,opacity:0.7,marginTop:1}}>{fmtDate(t.date)}</div>
+                        : <div style={{fontSize:9,color:'#999',marginTop:1}}>日付未定</div>}
+                    </div>
+                  ))}
                 </div>
-                {val && <div style={{fontSize:10,color:AXIS_COLORS[axis],marginTop:4,fontWeight:700}}>編集 ›</div>}
-              </button>
-            );
-          })}
-        </div>
-      ))}
+              );
+
+              const ClientList = ({ items }) => items.length===0 ? null : (
+                <div style={{marginTop:5,display:'flex',flexDirection:'column',gap:2}}>
+                  {items.map(c => (
+                    <div key={c.id} style={{fontSize:10,color:band.axisColor,lineHeight:1.4,
+                      padding:'2px 5px',borderRadius:4,background:band.axisBg,fontWeight:600}}>
+                      👤 {c.name}
+                    </div>
+                  ))}
+                </div>
+              );
+
+              return (
+                <div key={row.key} className="km-grid">
+                  <div className={`km-data-cell ${lastRow?'km-last-row':''}`}>
+                    <div className="km-data-label">{row.label}</div>
+                    <textarea className="km-ta" placeholder={band.taskHint}
+                      value={vision[lKey]||''}
+                      onChange={e=>updateVision(lKey,e.target.value)} />
+                    <TaskList items={leftTasks} />
+                  </div>
+                  <div className={`km-data-cell ${lastRow?'km-last-row':''}`}
+                    style={{background:band.axisBg+'66'}}>
+                    <div className="km-data-label" style={{color:band.axisColor}}>{row.label}</div>
+                    <div className="km-data-hint">{centerHint}</div>
+                    <textarea className="km-ta km-ta-center" placeholder={centerHint}
+                      value={vision[cKey]||''}
+                      onChange={e=>updateVision(cKey,e.target.value)} />
+                    <ClientList items={relClients} />
+                  </div>
+                  <div className={`km-data-cell ${lastRow?'km-last-row':''}`}>
+                    <div className="km-data-label">{row.label}</div>
+                    <textarea className="km-ta" placeholder={band.taskHint}
+                      value={vision[rKey]||''}
+                      onChange={e=>updateVision(rKey,e.target.value)} />
+                    <TaskList items={rightTasks} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -3265,7 +3339,7 @@ function TaskTab({ tasks, setTasks, clients, setClients, vision, setVision, susp
       )}
 
       {/* 神メモ */}
-      {subTab==='vision' && <VisionPanel vision={vision} setVision={setVision}/>}
+      {subTab==='vision' && <VisionPanel vision={vision} setVision={setVision} tasks={tasks} clients={clients}/>}
       {/* ガント */}
       {subTab==='gantt' && <GanttPanel tasks={tasks}/>}
       {/* サスペクト */}
