@@ -3759,6 +3759,29 @@ function importCSV(file, setCustomers) {
         const get = key => parseVal(cols[headers.indexOf(key)] || '');
         const name = get('氏名') || get('name') || get('名前');
         if (!name) return null;
+
+        // 契約データの復元（証券番号一覧・払込方法一覧・通貨一覧から）
+        const policyNums   = get('証券番号一覧').split('/').map(s=>s.trim()).filter(Boolean);
+        const payCycles    = get('払込方法一覧').split('/').map(s=>s.trim()).filter(Boolean);
+        const currencies   = get('通貨一覧').split('/').map(s=>s.trim()).filter(Boolean);
+        const contractCount = parseInt(get('契約数')) || policyNums.length;
+        const contracts = Array.from({length: contractCount}, (_, i) => ({
+          id: String(Date.now() + Math.random() + i),
+          category: '生保',
+          type: '',
+          company: '',
+          policyNum:    policyNums[i]  || '',
+          paymentCycle: payCycles[i]   || '月払',
+          currency:     currencies[i]  || '円',
+          insuredName: '',
+          insuredBirthdate: '',
+          premium: '',
+          date: '',
+          termEnd: '',
+          coverage: '',
+          memo: '',
+        }));
+
         return {
           id: String(Date.now() + Math.random()),
           customerType: '個人',
@@ -3778,7 +3801,7 @@ function importCSV(file, setCustomers) {
           nextAppt: get('次回アポイント') || '',
           memo: get('面談メモ') || get('memo') || '',
           lineRegistered: get('LINE登録') === '登録済',
-          contracts: [],
+          contracts,
           suspects: [],
           referredBy: '',
         };
