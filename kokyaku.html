@@ -2101,8 +2101,25 @@ function App() {
       <div className="header">
         <div className="header-row">
           <h1>既契約管理</h1>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
             <span className="header-sub">{customers.length}名</span>
+            <button
+              onClick={() => {
+                const data = JSON.stringify({ customers }, null, 2);
+                const blob = new Blob([data], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a'); a.href = url;
+                const d = new Date();
+                a.download = `既契約データ_${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}.json`;
+                a.click(); URL.revokeObjectURL(url);
+              }}
+              style={{
+                fontSize: 11, padding: '5px 10px', borderRadius: 8,
+                border: '1px solid var(--accent)', background: 'var(--accent-light)',
+                color: 'var(--accent)', cursor: 'pointer', fontWeight: 700,
+              }}>
+              📤 JSON書き出し
+            </button>
             <button
               onClick={() => exportCSV(customers)}
               style={{

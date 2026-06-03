@@ -739,7 +739,7 @@ function CustomerForm({ editing, onSave, onClose, customers }) {
     contracts: [],
     suspects: [],
     referredBy: '',
-    referredTo: '',
+    referredTo: [],   // 複数可・IDの配列
   };
   const [form, setForm] = useState({ ...blank, ...(editing || {}) });
   const s = k => v => setForm(f => ({ ...f, [k]: v }));
@@ -1005,10 +1005,11 @@ function CustomerForm({ editing, onSave, onClose, customers }) {
           />
           <div style={{ marginTop: 14 }}>
             <CustomerSelect
-              label="紹介先（この顧客が紹介した人）"
+              label="紹介先（この顧客が紹介した人・複数可）"
               value={form.referredTo}
               onChange={v => s('referredTo')(v)}
               customers={otherCustomers}
+              multi={true}
             />
           </div>
         </div>
@@ -1020,27 +1021,48 @@ function CustomerForm({ editing, onSave, onClose, customers }) {
 }
 
 // ── Searchable Customer Select ────────────────────────────────
-function CustomerSelect({ label, value, onChange, customers }) {
+// multi=false → 単一選択（value=ID文字列, onChange(id)）
+// multi=true  → 複数選択（value=ID配列, onChange(ids[])）
+function CustomerSelect({ label, value, onChange, customers, multi = false }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
-  const selected = customers.find(c => c.id === value);
+
+  // 単一・複数どちらでも扱えるよう正規化
+  const selectedIds = multi
+    ? (Array.isArray(value) ? value : (value ? [value] : []))
+    : (value ? [value] : []);
+
+  const selectedCustomers = selectedIds.map(id => customers.find(c => c.id === id)).filter(Boolean);
 
   const filtered = customers.filter(c =>
     !query || c.name.includes(query) || (c.phone || '').includes(query)
   );
 
+  const toggle = (id) => {
+    if (!multi) { onChange(id); setOpen(false); return; }
+    const next = selectedIds.includes(id)
+      ? selectedIds.filter(x => x !== id)
+      : [...selectedIds, id];
+    onChange(next);
+    // 複数選択はリストを閉じない
+  };
+
+  const displayLabel = selectedCustomers.length === 0
+    ? '— なし —'
+    : selectedCustomers.map(c => c.name).join('、');
+
   return (
     <div className="form-group" style={{ marginBottom: 0, position: 'relative' }}>
       <label className="form-label">{label}</label>
-      {/* 選択済み表示 or 検索入力 */}
       {!open ? (
         <button type="button" onClick={() => { setOpen(true); setQuery(''); }}
           style={{ width: '100%', padding: '13px 14px', borderRadius: 12,
             border: '1.5px solid var(--border)', background: 'var(--bg)',
-            fontSize: 16, textAlign: 'left', cursor: 'pointer', color: value ? 'var(--text)' : 'var(--text-sub)',
+            fontSize: 15, textAlign: 'left', cursor: 'pointer',
+            color: selectedCustomers.length ? 'var(--text)' : 'var(--text-sub)',
             display: 'flex', alignItems: 'center', justifyContent: 'space-between', minHeight: 48 }}>
-          <span>{selected ? selected.name : '— なし —'}</span>
-          <span style={{ color: 'var(--text-sub)', fontSize: 13 }}>▼</span>
+          <span style={{ flex: 1, marginRight: 8 }}>{displayLabel}</span>
+          <span style={{ color: 'var(--text-sub)', fontSize: 13, flexShrink: 0 }}>▼</span>
         </button>
       ) : (
         <div>
@@ -1060,32 +1082,51 @@ function CustomerSelect({ label, value, onChange, customers }) {
           <div style={{ border: '1.5px solid var(--accent)', borderTop: 'none',
             borderRadius: '0 0 12px 12px', background: '#fff',
             maxHeight: 220, overflowY: 'auto', position: 'relative', zIndex: 101 }}>
-            {/* なし */}
-            <button type="button" onClick={() => { onChange(''); setOpen(false); }}
-              style={{ display: 'block', width: '100%', padding: '12px 16px', border: 'none',
-                background: !value ? 'var(--accent-light)' : '#fff',
-                color: !value ? 'var(--accent)' : 'var(--text-sub)',
-                fontWeight: !value ? 700 : 400, fontSize: 15, textAlign: 'left', cursor: 'pointer',
-                borderBottom: '1px solid var(--border)' }}>
-              — なし —
-            </button>
+            {/* なし（単一のみ） */}
+            {!multi && (
+              <button type="button" onClick={() => { onChange(''); setOpen(false); }}
+                style={{ display: 'block', width: '100%', padding: '12px 16px', border: 'none',
+                  background: selectedIds.length === 0 ? 'var(--accent-light)' : '#fff',
+                  color: selectedIds.length === 0 ? 'var(--accent)' : 'var(--text-sub)',
+                  fontWeight: selectedIds.length === 0 ? 700 : 400, fontSize: 15,
+                  textAlign: 'left', cursor: 'pointer', borderBottom: '1px solid var(--border)' }}>
+                — なし —
+              </button>
+            )}
             {filtered.length === 0 && (
               <div style={{ padding: '12px 16px', color: 'var(--text-sub)', fontSize: 14 }}>該当なし</div>
             )}
-            {filtered.map(c => (
-              <button key={c.id} type="button" onClick={() => { onChange(c.id); setOpen(false); }}
-                style={{ display: 'block', width: '100%', padding: '12px 16px', border: 'none',
-                  background: value === c.id ? 'var(--accent-light)' : '#fff',
-                  color: value === c.id ? 'var(--accent)' : 'var(--text)',
-                  fontWeight: value === c.id ? 700 : 500, fontSize: 15,
-                  textAlign: 'left', cursor: 'pointer', borderBottom: '1px solid var(--border)' }}>
-                {c.name}
-                {c.age && <span style={{ fontSize: 12, color: 'var(--text-sub)', marginLeft: 6 }}>{c.age}歳</span>}
-              </button>
-            ))}
+            {filtered.map(c => {
+              const sel = selectedIds.includes(c.id);
+              return (
+                <button key={c.id} type="button" onClick={() => toggle(c.id)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '12px 16px',
+                    border: 'none', background: sel ? 'var(--accent-light)' : '#fff',
+                    color: sel ? 'var(--accent)' : 'var(--text)',
+                    fontWeight: sel ? 700 : 500, fontSize: 15,
+                    textAlign: 'left', cursor: 'pointer', borderBottom: '1px solid var(--border)' }}>
+                  {multi && (
+                    <span style={{ width: 20, height: 20, borderRadius: 6, border: `2px solid ${sel ? 'var(--accent)' : 'var(--border)'}`,
+                      background: sel ? 'var(--accent)' : '#fff', flexShrink: 0,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, color: '#fff' }}>
+                      {sel ? '✓' : ''}
+                    </span>
+                  )}
+                  <span>{c.name}</span>
+                  {c.age && <span style={{ fontSize: 12, color: 'var(--text-sub)' }}>{c.age}歳</span>}
+                </button>
+              );
+            })}
           </div>
+          {/* 複数選択は「完了」ボタンで閉じる */}
+          {multi && (
+            <button type="button" onClick={() => setOpen(false)}
+              className="btn btn-primary btn-full" style={{ marginTop: 8, borderRadius: 10 }}>
+              完了（{selectedIds.length}人選択中）
+            </button>
+          )}
           {/* 外タップで閉じる */}
-          <div style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={() => setOpen(false)} />
+          <div style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={() => { if (!multi) setOpen(false); }} />
         </div>
       )}
     </div>
@@ -1097,7 +1138,11 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose, onRegi
   const [confirmDel, setConfirmDel] = useState(false);
   const c = customer;
   const referredByCustomer = customers.find(x => x.id === c.referredBy);
-  const referredToCustomer = customers.find(x => x.id === c.referredTo);
+  // referredTo は配列・文字列どちらも互換対応
+  const referredToIds = Array.isArray(c.referredTo)
+    ? c.referredTo
+    : (c.referredTo ? [c.referredTo] : []);
+  const referredToCustomers = referredToIds.map(id => customers.find(x => x.id === id)).filter(Boolean);
   const apptDays = daysUntil(c.nextAppt);
 
   return (
@@ -1466,20 +1511,30 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose, onRegi
         )}
 
         {/* 紹介管理 */}
-        {(referredByCustomer || referredToCustomer) && (
+        {(referredByCustomer || referredToCustomers.length > 0) && (
           <>
             <div className="section-header">紹介ネットワーク</div>
             <div className="card">
               {referredByCustomer && (
-                <div style={{ marginBottom: referredToCustomer ? 10 : 0 }}>
-                  <div className="info-label">紹介元</div>
+                <div style={{ marginBottom: referredToCustomers.length > 0 ? 12 : 0 }}>
+                  <div className="info-label" style={{ marginBottom: 6 }}>紹介元</div>
                   <div style={{ fontSize: 15, fontWeight: 700 }}>👤 {referredByCustomer.name}</div>
                 </div>
               )}
-              {referredToCustomer && (
+              {referredToCustomers.length > 0 && (
                 <div>
-                  <div className="info-label">紹介先</div>
-                  <div style={{ fontSize: 15, fontWeight: 700 }}>👤 {referredToCustomer.name}</div>
+                  <div className="info-label" style={{ marginBottom: 6 }}>
+                    紹介先（{referredToCustomers.length}人）
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {referredToCustomers.map(rc => (
+                      <div key={rc.id} style={{ fontSize: 15, fontWeight: 700 }}>👤 {rc.name}
+                        {rc.age && <span style={{ fontSize: 12, color: 'var(--text-sub)', marginLeft: 6, fontWeight: 400 }}>
+                          {rc.birthdate ? calcAge(rc.birthdate) : calcStoredAge(rc.age, rc.ageYear)}歳
+                        </span>}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
@@ -2101,8 +2156,25 @@ function App() {
       <div className="header">
         <div className="header-row">
           <h1>既契約管理</h1>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
             <span className="header-sub">{customers.length}名</span>
+            <button
+              onClick={() => {
+                const data = JSON.stringify({ customers }, null, 2);
+                const blob = new Blob([data], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a'); a.href = url;
+                const d = new Date();
+                a.download = `既契約データ_${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}.json`;
+                a.click(); URL.revokeObjectURL(url);
+              }}
+              style={{
+                fontSize: 11, padding: '5px 10px', borderRadius: 8,
+                border: '1px solid var(--accent)', background: 'var(--accent-light)',
+                color: 'var(--accent)', cursor: 'pointer', fontWeight: 700,
+              }}>
+              📤 JSON書き出し
+            </button>
             <button
               onClick={() => exportCSV(customers)}
               style={{
