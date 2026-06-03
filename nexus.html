@@ -3815,61 +3815,76 @@ function importCSV(file, setCustomers) {
   reader.readAsText(file, 'UTF-8');
 }
 
+// ── RFC4180準拠 CSVパーサー（改行含むフィールド対応）──────────
+function parseCSVFull(text) {
+  const rows = [];
+  let row = [], field = '', inQ = false, i = 0;
+  const t = text.replace(/^﻿/, ''); // BOM除去
+  while (i < t.length) {
+    const ch = t[i];
+    if (inQ) {
+      if (ch === '"' && t[i+1] === '"') { field += '"'; i += 2; }
+      else if (ch === '"') { inQ = false; i++; }
+      else { field += ch; i++; }
+    } else {
+      if (ch === '"') { inQ = true; i++; }
+      else if (ch === ',') { row.push(field); field = ''; i++; }
+      else if (ch === '\r' && t[i+1] === '\n') {
+        row.push(field); rows.push(row); row = []; field = ''; i += 2;
+      } else if (ch === '\n') {
+        row.push(field); rows.push(row); row = []; field = ''; i++;
+      } else { field += ch; i++; }
+    }
+  }
+  if (field || row.length > 0) { row.push(field); if (row.some(f=>f)) rows.push(row); }
+  return rows;
+}
+
 // ── 商談メモCSVインポート（shodan3.html形式）─────────────────
 function importShodanCSV(file, setMemos) {
   const reader = new FileReader();
   reader.onload = e => {
     try {
-      const text = e.target.result.replace(/^﻿/, '');
-      const lines = text.split(/\r?\n/).filter(l => l.trim());
-      if (lines.length < 2) { alert('データがありません'); return; }
+      const rows = parseCSVFull(e.target.result);
+      if (rows.length < 2) { alert('データがありません'); return; }
 
-      const headers = lines[0].split(',').map(h => h.replace(/^"|"$/g, '').trim());
-      const parseVal = v => (v || '').replace(/^"|"$/g, '').replace(/""/g, '"').trim();
+      const headers = rows[0].map(h => h.trim());
+      const get = (row, key) => (row[headers.indexOf(key)] || '').trim();
 
-      const imported = lines.slice(1).map(line => {
-        const cols = [];
-        let cur = '', inQ = false;
-        for (let i = 0; i < line.length; i++) {
-          const ch = line[i];
-          if (ch === '"') { inQ = !inQ; }
-          else if (ch === ',' && !inQ) { cols.push(cur); cur = ''; }
-          else { cur += ch; }
-        }
-        cols.push(cur);
-
-        const get = key => parseVal(cols[headers.indexOf(key)] || '');
-        const personName = get('顧客名');
+      const imported = rows.slice(1).map(row => {
+        const personName = get(row, '顧客名');
         if (!personName) return null;
 
-        // shodan3フィールドをmemoテキストにまとめる
         const parts = [
-          get('場所')       && `📍 場所：${get('場所')}`,
-          get('職業・年収') && `💼 職業・年収：${get('職業・年収')}`,
-          get('家族構成')   && `👨‍👩‍👧 家族構成：${get('家族構成')}`,
-          get('きっかけ')   && `💡 きっかけ：${get('きっかけ')}`,
-          get('ニーズ')     && `🎯 ニーズ：${get('ニーズ')}`,
-          get('刺さったポイント') && `✨ 刺さったポイント：${get('刺さったポイント')}`,
-          get('ツール')     && `🛠 ツール：${get('ツール')}`,
-          get('商品・金額') && `💰 商品・金額：${get('商品・金額')}`,
-          get('結果')       && `📊 結果：${get('結果')}`,
-          get('告知・注意') && `⚠️ 告知・注意：${get('告知・注意')}`,
-          get('次回アクション') && `➡️ 次回アクション：${get('次回アクション')}`,
-          get('温度感')     && `🌡 温度感：${get('温度感')}`,
-          get('雑談メモ')   && `💬 雑談メモ：${get('雑談メモ')}`,
-          get('印象・気づき') && `📝 印象・気づき：${get('印象・気づき')}`,
+          get(row,'場所')           && `📍 場所：${get(row,'場所')}`,
+          get(row,'職業・年収')     && `💼 職業・年収：${get(row,'職業・年収')}`,
+          get(row,'家族構成')       && `👨‍👩‍👧 家族構成：${get(row,'家族構成')}`,
+          get(row,'きっかけ')       && `💡 きっかけ：${get(row,'きっかけ')}`,
+          get(row,'ニーズ')         && `🎯 ニーズ：${get(row,'ニーズ')}`,
+          get(row,'刺さったポイント') && `✨ 刺さったポイント：${get(row,'刺さったポイント')}`,
+          get(row,'ツール')         && `🛠 ツール：${get(row,'ツール')}`,
+          get(row,'商品・金額')     && `💰 商品・金額：${get(row,'商品・金額')}`,
+          get(row,'結果')           && `📊 結果：${get(row,'結果')}`,
+          get(row,'告知・注意')     && `⚠️ 告知・注意：${get(row,'告知・注意')}`,
+          get(row,'次回アクション') && `➡️ 次回アクション：${get(row,'次回アクション')}`,
+          get(row,'温度感')         && `🌡 温度感：${get(row,'温度感')}`,
+          get(row,'雑談メモ')       && `💬 雑談メモ：${get(row,'雑談メモ')}`,
+          get(row,'印象・気づき')   && `📝 印象・気づき：${get(row,'印象・気づき')}`,
         ].filter(Boolean).join('\n');
 
         return {
-          id: get('ID') || String(Date.now() + Math.random()),
-          date: get('面談日') || todayStr(),
+          id: get(row,'ID') || String(Date.now() + Math.random()),
+          date: get(row,'面談日') || todayStr(),
           customerId: '',
           personName,
           memo: parts,
         };
       }).filter(Boolean);
 
-      if (imported.length === 0) { alert('インポートできる行がありません'); return; }
+      if (imported.length === 0) {
+        alert(`インポートできる行がありません\n（ヘッダー確認：${headers.slice(0,3).join(' / ')}）`);
+        return;
+      }
 
       setMemos(prev => {
         const existingIds = new Set(prev.map(m => m.id));
