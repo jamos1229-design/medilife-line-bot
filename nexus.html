@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build:nexus-v20 -->
+<!-- build:nexus-v21 -->
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
@@ -268,7 +268,13 @@
       margin-bottom: 10px; border: 1px solid var(--border);
       position: relative;
     }
+    .contract-block.inactive { opacity: 0.6; }
     .contract-block-title { font-size: 14px; font-weight: 700; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+    .cs-badge { display:inline-block; font-size:11px; font-weight:700; padding:2px 8px; border-radius:6px; }
+    .cs-有効  { background:#DCFCE7; color:#15803D; }
+    .cs-解約  { background:#FEE2E2; color:#DC2626; }
+    .cs-失効  { background:#FEF3C7; color:#D97706; }
+    .cs-減額  { background:#EDE9FE; color:#7C3AED; }
 
     .search-wrap { position: relative; margin-bottom: 10px; }
     .search-wrap span { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); font-size: 16px; }
@@ -433,19 +439,63 @@ function AmountInput({ prefix, prefixColor, value, onChange, placeholder }) {
   );
 }
 
+const CONTRACT_STATUSES = ['有効','解約','失効','減額'];
+const csStyle = st => ({ 有効:{border:'#16A34A',bg:'#DCFCE7',color:'#15803D'}, 解約:{border:'#DC2626',bg:'#FEE2E2',color:'#DC2626'}, 失効:{border:'#D97706',bg:'#FEF3C7',color:'#D97706'}, 減額:{border:'#7C3AED',bg:'#EDE9FE',color:'#7C3AED'} }[st] || {border:'#16A34A',bg:'#DCFCE7',color:'#15803D'});
+
 function ContractBlock({ contract, onChange, onRemove, index }) {
   const s  = k => e => onChange({ ...contract, [k]: e.target.value });
   const sv = k => v => onChange({ ...contract, [k]: v });
   const cat = contract.category || '生保';
   const cycle = contract.paymentCycle || '月払';
   const cur   = contract.currency || '円';
+  const cst   = contract.contractStatus || '有効';
+  const isInactive = cst !== '有効';
 
   return (
-    <div className="contract-block" style={{ borderTop: `3px solid ${cat === '損保' ? '#F59E0B' : 'var(--accent)'}` }}>
+    <div className={`contract-block${isInactive ? ' inactive' : ''}`} style={{ borderTop: `3px solid ${isInactive ? (cst==='解約'?'#DC2626':cst==='失効'?'#D97706':'#7C3AED') : cat === '損保' ? '#F59E0B' : 'var(--accent)'}` }}>
       <div className="contract-block-title">
         <span>契約 {index + 1}</span>
         <button onClick={onRemove} style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', fontSize: 20, lineHeight: 1 }}>×</button>
       </div>
+
+      {/* 契約ステータス */}
+      <div className="form-group" style={{ marginBottom: 10 }}>
+        <label className="form-label">契約ステータス</label>
+        <div className="toggle-group">
+          {CONTRACT_STATUSES.map(st => {
+            const cs = csStyle(st);
+            return (
+              <button key={st} type="button"
+                className={`toggle-btn ${cst === st ? 'sel' : ''}`}
+                style={cst === st ? { borderColor: cs.border, background: cs.bg, color: cs.color } : {}}
+                onClick={() => sv('contractStatus')(st)}>{st}</button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 解約・失効・減額の場合：日付と理由 */}
+      {isInactive && (
+        <div style={{ background: csStyle(cst).bg, border: `1px solid ${csStyle(cst).border}30`, borderRadius: 10, padding: '10px 12px', marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div className="form-row">
+            <div>
+              <label className="form-label" style={{ color: csStyle(cst).color }}>{cst}日</label>
+              <input className="form-input" type="date" value={contract.statusDate || ''} onChange={s('statusDate')} />
+            </div>
+            {cst === '減額' && (
+              <div>
+                <label className="form-label" style={{ color: csStyle(cst).color }}>減額後保険料</label>
+                <input className="form-input" placeholder="例：3000" value={contract.reducedPremium || ''} onChange={s('reducedPremium')} />
+              </div>
+            )}
+          </div>
+          <div>
+            <label className="form-label" style={{ color: csStyle(cst).color }}>{cst}理由・備考</label>
+            <textarea className="form-textarea" style={{ minHeight: 60 }} placeholder={cst==='解約'?'例：転職のため保障見直し':cst==='失効'?'例：保険料未払いにより失効':cst==='減額'?'例：家計見直しのため減額':''}
+              value={contract.statusReason || ''} onChange={s('statusReason')} />
+          </div>
+        </div>
+      )}
 
       {/* 生保 / 損保 切り替え */}
       <div className="form-group" style={{ marginBottom: 10 }}>
@@ -1373,11 +1423,13 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose, onRegi
 
         {/* 契約情報 */}
         {c.contracts && c.contracts.length > 0 && (() => {
-          // 保険料合計の計算
+          // 有効な契約のみで保険料合計を計算
+          const activeContracts = (c.contracts || []).filter(ct => !ct.contractStatus || ct.contractStatus === '有効' || ct.contractStatus === '減額');
+          const inactiveCount = (c.contracts || []).filter(ct => ct.contractStatus === '解約' || ct.contractStatus === '失効').length;
           let annualJpy = 0, annualUsd = 0, lumpJpy = 0, lumpUsd = 0;
           let recvJpy = 0, recvUsd = 0; // 定期支払金 年間合計
-          (c.contracts || []).forEach(ct => {
-            const amt  = Number(ct.premium)     || 0;
+          activeContracts.forEach(ct => {
+            const amt  = Number(ct.contractStatus === '減額' && ct.reducedPremium ? ct.reducedPremium : ct.premium) || 0;
             const jpy  = Number(ct.premiumJpy)  || 0;
             const rate = Number(ct.exchangeRate)|| 0;
             const cur  = ct.currency || '円';
@@ -1406,7 +1458,10 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose, onRegi
           const hasRecv   = recvJpy  > 0 || recvUsd  > 0;
           return (
             <>
-              <div className="section-header">契約情報 ({c.contracts.length}件)</div>
+              <div className="section-header" style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                <span>契約情報 ({c.contracts.length}件)</span>
+                {inactiveCount > 0 && <span style={{ fontSize:11, fontWeight:700, padding:'2px 8px', borderRadius:6, background:'#FEE2E2', color:'#DC2626' }}>解約・失効 {inactiveCount}件</span>}
+              </div>
               {/* 保険料合計サマリー */}
               {(hasAnnual || hasLump || hasRecv) && (
                 <div className="card" style={{ marginBottom: 10, background: 'var(--accent-light)', border: '1.5px solid var(--accent)' }}>
@@ -1446,14 +1501,31 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose, onRegi
             {c.contracts.map((ct, i) => {
               const isSonpo = ct.category === '損保';
               const expiryDays = daysUntil(ct.expiryDate);
+              const cstView = ct.contractStatus || '有効';
+              const isInactiveView = cstView !== '有効';
+              const borderTopColor = cstView === '解約' ? '#DC2626' : cstView === '失効' ? '#D97706' : cstView === '減額' ? '#7C3AED' : isSonpo ? '#F59E0B' : 'var(--accent)';
               return (
-              <div className="card" key={ct.id} style={{ marginBottom: 8, borderTop: `3px solid ${isSonpo ? '#F59E0B' : 'var(--accent)'}` }}>
+              <div className="card" key={ct.id} style={{ marginBottom: 8, borderTop: `3px solid ${borderTopColor}`, opacity: (cstView === '解約' || cstView === '失効') ? 0.7 : 1 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                   <span style={{ fontSize: 14, fontWeight: 700, color: isSonpo ? '#D97706' : 'var(--accent)' }}>契約 {i + 1}</span>
                   <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 6, background: isSonpo ? '#FFFBEB' : 'var(--accent-light)', color: isSonpo ? '#D97706' : 'var(--accent)' }}>
                     {isSonpo ? '損保' : '生保'}
                   </span>
+                  {(() => {
+                    const cst2 = ct.contractStatus || '有効';
+                    if (cst2 === '有効') return null;
+                    const cs2 = { 解約:{bg:'#FEE2E2',color:'#DC2626'}, 失効:{bg:'#FEF3C7',color:'#D97706'}, 減額:{bg:'#EDE9FE',color:'#7C3AED'} }[cst2];
+                    return <span className={`cs-badge cs-${cst2}`}>{cst2}</span>;
+                  })()}
                 </div>
+                {/* 解約・失効・減額 情報 */}
+                {(ct.contractStatus && ct.contractStatus !== '有効') && (
+                  <div style={{ background: {解約:'#FEE2E2',失効:'#FEF3C7',減額:'#EDE9FE'}[ct.contractStatus], borderRadius: 8, padding: '8px 10px', marginBottom: 10, fontSize: 13 }}>
+                    {ct.statusDate && <div><span style={{ fontWeight: 700 }}>{ct.contractStatus}日：</span>{ct.statusDate.replace(/-/g,'/')}</div>}
+                    {ct.reducedPremium && ct.contractStatus === '減額' && <div><span style={{ fontWeight: 700 }}>減額後保険料：</span>¥{Number(ct.reducedPremium).toLocaleString()}</div>}
+                    {ct.statusReason && <div style={{ marginTop: 4, color: 'var(--text-sub)' }}>{ct.statusReason}</div>}
+                  </div>
+                )}
                 <div className="customer-info-row">
                   <div className="info-item"><div className="info-label">保険種類</div><div className="info-value">{ct.type || '—'}</div></div>
                   <div className="info-item"><div className="info-label">保険会社</div><div className="info-value">{ct.company || '—'}</div></div>
