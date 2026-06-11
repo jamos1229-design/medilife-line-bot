@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build:nexus-v22 -->
+<!-- build:nexus-v23 -->
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
@@ -2119,10 +2119,15 @@ function CustomerListTab({ customers, onSelect, onAdd }) {
       .filter(c => {
         if (!search) return true;
         const q = search.toLowerCase();
+        // 契約情報（保険会社・保険種類）を結合して検索
+        const contractText = (c.contracts || []).map(ct => [ct.company, ct.type].filter(Boolean).join(' ')).join(' ').toLowerCase();
         return c.name.includes(search) ||
           (c.phone || '').includes(q) ||
           (c.memo || '').includes(search) ||
-          (c.email || '').toLowerCase().includes(q);
+          (c.email || '').toLowerCase().includes(q) ||
+          (c.address || '').includes(search) ||
+          (c.postalCode || '').includes(search) ||
+          contractText.includes(q);
       });
 
     const STATUS_ORDER = ['未接触', 'アポ済', '面談済', 'フォロー中'];
@@ -2151,7 +2156,7 @@ function CustomerListTab({ customers, onSelect, onAdd }) {
           <span>🔍</span>
           <input
             className="search-input"
-            placeholder="名前・電話番号・メモで検索..."
+            placeholder="名前・住所・保険会社・保険種類・電話・メモ..."
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
