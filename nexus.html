@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build:nexus-v21 -->
+<!-- build:nexus-v22 -->
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
@@ -1362,15 +1362,24 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose, onRegi
                 <span style={{ fontSize: 15, fontWeight: 600, whiteSpace: 'nowrap' }}>{fmtDateFull(c.birthdate)}</span>
               </div>
             )}
-            {(c.postalCode || c.address) && (
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, background: 'var(--bg)', borderRadius: 10, padding: '10px 12px' }}>
-                <span style={{ fontSize: 17, flexShrink: 0 }}>📍</span>
-                <span style={{ fontSize: 15, color: 'var(--text)', lineHeight: 1.5 }}>
-                  {c.postalCode && <span style={{ color: 'var(--text-sub)', fontSize: 13 }}>〒{c.postalCode}　</span>}
-                  {c.address}
-                </span>
-              </div>
-            )}
+            {(c.postalCode || c.address) && (() => {
+              const query = encodeURIComponent([c.postalCode ? `〒${c.postalCode}` : '', c.address].filter(Boolean).join(' '));
+              const mapUrl = `https://maps.apple.com/?q=${query}`;
+              const googleUrl = `https://www.google.com/maps/search/?api=1&query=${query}`;
+              return (
+                <a href={mapUrl} target="_blank" rel="noopener noreferrer"
+                  style={{ display: 'flex', alignItems: 'flex-start', gap: 10, background: 'var(--bg)', borderRadius: 10, padding: '10px 12px', textDecoration: 'none', color: 'var(--text)' }}>
+                  <span style={{ fontSize: 17, flexShrink: 0 }}>📍</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 15, lineHeight: 1.5 }}>
+                      {c.postalCode && <span style={{ color: 'var(--text-sub)', fontSize: 13 }}>〒{c.postalCode}　</span>}
+                      {c.address}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--accent)', marginTop: 3, fontWeight: 600 }}>🗺 地図で開く</div>
+                  </div>
+                </a>
+              );
+            })()}
             {(c.occupation || c.workplace) && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg)', borderRadius: 10, padding: '10px 12px' }}>
                 <span style={{ fontSize: 17 }}>💼</span>
@@ -3957,9 +3966,15 @@ function TaskTab({ tasks, setTasks, clients, setClients, vision, setVision, susp
 }
 
 function ClientForm({ editing, onSave, onClose }) {
-  const [form, setForm] = useState({ id:'', name:'', status:'進行中', prospectMonth:'', prospectAC:'', memo:'', ...(editing||{}) });
+  const [form, setForm] = useState({ id:'', name:'', status:'進行中', prospectMonth:'', prospectAC:'', helpWith:'', axis:'', memo:'', ...(editing||{}) });
   const si = k => e => setForm(f => ({...f, [k]:e.target.value}));
+  const sv = k => v => setForm(f => ({...f, [k]:v}));
   const save = () => { if (!form.name.trim()) return; onSave({...form, id:form.id||uid()}); };
+  const btnStyle = (active, color='var(--accent)', bg='var(--accent-light)') => ({
+    flex:1, padding:'9px 6px', borderRadius:9, border:`1.5px solid ${active ? color : 'var(--border)'}`,
+    background: active ? bg : 'var(--bg)', fontSize:13, fontWeight:600, cursor:'pointer',
+    color: active ? color : 'var(--text-sub)', textAlign:'center',
+  });
   return (
     <>
       <div className="form-group"><label className="form-label">名前 *</label><input className="form-input" placeholder="例：山田太郎" value={form.name} onChange={si('name')} autoFocus /></div>
@@ -3974,7 +3989,28 @@ function ClientForm({ editing, onSave, onClose }) {
         <div><label className="form-label">予定月</label><input className="form-input" placeholder="例：7月" value={form.prospectMonth} onChange={si('prospectMonth')} /></div>
         <div><label className="form-label">見込みAC（万）</label><input className="form-input" type="number" placeholder="例：30" value={form.prospectAC} onChange={si('prospectAC')} /></div>
       </div>
-      <div className="form-group"><label className="form-label">メモ</label><textarea className="form-textarea" style={{minHeight:70}} placeholder="課題・ニーズなど" value={form.memo} onChange={si('memo')} /></div>
+      {/* お役に立てること */}
+      <div className="form-group">
+        <label className="form-label">🤝 お役に立てること</label>
+        <textarea className="form-textarea" style={{minHeight:60}} placeholder="例：生命保険の見直し、老後資金の相談" value={form.helpWith||''} onChange={si('helpWith')} />
+      </div>
+      {/* 神メモ軸 */}
+      <div className="form-group">
+        <label className="form-label">神メモ軸（任意）</label>
+        <div className="toggle-group">
+          <button style={btnStyle(!form.axis)} onClick={()=>sv('axis')('')}>なし</button>
+          {KM_AXES.map(ax => {
+            const a = KM_AXIS_MAP[ax];
+            return (
+              <button key={ax} style={form.axis===ax
+                ? {flex:1,padding:'9px 6px',borderRadius:9,border:`1.5px solid ${a.color}`,background:a.bg,color:a.color,fontSize:13,fontWeight:700,cursor:'pointer'}
+                : btnStyle(false)}
+                onClick={()=>sv('axis')(ax)}>{ax}</button>
+            );
+          })}
+        </div>
+      </div>
+      <div className="form-group"><label className="form-label">メモ</label><textarea className="form-textarea" style={{minHeight:60}} placeholder="課題・ニーズなど" value={form.memo} onChange={si('memo')} /></div>
       <div style={{display:'flex',gap:10,marginTop:8}}>
         <button className="btn btn-outline btn-full" onClick={onClose}>キャンセル</button>
         <button className="btn btn-primary btn-full" onClick={save}>保存</button>
