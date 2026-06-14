@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build:nexus-v24 -->
+<!-- build:nexus-v25 -->
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
@@ -18,7 +18,7 @@
   <!-- バージョン自動チェック：PWAキャッシュ対策 -->
   <script>
     (function() {
-      var BUILD = 'nexus-v24';
+      var BUILD = 'nexus-v25';
       var stored = localStorage.getItem('_nexus_build');
       if (stored && stored !== BUILD) {
         // バージョンが変わっていたら強制リロード
@@ -1762,11 +1762,31 @@ function DashboardTab({ customers, onNavigate, kpiSettings, setKpiSettings }) {
     .sort((a, b) => a.nextAppt.localeCompare(b.nextAppt))
     .slice(0, 5);
 
-  // 今月誕生日（整数比較）
+  // 今月誕生日（契約者本人）
   const birthdayThisMonth = customers.filter(c => {
     if (!c.birthdate) return false;
     return parseInt(c.birthdate.split('-')[1], 10) === nowM;
   }).sort((a, b) => parseInt(a.birthdate.split('-')[2],10) - parseInt(b.birthdate.split('-')[2],10));
+
+  // 今月誕生日（被保険者）— 同一顧客の複数契約も含む
+  const insuredBirthdayThisMonth = [];
+  customers.forEach(c => {
+    (c.contracts || []).forEach(ct => {
+      if (!ct.insuredName || !ct.insuredBirthdate) return;
+      if (parseInt(ct.insuredBirthdate.split('-')[1], 10) !== nowM) return;
+      // 契約者本人と同じ名前なら重複スキップ
+      if (ct.insuredName === c.name) return;
+      insuredBirthdayThisMonth.push({
+        customerId: c.id,
+        customerName: c.name,
+        insuredName: ct.insuredName,
+        insuredBirthdate: ct.insuredBirthdate,
+        contractType: ct.type || '',
+        customer: c,
+      });
+    });
+  });
+  insuredBirthdayThisMonth.sort((a, b) => parseInt(a.insuredBirthdate.split('-')[2],10) - parseInt(b.insuredBirthdate.split('-')[2],10));
 
   // 月計算ヘルパー（1〜12の範囲で循環）
   const addMonth = (m, n) => ((m - 1 + n) % 12) + 1;
@@ -1849,7 +1869,7 @@ function DashboardTab({ customers, onNavigate, kpiSettings, setKpiSettings }) {
       </div>
 
       {/* 今月のアラート */}
-      {(birthdayThisMonth.length > 0 || contractThisMonth.length > 0 || expiryAlert.length > 0) && (
+      {(birthdayThisMonth.length > 0 || insuredBirthdayThisMonth.length > 0 || contractThisMonth.length > 0 || expiryAlert.length > 0) && (
         <div className="card" style={{ borderLeft: '4px solid var(--warning)', marginBottom: 10 }}>
           <div className="card-title" style={{ color: 'var(--warning)' }}>🔔 今月のアラート</div>
 
@@ -1873,6 +1893,35 @@ function DashboardTab({ customers, onNavigate, kpiSettings, setKpiSettings }) {
                         {parseInt(c.birthdate.slice(5,7))}月{parseInt(c.birthdate.slice(8,10))}日
                         {c.age && ` · ${c.age}歳`}
                       </div>
+                    </div>
+                  </div>
+                  <span style={{ fontSize: 12, color: 'var(--text-sub)' }}>›</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {insuredBirthdayThisMonth.length > 0 && (
+            <div style={{ marginBottom: contractThisMonth.length > 0 || expiryAlert.length > 0 ? 14 : 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>🎂</span>
+                <span>今月誕生日（被保険者）</span>
+                <span style={{ background: '#FEF3C7', color: '#D97706', borderRadius: 10, padding: '1px 8px', fontSize: 12 }}>
+                  {insuredBirthdayThisMonth.length}人
+                </span>
+              </div>
+              {insuredBirthdayThisMonth.map((item, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: '#FFFBEB', borderRadius: 10, marginBottom: 6 }}
+                  onClick={() => onNavigate('customers', item.customer)}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 20 }}>🎂</span>
+                    <div>
+                      <div style={{ fontSize: 15, fontWeight: 700 }}>{item.insuredName}</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-sub)' }}>
+                        {parseInt(item.insuredBirthdate.slice(5,7))}月{parseInt(item.insuredBirthdate.slice(8,10))}日
+                        {item.contractType && ` · ${item.contractType}`}
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--accent)' }}>契約者：{item.customerName}</div>
                     </div>
                   </div>
                   <span style={{ fontSize: 12, color: 'var(--text-sub)' }}>›</span>
