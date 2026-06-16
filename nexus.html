@@ -1012,10 +1012,7 @@ function ContractBlock({
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
   }, "受取額（", (contract.periodicFreq || '毎年') === '毎年' ? '年間' : (contract.periodicFreq || '毎年') === '半年ごと' ? '半年' : '毎月', "）"), /*#__PURE__*/React.createElement(AmountInput, {
-    prefix: cur === 'ドル' ? '
-</body>
-</html>
- : '¥',
+    prefix: cur === 'ドル' ? '$' : '¥',
     prefixColor: cur === 'ドル' ? '#059669' : undefined,
     value: contract.periodicAmt || '',
     onChange: s('periodicAmt'),
@@ -2873,10 +2870,7 @@ function CustomerDetail({
           fontWeight: 800,
           color: '#15803D'
         }
-      }, (ct.currency || '円') === 'ドル' ? '
-</body>
-</html>
- : '¥', Number(ct.periodicAmt).toLocaleString()), ct.periodicAmtJpy && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+      }, (ct.currency || '円') === 'ドル' ? '$' : '¥', Number(ct.periodicAmt).toLocaleString()), ct.periodicAmtJpy && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
         style: {
           color: 'var(--text-sub)'
         }
@@ -8594,7 +8588,6 @@ class ErrorBoundary extends React.Component {
     return this.props.children;
   }
 }
-ReactDOM.createRoot(document.getElementById('root')).render(/*#__PURE__*/React.createElement(ErrorBoundary, null, /*#__PURE__*/React.createElement(App, null)));
-</script>
+ReactDOM.createRoot(document.getElementById('root')).render(/*#__PURE__*/React.createElement(ErrorBoundary, null, /*#__PURE__*/React.createElement(App, null)));</script>
 </body>
 </html>
