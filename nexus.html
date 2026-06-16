@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build:nexus-v25 -->
+<!-- build:nexus-v26 -->
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
@@ -15,20 +15,6 @@
   <meta name="theme-color" content="#5B5BD6">
   <link rel="manifest" href="data:application/json,%7B%22name%22%3A%22MEDILIFE%20NEXUS%22%2C%22short_name%22%3A%22NEXUS%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%23F6F6F8%22%2C%22theme_color%22%3A%22%235B5BD6%22%7D">
   <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%235B5BD6'/><text y='68' x='50' text-anchor='middle' font-size='55'>👥</text></svg>">
-  <!-- バージョン自動チェック：PWAキャッシュ対策 -->
-  <script>
-    (function() {
-      var BUILD = 'nexus-v25';
-      var stored = localStorage.getItem('_nexus_build');
-      if (stored && stored !== BUILD) {
-        // バージョンが変わっていたら強制リロード
-        localStorage.setItem('_nexus_build', BUILD);
-        location.reload(true);
-      } else {
-        localStorage.setItem('_nexus_build', BUILD);
-      }
-    })();
-  </script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
