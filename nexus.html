@@ -1327,7 +1327,11 @@ function CustomerForm({
   const removeSuspect = id => s('suspects')((form.suspects || []).filter(sp => sp.id !== id));
   const otherCustomers = customers.filter(c => c.id !== form.id);
   const save = () => {
-    if (!form.name.trim()) return;
+    if (form.customerType === '法人') {
+      if (!(form.corporateName || '').trim()) return;
+    } else if (!form.name.trim()) {
+      return;
+    }
     onSave({
       ...form,
       id: form.id || uid()

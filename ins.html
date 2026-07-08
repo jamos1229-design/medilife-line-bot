@@ -756,7 +756,11 @@ function CustomerForm({ editing, onSave, onClose, customers }) {
   const otherCustomers = customers.filter(c => c.id !== form.id);
 
   const save = () => {
-    if (!form.name.trim()) return;
+    if (form.customerType === '法人') {
+      if (!(form.corporateName || '').trim()) return;
+    } else if (!form.name.trim()) {
+      return;
+    }
     onSave({ ...form, id: form.id || uid() });
     onClose();
   };
