@@ -522,6 +522,28 @@ function ContractBlock({ contract, onChange, onRemove, index }) {
             </div>
           </div>
 
+          {/* 払込期間 */}
+          <div className="form-row" style={{ marginBottom: 8 }}>
+            <div>
+              <label className="form-label">払込期間</label>
+              <input className="form-input" placeholder="例：60歳払込・10年払済" value={contract.paymentTermNote || ''} onChange={s('paymentTermNote')} />
+            </div>
+            <div>
+              <label className="form-label">払込期間 終了日</label>
+              <div style={{ position: 'relative' }}>
+                <input className="form-input" type="date" value={contract.paymentTermEnd || ''} onChange={s('paymentTermEnd')}
+                  style={{ paddingRight: contract.paymentTermEnd ? 44 : 14 }} />
+                {contract.paymentTermEnd && (
+                  <button type="button" onClick={() => onChange({ ...contract, paymentTermEnd: '' })}
+                    style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)',
+                      background: '#C7C7CC', border: 'none', borderRadius: '50%',
+                      width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      cursor: 'pointer', color: '#fff', fontSize: 13, fontWeight: 700, lineHeight: 1 }}>×</button>
+                )}
+              </div>
+            </div>
+          </div>
+
           <div className="form-group" style={{ marginBottom: 8 }}>
             <label className="form-label">払込方法</label>
             <div className="toggle-group">
@@ -1348,6 +1370,29 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose, onRegi
                                 background: daysUntil(ct.termEnd) <= 0 ? '#FEF2F2' : daysUntil(ct.termEnd) <= 365 ? '#FFF7ED' : 'var(--bg)',
                                 color: daysUntil(ct.termEnd) <= 0 ? 'var(--danger)' : daysUntil(ct.termEnd) <= 365 ? 'var(--warning)' : 'var(--text-sub)' }}>
                                 {daysUntil(ct.termEnd) <= 0 ? '期間終了' : `あと${Math.ceil(daysUntil(ct.termEnd)/365)}年`}
+                              </span>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 払込期間（生保） */}
+                  {!isSonpo && (ct.paymentTermNote || ct.paymentTermEnd) && (
+                    <div className="info-item" style={{gridColumn:'1/-1'}}>
+                      <div className="info-label">払込期間</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        {ct.paymentTermNote && <span className="info-value">{ct.paymentTermNote}</span>}
+                        {ct.paymentTermEnd && (
+                          <>
+                            {ct.paymentTermNote && <span style={{color:'var(--text-sub)'}}>／</span>}
+                            <span className="info-value">{fmtDateFull(ct.paymentTermEnd)} まで</span>
+                            {daysUntil(ct.paymentTermEnd) !== null && (
+                              <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 6,
+                                background: daysUntil(ct.paymentTermEnd) <= 0 ? '#FEF2F2' : daysUntil(ct.paymentTermEnd) <= 365 ? '#FFF7ED' : 'var(--bg)',
+                                color: daysUntil(ct.paymentTermEnd) <= 0 ? 'var(--danger)' : daysUntil(ct.paymentTermEnd) <= 365 ? 'var(--warning)' : 'var(--text-sub)' }}>
+                                {daysUntil(ct.paymentTermEnd) <= 0 ? '払込満了' : `あと${Math.ceil(daysUntil(ct.paymentTermEnd)/365)}年`}
                               </span>
                             )}
                           </>
