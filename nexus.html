@@ -857,6 +857,57 @@ function ContractBlock({
       lineHeight: 1
     }
   }, "×")))), /*#__PURE__*/React.createElement("div", {
+    className: "form-row",
+    style: {
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "払込期間"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    placeholder: "例：60歳払込・10年払済",
+    value: contract.paymentTermNote || '',
+    onChange: s('paymentTermNote')
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "払込期間 終了日"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: 'relative'
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    type: "date",
+    value: contract.paymentTermEnd || '',
+    onChange: s('paymentTermEnd'),
+    style: {
+      paddingRight: contract.paymentTermEnd ? 44 : 14
+    }
+  }), contract.paymentTermEnd && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => onChange({
+      ...contract,
+      paymentTermEnd: ''
+    }),
+    style: {
+      position: 'absolute',
+      right: 10,
+      top: '50%',
+      transform: 'translateY(-50%)',
+      background: '#C7C7CC',
+      border: 'none',
+      borderRadius: '50%',
+      width: 22,
+      height: 22,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      cursor: 'pointer',
+      color: '#fff',
+      fontSize: 13,
+      fontWeight: 700,
+      lineHeight: 1
+    }
+  }, "×")))), /*#__PURE__*/React.createElement("div", {
     className: "form-group",
     style: {
       marginBottom: 8
@@ -2737,7 +2788,38 @@ function CustomerDetail({
           background: daysUntil(ct.termEnd) <= 0 ? '#FEF2F2' : daysUntil(ct.termEnd) <= 365 ? '#FFF7ED' : 'var(--bg)',
           color: daysUntil(ct.termEnd) <= 0 ? 'var(--danger)' : daysUntil(ct.termEnd) <= 365 ? 'var(--warning)' : 'var(--text-sub)'
         }
-      }, daysUntil(ct.termEnd) <= 0 ? '期間終了' : `あと${Math.ceil(daysUntil(ct.termEnd) / 365)}年`)))), isSonpo && ct.insuredObject && /*#__PURE__*/React.createElement("div", {
+      }, daysUntil(ct.termEnd) <= 0 ? '期間終了' : `あと${Math.ceil(daysUntil(ct.termEnd) / 365)}年`)))), !isSonpo && (ct.paymentTermNote || ct.paymentTermEnd) && /*#__PURE__*/React.createElement("div", {
+        className: "info-item",
+        style: {
+          gridColumn: '1/-1'
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "info-label"
+      }, "払込期間"), /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          flexWrap: 'wrap'
+        }
+      }, ct.paymentTermNote && /*#__PURE__*/React.createElement("span", {
+        className: "info-value"
+      }, ct.paymentTermNote), ct.paymentTermEnd && /*#__PURE__*/React.createElement(React.Fragment, null, ct.paymentTermNote && /*#__PURE__*/React.createElement("span", {
+        style: {
+          color: 'var(--text-sub)'
+        }
+      }, "／"), /*#__PURE__*/React.createElement("span", {
+        className: "info-value"
+      }, fmtDateFull(ct.paymentTermEnd), " まで"), daysUntil(ct.paymentTermEnd) !== null && /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontSize: 11,
+          fontWeight: 700,
+          padding: '2px 7px',
+          borderRadius: 6,
+          background: daysUntil(ct.paymentTermEnd) <= 0 ? '#FEF2F2' : daysUntil(ct.paymentTermEnd) <= 365 ? '#FFF7ED' : 'var(--bg)',
+          color: daysUntil(ct.paymentTermEnd) <= 0 ? 'var(--danger)' : daysUntil(ct.paymentTermEnd) <= 365 ? 'var(--warning)' : 'var(--text-sub)'
+        }
+      }, daysUntil(ct.paymentTermEnd) <= 0 ? '払込満了' : `あと${Math.ceil(daysUntil(ct.paymentTermEnd) / 365)}年`)))), isSonpo && ct.insuredObject && /*#__PURE__*/React.createElement("div", {
         className: "info-item",
         style: {
           gridColumn: '1/-1'
