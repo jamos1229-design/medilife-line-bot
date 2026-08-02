@@ -8106,11 +8106,33 @@ function TaskForm({
 
 // ── JSON Import（全データ対応）────────────────────────────────
 function importJSON(file, handlers) {
-  // handlers = { setCustomers, setTasks, setClients, setVision, setSuspects, setSales, setLogs }
+  // handlers = { setCustomers, setTasks, setClients, setVision, setSuspects, setSales, setLogs,
+  //              setMemos, setKpiSettings, setNexusServices, setNexusServiceLinks, setNexusMission }
   const reader = new FileReader();
   reader.onload = e => {
     try {
       const data = JSON.parse(e.target.result);
+
+      // ⓪ 全データバックアップ形式（機種変更などで端末を移行する場合に使用）
+      //    { __medilifeBackup: true, customers, memos, kpiSettings, tasks, clients, vision,
+      //      suspects, logs, sales, nexusServices, nexusServiceLinks, nexusMission }
+      if (data.__medilifeBackup) {
+        if (!confirm('この端末の現在のデータをすべて、バックアップの内容で置き換えます。よろしいですか？')) return;
+        if (data.customers) handlers.setCustomers(data.customers);
+        if (data.memos && handlers.setMemos) handlers.setMemos(data.memos);
+        if (data.kpiSettings && handlers.setKpiSettings) handlers.setKpiSettings(data.kpiSettings);
+        if (data.tasks && handlers.setTasks) handlers.setTasks(data.tasks);
+        if (data.clients && handlers.setClients) handlers.setClients(data.clients);
+        if (data.vision && handlers.setVision) handlers.setVision(data.vision);
+        if (data.suspects && handlers.setSuspects) handlers.setSuspects(data.suspects);
+        if (data.logs && handlers.setLogs) handlers.setLogs(data.logs);
+        if (data.sales && handlers.setSales) handlers.setSales(data.sales);
+        if (data.nexusServices && handlers.setNexusServices) handlers.setNexusServices(data.nexusServices);
+        if (data.nexusServiceLinks && handlers.setNexusServiceLinks) handlers.setNexusServiceLinks(data.nexusServiceLinks);
+        if (data.nexusMission && handlers.setNexusMission) handlers.setNexusMission(data.nexusMission);
+        alert('✅ 全データを復元しました');
+        return;
+      }
 
       // ① app.html バックアップ形式
       //    { tasks, clients, suspects, vision, sales, logs, exportedAt, version }
@@ -8382,9 +8404,23 @@ function importShodanCSV(file, setMemos) {
   };
   reader.readAsText(file, 'UTF-8');
 }
-function exportJSON(customers) {
+function exportJSON(state) {
   const data = JSON.stringify({
-    customers
+    __medilifeBackup: true,
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    customers: state.customers,
+    memos: state.memos,
+    kpiSettings: state.kpiSettings,
+    tasks: state.tasks,
+    clients: state.clients,
+    vision: state.vision,
+    suspects: state.suspects,
+    logs: state.logs,
+    sales: state.sales,
+    nexusServices: state.nexusServices,
+    nexusServiceLinks: state.nexusServiceLinks,
+    nexusMission: state.nexusMission
   }, null, 2);
   const blob = new Blob([data], {
     type: 'application/json'
@@ -8392,7 +8428,7 @@ function exportJSON(customers) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `nexus_customers_${todayStr()}.json`;
+  a.download = `medilife_nexus_全データバックアップ_${todayStr()}.json`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -10707,9 +10743,10 @@ function App() {
       background: 'var(--accent-light)',
       color: 'var(--accent)',
       cursor: 'pointer',
-      fontWeight: 600
+      fontWeight: 600,
+      whiteSpace: 'nowrap'
     }
-  }, "📥JSON", /*#__PURE__*/React.createElement("input", {
+  }, "📥復元", /*#__PURE__*/React.createElement("input", {
     type: "file",
     accept: ".json",
     style: {
@@ -10724,13 +10761,31 @@ function App() {
           setVision,
           setSuspects,
           setSales,
-          setLogs
+          setLogs,
+          setMemos,
+          setKpiSettings,
+          setNexusServices,
+          setNexusServiceLinks,
+          setNexusMission
         });
         e.target.value = '';
       }
     }
   })), /*#__PURE__*/React.createElement("button", {
-    onClick: () => exportJSON(customers),
+    onClick: () => exportJSON({
+      customers,
+      memos,
+      kpiSettings,
+      tasks,
+      clients,
+      vision,
+      suspects,
+      logs,
+      sales,
+      nexusServices,
+      nexusServiceLinks,
+      nexusMission
+    }),
     style: {
       fontSize: 11,
       padding: '5px 10px',
@@ -10739,9 +10794,10 @@ function App() {
       background: '#fff',
       color: 'var(--text-sub)',
       cursor: 'pointer',
-      fontWeight: 600
+      fontWeight: 600,
+      whiteSpace: 'nowrap'
     }
-  }, "JSON")))), /*#__PURE__*/React.createElement("div", {
+  }, "💾書出")))), /*#__PURE__*/React.createElement("div", {
     className: "content"
   }, tab === 'dashboard' && /*#__PURE__*/React.createElement(DashboardTab, {
     customers: customers,
