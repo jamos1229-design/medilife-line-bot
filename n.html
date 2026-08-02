@@ -3126,12 +3126,80 @@ function CustomerDetail({
   }, "削除する")))));
 }
 
+// ── 今日の指針バナー（理念・行動指針を1行表示、タップで全文展開）──
+function MissionBanner({
+  mission
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const hasContent = mission && (mission.why || mission.how || mission.dailyAction);
+  if (!hasContent) return null;
+  const oneLiner = mission.dailyAction || mission.why || mission.how;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      cursor: 'pointer'
+    },
+    onClick: () => setExpanded(v => !v)
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 16
+    }
+  }, "🧭"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0,
+      fontSize: 13,
+      fontWeight: 600,
+      whiteSpace: expanded ? 'normal' : 'nowrap',
+      overflow: expanded ? 'visible' : 'hidden',
+      textOverflow: 'ellipsis'
+    }
+  }, expanded ? '今日の指針' : oneLiner), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--text-sub)',
+      fontSize: 12,
+      flexShrink: 0
+    }
+  }, expanded ? '▲' : '▼')), expanded && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8,
+      fontSize: 12.5,
+      lineHeight: 1.6
+    }
+  }, mission.why && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 700,
+      color: 'var(--accent)'
+    }
+  }, "Why："), mission.why), mission.how && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 700,
+      color: 'var(--accent)'
+    }
+  }, "How："), mission.how), mission.dailyAction && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 700,
+      color: 'var(--accent)'
+    }
+  }, "今日の行動："), mission.dailyAction)));
+}
+
 // ── Tab: Dashboard ────────────────────────────────────────────
 function DashboardTab({
   customers,
   onNavigate,
   kpiSettings,
-  setKpiSettings
+  setKpiSettings,
+  mission
 }) {
   const total = customers.length;
   const lineCount = customers.filter(c => c.lineRegistered).length;
@@ -3232,7 +3300,9 @@ function DashboardTab({
   };
   const kpi200 = calc(2000000);
   const kpi1000 = calc(10000000);
-  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(MissionBanner, {
+    mission: mission
+  }), /*#__PURE__*/React.createElement("div", {
     className: "stat-grid"
   }, /*#__PURE__*/React.createElement("div", {
     className: "stat-card"
@@ -8188,14 +8258,19 @@ function importCSV(file, setCustomers) {
         return;
       }
       setCustomers(prev => {
+        const displayName = c => c.customerType === '法人' ? c.corporateName || c.name : c.name;
+        const existingNames = new Set(prev.map(displayName).filter(Boolean));
+        const fresh = imported.filter(c => !existingNames.has(c.name));
+        const skipped = imported.length - fresh.length;
         const nameToId = {};
         prev.forEach(c => {
-          if (c.name && !(c.name in nameToId)) nameToId[c.name] = c.id;
+          const n = displayName(c);
+          if (n && !(n in nameToId)) nameToId[n] = c.id;
         });
-        imported.forEach(c => {
+        fresh.forEach(c => {
           if (!(c.name in nameToId)) nameToId[c.name] = c.id;
         });
-        const resolved = imported.map(({
+        const resolved = fresh.map(({
           referrerName,
           ...c
         }) => ({
@@ -8203,7 +8278,7 @@ function importCSV(file, setCustomers) {
           referredBy: referrerName ? nameToId[referrerName] || '' : ''
         }));
         const merged = [...prev, ...resolved];
-        alert(`インポート完了：${resolved.length}件追加`);
+        alert(`インポート完了：${resolved.length}件追加` + (skipped > 0 ? `（同姓同名の既存顧客 ${skipped}件はスキップ）` : ''));
         return merged;
       });
     } catch (err) {
@@ -8342,40 +8417,54 @@ function exportCSV(customers) {
 
 // ══════════════════════════════════════════════════════════════
 // 人脈ネクサス（既存顧客データを核にした紹介ネットワーク分析）
-// 顧客一覧・提案候補・つながり・サービスの4タブ構成
+// 顧客一覧・提案候補・つながり・サービス・理念の5タブ構成
 // データは customers（customers_v1）をそのままIDで参照する。
-// 別ストア(nexus_services_v1／nexus_service_links_v1)は
-// 「サービスカタログ」と「顧客×サービスの既契約/提案候補フラグ」のみ。
+// 別ストア(nexus_services_v1／nexus_service_links_v1／nexus_mission_v1)は
+// 「サービスカタログ」「顧客×サービスの既契約/提案候補フラグ」「理念」のみ。
 // ══════════════════════════════════════════════════════════════
 
 const NEXUS_SEED_SERVICES = [{
   id: 'ns1',
   name: '医療保険',
-  category: '保険'
+  category: '保険',
+  painPoint: '入院・手術になった時の急な出費が不安',
+  emotionalValue: 'もしもの時も貯金を崩さず、家族に心配をかけずに治療に専念できる安心'
 }, {
   id: 'ns2',
   name: '生命保険',
-  category: '保険'
+  category: '保険',
+  painPoint: '自分に何かあった時、家族の生活が立ち行かなくなる不安',
+  emotionalValue: '自分がいなくなっても、大切な家族の暮らしを守れているという安心'
 }, {
   id: 'ns3',
   name: '就業不能保険',
-  category: '保険'
+  category: '保険',
+  painPoint: '病気やケガで長期間働けなくなった時の収入減が不安',
+  emotionalValue: '働けない期間も収入の柱があることで、治療・療養に専念できる安心'
 }, {
   id: 'ns4',
   name: '個人年金',
-  category: '資産形成'
+  category: '資産形成',
+  painPoint: '老後の生活費が公的年金だけで足りるか分からない不安',
+  emotionalValue: '将来の見通しが立つことで、今の暮らしも安心して楽しめる余裕'
 }, {
   id: 'ns5',
   name: 'NISA・資産運用相談',
-  category: '資産形成'
+  category: '資産形成',
+  painPoint: '将来のお金をどう増やせばいいか分からない・貯金だけでは心もとない',
+  emotionalValue: '資産が育っていく実感が、将来への漠然とした不安を自信に変える'
 }, {
   id: 'ns6',
   name: '法人保険',
-  category: '法人'
+  category: '法人',
+  painPoint: '経営者に万一のことがあった時、会社と従業員を守れるか不安',
+  emotionalValue: '会社の存続と従業員の生活を守れているという経営者としての安心'
 }, {
   id: 'ns7',
   name: '開業支援コンサル',
-  category: '法人'
+  category: '法人',
+  painPoint: '開業準備で何から手を付ければいいか分からない不安',
+  emotionalValue: '専門家が伴走してくれることで、開業への一歩を自信を持って踏み出せる'
 }];
 const nexusGroupOf = c => c.customerType === '法人' ? c.industry || '法人' : c.occupation || '';
 const nexusCompanyOf = c => c.customerType === '法人' ? c.corporateName || c.name || '' : c.workplace || '';
@@ -8440,6 +8529,46 @@ function nexusOccupationMatrix(customers, services, serviceLinks) {
   }).sort((a, b) => b.size - a.size);
 }
 const nexusPriorityScore = (gap, referredCount) => gap + referredCount * 2;
+
+// 職業・業種の文字列から安定した色を生成（外部ライブラリなし）
+function nexusHashColor(str) {
+  if (!str) return '#9CA3AF';
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) hash = hash * 31 + str.charCodeAt(i) >>> 0;
+  const hue = hash % 360;
+  return `hsl(${hue}, 62%, 52%)`;
+}
+
+// 中心人物からreferredByの双方向グラフをBFSで辿り、depth以内のIDを集める
+function nexusFocusSet(customers, centerId, depth) {
+  const adj = {};
+  const ensure = id => {
+    if (!adj[id]) adj[id] = new Set();
+    return adj[id];
+  };
+  customers.forEach(c => {
+    ensure(c.id);
+    if (c.referredBy) {
+      ensure(c.id).add(c.referredBy);
+      ensure(c.referredBy).add(c.id);
+    }
+  });
+  const visited = new Set([centerId]);
+  let frontier = [centerId];
+  for (let d = 0; d < depth; d++) {
+    const next = [];
+    frontier.forEach(id => {
+      (adj[id] || new Set()).forEach(nb => {
+        if (!visited.has(nb)) {
+          visited.add(nb);
+          next.push(nb);
+        }
+      });
+    });
+    frontier = next;
+  }
+  return visited;
+}
 
 // ── 統計カード ───────────────────────────────────────────────
 function NexusStatRow({
@@ -8666,6 +8795,84 @@ function NexusActivityLog({
   }, "×")))));
 }
 
+// ── 提案候補サービス（タップで展開し、悩み・感情価値をトークスクリプトとして表示）──
+function NexusGapServiceCard({
+  service,
+  expanded,
+  onToggleExpand,
+  onAdd
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      margin: 0,
+      marginBottom: 8,
+      padding: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    onClick: onToggleExpand,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      cursor: 'pointer'
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 14,
+      fontWeight: 700,
+      color: 'var(--warning)'
+    }
+  }, "+ ", service.name), service.category && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)'
+    }
+  }, service.category)), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--text-sub)',
+      fontSize: 12
+    }
+  }, expanded ? '▲' : '▼')), expanded && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10,
+      background: '#FFF7ED',
+      borderRadius: 10,
+      padding: '10px 12px',
+      border: '1px solid #FEF0D9'
+    }
+  }, service.painPoint && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--text)',
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 700
+    }
+  }, "💭 悩み："), service.painPoint), service.emotionalValue && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--text)',
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 700
+    }
+  }, "💛 得られる安心："), service.emotionalValue), !service.painPoint && !service.emotionalValue && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text-sub)',
+      marginBottom: 10
+    }
+  }, "「サービス」タブでこのサービスを編集すると、トークスクリプトを登録できます"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-primary btn-sm btn-full",
+    onClick: onAdd
+  }, "✓ 提案候補として追加")));
+}
+
 // ── 顧客詳細ドロワー（人脈ネクサス視点：紹介関係・提案状況・履歴）──
 function NexusDetail({
   customerId,
@@ -8675,9 +8882,11 @@ function NexusDetail({
   setServiceLinks,
   setCustomers,
   onClose,
-  onOpenCustomer
+  onOpenCustomer,
+  onFocus
 }) {
   const customer = customers.find(c => c.id === customerId);
+  const [expandedGapId, setExpandedGapId] = useState(null);
   if (!customer) return null;
   const toggle = (serviceId, held) => {
     if (held) {
@@ -8809,13 +9018,25 @@ function NexusDetail({
       textAlign: 'center',
       marginBottom: 8
     }
-  }, "点線の丸をタップすると提案候補として登録します"), /*#__PURE__*/React.createElement("button", {
-    className: "btn btn-outline btn-full btn-sm",
-    onClick: autoFillFromContracts,
+  }, "点線の丸をタップすると提案候補として登録します"), /*#__PURE__*/React.createElement("div", {
     style: {
+      display: 'flex',
+      gap: 8,
       marginBottom: 12
     }
-  }, "📋 既契約データから自動反映"), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-outline btn-sm",
+    style: {
+      flex: 1
+    },
+    onClick: autoFillFromContracts
+  }, "📋 既契約から自動反映"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-outline btn-sm",
+    style: {
+      flex: 1
+    },
+    onClick: () => onFocus(customer.id)
+  }, "🎯 つながりで中心表示")), /*#__PURE__*/React.createElement("div", {
     style: {
       marginBottom: 6,
       fontSize: 12,
@@ -8827,7 +9048,7 @@ function NexusDetail({
       display: 'flex',
       flexWrap: 'wrap',
       gap: 6,
-      marginBottom: 12
+      marginBottom: 16
     }
   }, heldServices.length === 0 && /*#__PURE__*/React.createElement("span", {
     style: {
@@ -8850,22 +9071,18 @@ function NexusDetail({
       fontWeight: 700,
       color: 'var(--warning)'
     }
-  }, "提案候補（", gapServices.length, "）"), /*#__PURE__*/React.createElement("div", {
+  }, "提案候補（", gapServices.length, "）"), gapServices.length === 0 ? /*#__PURE__*/React.createElement("div", {
     style: {
-      display: 'flex',
-      flexWrap: 'wrap',
-      gap: 6
+      fontSize: 12,
+      color: 'var(--text-sub)'
     }
-  }, gapServices.map(s => /*#__PURE__*/React.createElement("span", {
+  }, "すべてのサービスが既契約です") : /*#__PURE__*/React.createElement("div", null, gapServices.map(s => /*#__PURE__*/React.createElement(NexusGapServiceCard, {
     key: s.id,
-    onClick: () => toggle(s.id, false),
-    className: "badge",
-    style: {
-      background: '#FFF7ED',
-      color: 'var(--warning)',
-      cursor: 'pointer'
-    }
-  }, "+ ", s.name))), /*#__PURE__*/React.createElement(NexusActivityLog, {
+    service: s,
+    expanded: expandedGapId === s.id,
+    onToggleExpand: () => setExpandedGapId(prev => prev === s.id ? null : s.id),
+    onAdd: () => toggle(s.id, false)
+  }))), /*#__PURE__*/React.createElement(NexusActivityLog, {
     customer: customer,
     setCustomers: setCustomers
   }), /*#__PURE__*/React.createElement("button", {
@@ -8877,64 +9094,274 @@ function NexusDetail({
   }, "👤 顧客の詳細プロフィールを開く")));
 }
 
-// ── 紹介ツリー（referredByチェーンをSVGで表示）─────────────────
-function nexusBuildTreeLayout(customers, width) {
-  const byId = {};
-  customers.forEach(c => byId[c.id] = c);
-  const childrenMap = {};
-  customers.forEach(c => {
-    const ref = c.referredBy && byId[c.referredBy] ? c.referredBy : '__root__';
-    if (!childrenMap[ref]) childrenMap[ref] = [];
-    childrenMap[ref].push(c.id);
-  });
-  const levels = [];
-  const positions = {};
-  let frontier = childrenMap['__root__'] || [];
-  let depth = 0;
-  const visited = new Set();
-  while (frontier.length > 0 && depth < 8) {
-    levels.push(frontier);
-    frontier.forEach(id => visited.add(id));
-    const next = [];
-    frontier.forEach(id => {
-      (childrenMap[id] || []).forEach(cid => {
-        if (!visited.has(cid)) next.push(cid);
-      });
-    });
-    frontier = next;
-    depth += 1;
-  }
-  const leftover = customers.map(c => c.id).filter(id => !visited.has(id));
-  if (leftover.length) levels.push(leftover);
-  const rowHeight = 92;
-  levels.forEach((ids, level) => {
-    const count = ids.length;
-    ids.forEach((id, i) => {
-      const x = (i + 1) / (count + 1) * width;
-      const y = 40 + level * rowHeight;
-      positions[id] = {
-        x,
-        y,
-        level
-      };
-    });
-  });
-  const height = 40 + levels.length * rowHeight;
-  return {
-    positions,
-    height
-  };
-}
-function NexusNetworkTree({
+// ── つながりグラフ（外部ライブラリなしの自前フォースシミュレーション）──
+function NexusForceGraph({
   customers,
-  hubIds,
+  hubs,
+  focusId,
+  setFocusId,
+  focusDepth,
+  setFocusDepth,
   onSelect
 }) {
   const width = 320;
-  const {
-    positions,
-    height
-  } = useMemo(() => nexusBuildTreeLayout(customers, width), [customers]);
+  const height = 380;
+  const hubScoreById = useMemo(() => {
+    const m = {};
+    hubs.forEach(h => m[h.id] = h.hubScore);
+    return m;
+  }, [hubs]);
+  const visibleCustomers = useMemo(() => {
+    if (!focusId || !customers.some(c => c.id === focusId)) return customers;
+    const set = nexusFocusSet(customers, focusId, focusDepth);
+    return customers.filter(c => set.has(c.id));
+  }, [customers, focusId, focusDepth]);
+  const visibleIds = useMemo(() => visibleCustomers.map(c => c.id), [visibleCustomers]);
+  const edges = useMemo(() => {
+    const ids = new Set(visibleIds);
+    return visibleCustomers.filter(c => c.referredBy && ids.has(c.referredBy)).map(c => ({
+      id: c.id,
+      source: c.referredBy,
+      target: c.id
+    }));
+  }, [visibleCustomers, visibleIds]);
+  const simRef = React.useRef({
+    nodes: {},
+    alpha: 1
+  });
+  const nodeElRefs = React.useRef({});
+  const edgeElRefs = React.useRef({});
+  const svgRef = React.useRef(null);
+  const [view, setView] = useState({
+    x: 0,
+    y: 0,
+    scale: 1
+  });
+  const gestureRef = React.useRef(null);
+  const pointersRef = React.useRef(new Map());
+
+  // 可視ノード集合が変わったら、既存位置は維持しつつ新規ノードだけ初期配置する
+  React.useEffect(() => {
+    const nodes = simRef.current.nodes;
+    const next = {};
+    visibleIds.forEach((id, i) => {
+      if (nodes[id]) {
+        next[id] = nodes[id];
+      } else {
+        const angle = i / Math.max(visibleIds.length, 1) * Math.PI * 2;
+        next[id] = {
+          x: width / 2 + Math.cos(angle) * 70 + (Math.random() - 0.5) * 12,
+          y: height / 2 + Math.sin(angle) * 70 + (Math.random() - 0.5) * 12,
+          vx: 0,
+          vy: 0,
+          fx: null,
+          fy: null
+        };
+      }
+    });
+    simRef.current.nodes = next;
+    simRef.current.alpha = 1;
+  }, [visibleIds]);
+
+  // 物理シミュレーションのメインループ（Reactの再レンダーを介さずDOM属性を直接更新）
+  React.useEffect(() => {
+    let raf;
+    const tick = () => {
+      const sim = simRef.current;
+      if (sim.alpha > 0.01) {
+        const nodes = sim.nodes;
+        for (let i = 0; i < visibleIds.length; i++) {
+          const a = nodes[visibleIds[i]];
+          if (!a) continue;
+          for (let j = i + 1; j < visibleIds.length; j++) {
+            const b = nodes[visibleIds[j]];
+            if (!b) continue;
+            let dx = a.x - b.x,
+              dy = a.y - b.y;
+            let distSq = dx * dx + dy * dy;
+            if (distSq < 1) distSq = 1;
+            const dist = Math.sqrt(distSq);
+            const force = 950 / distSq;
+            const fx = dx / dist * force,
+              fy = dy / dist * force;
+            a.vx += fx;
+            a.vy += fy;
+            b.vx -= fx;
+            b.vy -= fy;
+          }
+        }
+        edges.forEach(e => {
+          const a = nodes[e.source],
+            b = nodes[e.target];
+          if (!a || !b) return;
+          const dx = b.x - a.x,
+            dy = b.y - a.y;
+          const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+          const f = (dist - 72) * 0.035;
+          const fx = dx / dist * f,
+            fy = dy / dist * f;
+          a.vx += fx;
+          a.vy += fy;
+          b.vx -= fx;
+          b.vy -= fy;
+        });
+        visibleIds.forEach(id => {
+          const n = nodes[id];
+          if (!n) return;
+          n.vx += (width / 2 - n.x) * 0.004;
+          n.vy += (height / 2 - n.y) * 0.004;
+        });
+        visibleIds.forEach(id => {
+          const n = nodes[id];
+          if (!n) return;
+          if (n.fx != null) {
+            n.x = n.fx;
+            n.y = n.fy;
+            n.vx = 0;
+            n.vy = 0;
+            return;
+          }
+          n.vx *= 0.8;
+          n.vy *= 0.8;
+          n.x += n.vx;
+          n.y += n.vy;
+          n.x = Math.max(18, Math.min(width - 18, n.x));
+          n.y = Math.max(18, Math.min(height - 18, n.y));
+        });
+        sim.alpha *= 0.985;
+        visibleIds.forEach(id => {
+          const n = nodes[id];
+          const el = nodeElRefs.current[id];
+          if (el && n) el.setAttribute('transform', `translate(${n.x},${n.y})`);
+        });
+        edges.forEach(e => {
+          const a = nodes[e.source],
+            b = nodes[e.target];
+          const el = edgeElRefs.current[e.id];
+          if (el && a && b) {
+            el.setAttribute('x1', a.x);
+            el.setAttribute('y1', a.y);
+            el.setAttribute('x2', b.x);
+            el.setAttribute('y2', b.y);
+          }
+        });
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [visibleIds, edges]);
+  const toGraphCoords = (clientX, clientY) => {
+    const rect = svgRef.current.getBoundingClientRect();
+    return {
+      x: (clientX - rect.left - view.x) / view.scale,
+      y: (clientY - rect.top - view.y) / view.scale
+    };
+  };
+  const onNodePointerDown = (id, e) => {
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const p = toGraphCoords(e.clientX, e.clientY);
+    const n = simRef.current.nodes[id];
+    if (n) {
+      n.fx = p.x;
+      n.fy = p.y;
+    }
+    gestureRef.current = {
+      type: 'node',
+      id,
+      pointerId: e.pointerId
+    };
+    simRef.current.alpha = Math.max(simRef.current.alpha, 0.6);
+  };
+  const onSvgPointerDown = e => {
+    pointersRef.current.set(e.pointerId, {
+      x: e.clientX,
+      y: e.clientY
+    });
+    if (pointersRef.current.size === 2) {
+      const pts = [...pointersRef.current.values()];
+      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      gestureRef.current = {
+        type: 'pinch',
+        startDist: dist || 1,
+        startScale: view.scale
+      };
+    } else if (!gestureRef.current) {
+      gestureRef.current = {
+        type: 'pan',
+        startX: e.clientX,
+        startY: e.clientY,
+        startView: {
+          ...view
+        }
+      };
+    }
+  };
+  const onSvgPointerMove = e => {
+    if (pointersRef.current.has(e.pointerId)) pointersRef.current.set(e.pointerId, {
+      x: e.clientX,
+      y: e.clientY
+    });
+    const g = gestureRef.current;
+    if (!g) return;
+    if (g.type === 'node') {
+      const p = toGraphCoords(e.clientX, e.clientY);
+      const n = simRef.current.nodes[g.id];
+      if (n) {
+        n.fx = p.x;
+        n.fy = p.y;
+      }
+      simRef.current.alpha = Math.max(simRef.current.alpha, 0.4);
+    } else if (g.type === 'pan') {
+      const nx = g.startView.x + (e.clientX - g.startX);
+      const ny = g.startView.y + (e.clientY - g.startY);
+      setView(v => ({
+        ...v,
+        x: nx,
+        y: ny
+      }));
+    } else if (g.type === 'pinch' && pointersRef.current.size === 2) {
+      const pts = [...pointersRef.current.values()];
+      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      const scale = Math.max(0.5, Math.min(2.5, g.startScale * (dist / g.startDist)));
+      setView(v => ({
+        ...v,
+        scale
+      }));
+    }
+  };
+  const endGesture = e => {
+    pointersRef.current.delete(e.pointerId);
+    const g = gestureRef.current;
+    if (g && g.type === 'node' && g.pointerId === e.pointerId) {
+      const n = simRef.current.nodes[g.id];
+      if (n) {
+        n.fx = null;
+        n.fy = null;
+      }
+    }
+    if (pointersRef.current.size < 2) gestureRef.current = null;
+  };
+
+  // ホイールズームはReactのonWheelだとpassiveリスナー扱いでpreventDefaultできないため、
+  // ネイティブのaddEventListenerで{ passive: false }を指定して登録する
+  React.useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    const handler = e => {
+      e.preventDefault();
+      const delta = -e.deltaY * 0.001;
+      setView(v => ({
+        ...v,
+        scale: Math.max(0.5, Math.min(2.5, v.scale * (1 + delta)))
+      }));
+    };
+    el.addEventListener('wheel', handler, {
+      passive: false
+    });
+    return () => el.removeEventListener('wheel', handler);
+  }, []);
   if (customers.length === 0) {
     return /*#__PURE__*/React.createElement("div", {
       className: "empty",
@@ -8943,84 +9370,120 @@ function NexusNetworkTree({
       }
     }, "人脈を登録するとつながりが表示されます");
   }
-  return /*#__PURE__*/React.createElement("div", {
+  const focusCustomer = focusId ? customers.find(c => c.id === focusId) : null;
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
-      overflowX: 'auto'
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      marginBottom: 8,
+      flexWrap: 'wrap'
+    }
+  }, focusCustomer ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    style: {
+      background: 'var(--accent-light)',
+      color: 'var(--accent)'
+    }
+  }, "🎯 ", nexusDisplayName(focusCustomer), " を中心表示"), /*#__PURE__*/React.createElement("div", {
+    className: "filter-chips",
+    style: {
+      margin: 0,
+      flex: 'none'
+    }
+  }, [1, 2].map(d => /*#__PURE__*/React.createElement("button", {
+    key: d,
+    className: `chip ${focusDepth === d ? 'active' : ''}`,
+    onClick: () => setFocusDepth(d)
+  }, d, "ステップ先"))), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-outline btn-sm",
+    onClick: () => setFocusId(null)
+  }, "✕ 全体表示に戻る")) : /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--text-sub)'
+    }
+  }, "人物をタップで詳細／詳細ドロワーの🎯ボタンで中心表示に切り替えられます")), /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      margin: 0,
+      padding: 0,
+      overflow: 'hidden',
+      touchAction: 'none'
     }
   }, /*#__PURE__*/React.createElement("svg", {
+    ref: svgRef,
     width: width,
     height: height,
     viewBox: `0 0 ${width} ${height}`,
     style: {
-      minWidth: width
-    }
-  }, customers.map(c => {
-    if (!c.referredBy || !positions[c.referredBy]) return null;
-    const from = positions[c.referredBy];
-    const to = positions[c.id];
-    if (!to) return null;
-    return /*#__PURE__*/React.createElement("line", {
-      key: 'e' + c.id,
-      x1: from.x,
-      y1: from.y + 15,
-      x2: to.x,
-      y2: to.y - 15,
-      stroke: "var(--border)",
-      strokeWidth: 1.4
-    });
-  }), customers.map(c => {
-    const p = positions[c.id];
-    if (!p) return null;
-    const held = false; // 既契約有無は詳細ドロワーで確認
-    const isHub = hubIds.has(c.id);
+      display: 'block',
+      cursor: 'grab'
+    },
+    onPointerDown: onSvgPointerDown,
+    onPointerMove: onSvgPointerMove,
+    onPointerUp: endGesture,
+    onPointerCancel: endGesture
+  }, /*#__PURE__*/React.createElement("g", {
+    transform: `translate(${view.x},${view.y}) scale(${view.scale})`
+  }, edges.map(e => /*#__PURE__*/React.createElement("line", {
+    key: e.id,
+    ref: el => {
+      if (el) edgeElRefs.current[e.id] = el;
+    },
+    stroke: "var(--border)",
+    strokeWidth: 1.4
+  })), visibleCustomers.map(c => {
+    const isHub = hubScoreById[c.id] > 0;
+    const r = 13 + Math.min(hubScoreById[c.id] || 0, 8) * 1.6;
+    const color = nexusHashColor(nexusGroupOf(c));
     const label = nexusDisplayName(c);
     return /*#__PURE__*/React.createElement("g", {
       key: c.id,
+      ref: el => {
+        if (el) nodeElRefs.current[c.id] = el;
+      },
+      onPointerDown: e => onNodePointerDown(c.id, e),
+      onPointerUp: endGesture,
       onClick: () => onSelect(c.id),
       style: {
         cursor: 'pointer'
       }
     }, isHub && /*#__PURE__*/React.createElement("circle", {
-      cx: p.x,
-      cy: p.y,
-      r: 20,
+      r: r + 6,
       fill: "none",
       stroke: "var(--warning)",
       strokeWidth: 1.4,
       strokeDasharray: "2 3"
     }), /*#__PURE__*/React.createElement("circle", {
-      cx: p.x,
-      cy: p.y,
-      r: 15,
-      fill: "var(--surface)",
-      stroke: "var(--accent)",
+      r: r,
+      fill: color,
+      stroke: "#fff",
       strokeWidth: 1.6
     }), /*#__PURE__*/React.createElement("text", {
-      x: p.x,
-      y: p.y + 4,
+      y: 4,
       textAnchor: "middle",
-      fill: "var(--accent)",
+      fill: "#fff",
       style: {
         fontSize: 11,
         fontWeight: 700
       }
     }, label.slice(0, 2)), /*#__PURE__*/React.createElement("text", {
-      x: p.x,
-      y: p.y + 28,
+      y: r + 13,
       textAnchor: "middle",
       fill: "var(--text-sub)",
       style: {
         fontSize: 9.5
       }
     }, label.length > 6 ? label.slice(0, 5) + '…' : label));
-  })), /*#__PURE__*/React.createElement("div", {
+  })))), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11,
       color: 'var(--text-sub)',
       textAlign: 'center',
-      marginTop: 4
+      marginTop: 6
     }
-  }, "点線の輪＝ハブ人物／人物をタップで詳細"));
+  }, "ドラッグで移動・ピンチ/ホイールでズーム・色＝職業／点線の輪＝ハブ人物"));
 }
 
 // ── ランキング表示（紹介力・ハブスコア）─────────────────────────
@@ -9262,6 +9725,8 @@ function NexusServiceRow({
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(service.name);
   const [category, setCategory] = useState(service.category);
+  const [painPoint, setPainPoint] = useState(service.painPoint || '');
+  const [emotionalValue, setEmotionalValue] = useState(service.emotionalValue || '');
   if (editing) {
     return /*#__PURE__*/React.createElement("div", {
       className: "card",
@@ -9277,7 +9742,8 @@ function NexusServiceRow({
         marginBottom: 8
       },
       value: name,
-      onChange: e => setName(e.target.value)
+      onChange: e => setName(e.target.value),
+      placeholder: "サービス名"
     }), /*#__PURE__*/React.createElement("input", {
       className: "form-input",
       style: {
@@ -9286,6 +9752,24 @@ function NexusServiceRow({
       value: category,
       onChange: e => setCategory(e.target.value),
       placeholder: "カテゴリ（例：保険）"
+    }), /*#__PURE__*/React.createElement("textarea", {
+      className: "form-textarea",
+      style: {
+        marginBottom: 8,
+        minHeight: 56
+      },
+      value: painPoint,
+      onChange: e => setPainPoint(e.target.value),
+      placeholder: "解決できる悩み・困りごと（例：入院時の収入減への不安）"
+    }), /*#__PURE__*/React.createElement("textarea", {
+      className: "form-textarea",
+      style: {
+        marginBottom: 8,
+        minHeight: 56
+      },
+      value: emotionalValue,
+      onChange: e => setEmotionalValue(e.target.value),
+      placeholder: "得られる感情的な価値（例：もしもの時も家族に迷惑をかけない安心）"
     }), /*#__PURE__*/React.createElement("div", {
       style: {
         display: 'flex',
@@ -9297,7 +9781,9 @@ function NexusServiceRow({
         if (!name.trim()) return;
         onSave({
           name,
-          category
+          category,
+          painPoint,
+          emotionalValue
         });
         setEditing(false);
       }
@@ -9306,6 +9792,8 @@ function NexusServiceRow({
       onClick: () => {
         setName(service.name);
         setCategory(service.category);
+        setPainPoint(service.painPoint || '');
+        setEmotionalValue(service.emotionalValue || '');
         setEditing(false);
       }
     }, "キャンセル")));
@@ -9315,7 +9803,10 @@ function NexusServiceRow({
     style: {
       margin: 0,
       marginBottom: 8,
-      padding: 12,
+      padding: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'space-between'
@@ -9374,7 +9865,14 @@ function NexusServiceRow({
       cursor: 'pointer',
       fontSize: 15
     }
-  }, "🗑")));
+  }, "🗑"))), (service.painPoint || service.emotionalValue) && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8,
+      fontSize: 11.5,
+      color: 'var(--text-sub)',
+      lineHeight: 1.5
+    }
+  }, service.painPoint && /*#__PURE__*/React.createElement("div", null, "💭 ", service.painPoint), service.emotionalValue && /*#__PURE__*/React.createElement("div", null, "💛 ", service.emotionalValue)));
 }
 function NexusAddServiceForm({
   onAdd
@@ -9382,14 +9880,20 @@ function NexusAddServiceForm({
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
   const [category, setCategory] = useState('');
+  const [painPoint, setPainPoint] = useState('');
+  const [emotionalValue, setEmotionalValue] = useState('');
   const submit = () => {
     if (!name.trim()) return;
     onAdd({
       name,
-      category
+      category,
+      painPoint,
+      emotionalValue
     });
     setName('');
     setCategory('');
+    setPainPoint('');
+    setEmotionalValue('');
     setOpen(false);
   };
   if (!open) {
@@ -9426,6 +9930,24 @@ function NexusAddServiceForm({
     placeholder: "カテゴリ（例：保険）",
     value: category,
     onChange: e => setCategory(e.target.value)
+  }), /*#__PURE__*/React.createElement("textarea", {
+    className: "form-textarea",
+    style: {
+      marginBottom: 8,
+      minHeight: 56
+    },
+    placeholder: "解決できる悩み・困りごと（例：入院時の収入減への不安）",
+    value: painPoint,
+    onChange: e => setPainPoint(e.target.value)
+  }), /*#__PURE__*/React.createElement("textarea", {
+    className: "form-textarea",
+    style: {
+      marginBottom: 8,
+      minHeight: 56
+    },
+    placeholder: "得られる感情的な価値（例：もしもの時も家族に迷惑をかけない安心）",
+    value: emotionalValue,
+    onChange: e => setEmotionalValue(e.target.value)
   }), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
@@ -9455,7 +9977,9 @@ function NexusServicesSection({
     onAdd: v => setServices(prev => [...prev, {
       id: uid(),
       name: v.name,
-      category: v.category || ''
+      category: v.category || '',
+      painPoint: v.painPoint || '',
+      emotionalValue: v.emotionalValue || ''
     }])
   }), services.map((s, i) => /*#__PURE__*/React.createElement(NexusServiceRow, {
     key: s.id,
@@ -9478,6 +10002,149 @@ function NexusServicesSection({
       padding: '30px 16px'
     }
   }, "サービスを登録すると提案候補の分析ができます"));
+}
+
+// ── 理念・行動指針 ────────────────────────────────────────────
+function NexusMissionSection({
+  mission,
+  setMission
+}) {
+  const [draft, setDraft] = useState(mission);
+  const [savedFlash, setSavedFlash] = useState(false);
+  React.useEffect(() => {
+    setDraft(mission);
+  }, [mission]);
+  const save = () => {
+    setMission(draft);
+    setSavedFlash(true);
+    setTimeout(() => setSavedFlash(false), 1800);
+  };
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "Why（なぜこの仕事をするのか）"), /*#__PURE__*/React.createElement("textarea", {
+    className: "form-textarea",
+    value: draft.why || '',
+    onChange: e => setDraft(d => ({
+      ...d,
+      why: e.target.value
+    })),
+    placeholder: "例：お客様が「もしも」の不安なく、今を安心して生きられるように支えたいから"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "How（どうやって実現するか）"), /*#__PURE__*/React.createElement("textarea", {
+    className: "form-textarea",
+    value: draft.how || '',
+    onChange: e => setDraft(d => ({
+      ...d,
+      how: e.target.value
+    })),
+    placeholder: "例：数字だけでなく、一人ひとりの背景や悩みに向き合ったヒアリングを徹底する"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "毎日の行動指針"), /*#__PURE__*/React.createElement("textarea", {
+    className: "form-textarea",
+    value: draft.dailyAction || '',
+    onChange: e => setDraft(d => ({
+      ...d,
+      dailyAction: e.target.value
+    })),
+    placeholder: "例：毎日1件、既存のお客様に感謝の連絡をする"
+  }))), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-primary btn-full",
+    onClick: save
+  }, savedFlash ? '✓ 保存しました' : '保存する'));
+}
+
+// ── つながり（グラフ・紹介力・ハブ・充足率・職業/会社/地域クラスタ）──
+function NexusNetworkSection({
+  customers,
+  services,
+  serviceLinks,
+  hubs,
+  hubIds,
+  onSelect,
+  networkView,
+  setNetworkView,
+  focusId,
+  setFocusId,
+  focusDepth,
+  setFocusDepth
+}) {
+  const referralRankingItems = customers.map(c => ({
+    ...c,
+    scoreValue: customers.filter(x => x.referredBy === c.id).length
+  })).filter(c => c.scoreValue > 0).sort((a, b) => b.scoreValue - a.scoreValue);
+  const hubItems = hubs.map(h => ({
+    ...h,
+    scoreValue: h.hubScore,
+    extra: h.diversity > 0 ? `${h.diversity}種にまたがる` : ''
+  }));
+  const views = [['referral', 'グラフ'], ['ranking', '紹介力'], ['hub', 'ハブ'], ['matrix', '充足率'], ['group', '職業'], ['company', '会社'], ['area', '地域']];
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "filter-chips"
+  }, views.map(([key, label]) => /*#__PURE__*/React.createElement("button", {
+    key: key,
+    className: `chip ${networkView === key ? 'active' : ''}`,
+    onClick: () => setNetworkView(key)
+  }, label))), networkView === 'referral' && /*#__PURE__*/React.createElement(NexusForceGraph, {
+    customers: customers,
+    hubs: hubs,
+    focusId: focusId,
+    setFocusId: setFocusId,
+    focusDepth: focusDepth,
+    setFocusDepth: setFocusDepth,
+    onSelect: onSelect
+  }), networkView === 'ranking' && (referralRankingItems.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "empty",
+    style: {
+      padding: '30px 16px'
+    }
+  }, "紹介者を登録すると紹介力ランキングが表示されます") : /*#__PURE__*/React.createElement(NexusRankedList, {
+    items: referralRankingItems,
+    onSelect: onSelect,
+    icon: "🏆",
+    unit: "人紹介"
+  })), networkView === 'hub' && (hubItems.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "empty",
+    style: {
+      padding: '30px 16px'
+    }
+  }, "2人以上を、異なる職業・会社に紹介した人がここに出ます") : /*#__PURE__*/React.createElement(NexusRankedList, {
+    items: hubItems,
+    onSelect: onSelect,
+    icon: "📡",
+    unit: "スコア"
+  })), networkView === 'matrix' && /*#__PURE__*/React.createElement(NexusOccupationMatrix, {
+    customers: customers,
+    services: services,
+    serviceLinks: serviceLinks
+  }), networkView === 'group' && /*#__PURE__*/React.createElement(NexusClusterView, {
+    customers: customers,
+    field: "group",
+    emptyLabel: "同じ職業・業種の人がまだ2人以上いません",
+    onSelect: onSelect
+  }), networkView === 'company' && /*#__PURE__*/React.createElement(NexusClusterView, {
+    customers: customers,
+    field: "company",
+    emptyLabel: "会社を登録すると同じ勤務先の人がまとまります",
+    onSelect: onSelect
+  }), networkView === 'area' && /*#__PURE__*/React.createElement(NexusClusterView, {
+    customers: customers,
+    field: "area",
+    emptyLabel: "住所を登録すると同じ地域の人がまとまります",
+    onSelect: onSelect
+  }));
 }
 
 // ── 顧客一覧（人脈ネクサス視点：検索・CSV連携）─────────────────
@@ -9556,7 +10223,7 @@ function NexusListSection({
       color: 'var(--text-sub)',
       marginBottom: 10
     }
-  }, "CSVの列: 名前,職業,会社,電話,住所,紹介者,メモ（1行目は見出し）／取り込んだ人脈はそのまま「顧客」タブにも反映されます"), filtered.length === 0 ? /*#__PURE__*/React.createElement("div", {
+  }, "CSVの列: 名前,職業,会社,電話,住所,紹介者,メモ（1行目は見出し）／取り込んだ人脈はそのまま「顧客」タブにも反映されます。同じ名前の顧客が既にいる場合は重複登録せずスキップします"), filtered.length === 0 ? /*#__PURE__*/React.createElement("div", {
     className: "empty",
     style: {
       padding: '30px 16px'
@@ -9746,86 +10413,7 @@ function NexusProposalsSection({
   })));
 }
 
-// ── つながり（紹介ツリー・紹介力・ハブ・充足率・職業/会社/地域クラスタ）──
-function NexusNetworkSection({
-  customers,
-  services,
-  serviceLinks,
-  hubs,
-  hubIds,
-  onSelect,
-  networkView,
-  setNetworkView
-}) {
-  const referralRankingItems = customers.map(c => ({
-    ...c,
-    scoreValue: customers.filter(x => x.referredBy === c.id).length
-  })).filter(c => c.scoreValue > 0).sort((a, b) => b.scoreValue - a.scoreValue);
-  const hubItems = hubs.map(h => ({
-    ...h,
-    scoreValue: h.hubScore,
-    extra: h.diversity > 0 ? `${h.diversity}種にまたがる` : ''
-  }));
-  const views = [['referral', '紹介'], ['ranking', '紹介力'], ['hub', 'ハブ'], ['matrix', '充足率'], ['group', '職業'], ['company', '会社'], ['area', '地域']];
-  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    className: "filter-chips"
-  }, views.map(([key, label]) => /*#__PURE__*/React.createElement("button", {
-    key: key,
-    className: `chip ${networkView === key ? 'active' : ''}`,
-    onClick: () => setNetworkView(key)
-  }, label))), networkView === 'referral' && /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      margin: 0,
-      padding: 12
-    }
-  }, /*#__PURE__*/React.createElement(NexusNetworkTree, {
-    customers: customers,
-    hubIds: hubIds,
-    onSelect: onSelect
-  })), networkView === 'ranking' && (referralRankingItems.length === 0 ? /*#__PURE__*/React.createElement("div", {
-    className: "empty",
-    style: {
-      padding: '30px 16px'
-    }
-  }, "紹介者を登録すると紹介力ランキングが表示されます") : /*#__PURE__*/React.createElement(NexusRankedList, {
-    items: referralRankingItems,
-    onSelect: onSelect,
-    icon: "🏆",
-    unit: "人紹介"
-  })), networkView === 'hub' && (hubItems.length === 0 ? /*#__PURE__*/React.createElement("div", {
-    className: "empty",
-    style: {
-      padding: '30px 16px'
-    }
-  }, "2人以上を、異なる職業・会社に紹介した人がここに出ます") : /*#__PURE__*/React.createElement(NexusRankedList, {
-    items: hubItems,
-    onSelect: onSelect,
-    icon: "📡",
-    unit: "スコア"
-  })), networkView === 'matrix' && /*#__PURE__*/React.createElement(NexusOccupationMatrix, {
-    customers: customers,
-    services: services,
-    serviceLinks: serviceLinks
-  }), networkView === 'group' && /*#__PURE__*/React.createElement(NexusClusterView, {
-    customers: customers,
-    field: "group",
-    emptyLabel: "同じ職業・業種の人がまだ2人以上いません",
-    onSelect: onSelect
-  }), networkView === 'company' && /*#__PURE__*/React.createElement(NexusClusterView, {
-    customers: customers,
-    field: "company",
-    emptyLabel: "会社を登録すると同じ勤務先の人がまとまります",
-    onSelect: onSelect
-  }), networkView === 'area' && /*#__PURE__*/React.createElement(NexusClusterView, {
-    customers: customers,
-    field: "area",
-    emptyLabel: "住所を登録すると同じ地域の人がまとまります",
-    onSelect: onSelect
-  }));
-}
-
-// ── 人脈ネクサス タブ本体（4タブ構成） ──────────────────────────
+// ── 人脈ネクサス タブ本体（顧客一覧・提案候補・つながり・サービス・理念）──
 function NexusTab({
   customers,
   setCustomers,
@@ -9833,6 +10421,8 @@ function NexusTab({
   setServices,
   serviceLinks,
   setServiceLinks,
+  mission,
+  setMission,
   onNavigate
 }) {
   const [subTab, setSubTab] = useState('list');
@@ -9840,6 +10430,8 @@ function NexusTab({
   const [networkView, setNetworkView] = useState('referral');
   const [query, setQuery] = useState('');
   const [detailId, setDetailId] = useState(null);
+  const [focusId, setFocusId] = useState(null);
+  const [focusDepth, setFocusDepth] = useState(1);
   const gapsByCustomer = useMemo(() => {
     const map = {};
     customers.forEach(c => {
@@ -9871,10 +10463,19 @@ function NexusTab({
   }, {
     key: 'services',
     label: 'サービス'
+  }, {
+    key: 'mission',
+    label: '理念'
   }];
   const openCustomerProfile = c => {
     setDetailId(null);
     onNavigate('customers', c);
+  };
+  const focusOnCustomer = id => {
+    setDetailId(null);
+    setFocusId(id);
+    setSubTab('network');
+    setNetworkView('referral');
   };
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(NexusStatRow, {
     customerCount: customers.length,
@@ -9915,11 +10516,18 @@ function NexusTab({
     hubIds: hubIds,
     onSelect: setDetailId,
     networkView: networkView,
-    setNetworkView: setNetworkView
+    setNetworkView: setNetworkView,
+    focusId: focusId,
+    setFocusId: setFocusId,
+    focusDepth: focusDepth,
+    setFocusDepth: setFocusDepth
   }), subTab === 'services' && /*#__PURE__*/React.createElement(NexusServicesSection, {
     services: services,
     setServices: setServices,
     setServiceLinks: setServiceLinks
+  }), subTab === 'mission' && /*#__PURE__*/React.createElement(NexusMissionSection, {
+    mission: mission,
+    setMission: setMission
   }), detailId && /*#__PURE__*/React.createElement(NexusDetail, {
     customerId: detailId,
     customers: customers,
@@ -9928,9 +10536,12 @@ function NexusTab({
     setServiceLinks: setServiceLinks,
     setCustomers: setCustomers,
     onClose: () => setDetailId(null),
-    onOpenCustomer: openCustomerProfile
+    onOpenCustomer: openCustomerProfile,
+    onFocus: focusOnCustomer
   }));
 }
+
+
 
 // ── App ───────────────────────────────────────────────────────
 function App() {
@@ -9959,6 +10570,11 @@ function App() {
   // （人脈そのものは customers を直接ID参照するため、別ストアには持たない）
   const [nexusServices, setNexusServices] = useLS('nexus_services_v1', NEXUS_SEED_SERVICES);
   const [nexusServiceLinks, setNexusServiceLinks] = useLS('nexus_service_links_v1', []);
+  const [nexusMission, setNexusMission] = useLS('nexus_mission_v1', {
+    why: '',
+    how: '',
+    dailyAction: ''
+  });
   const [tab, setTab] = useState('dashboard');
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [editingCustomer, setEditingCustomer] = useState(null);
@@ -10131,6 +10747,7 @@ function App() {
     customers: customers,
     kpiSettings: kpiSettings,
     setKpiSettings: setKpiSettings,
+    mission: nexusMission,
     onNavigate: (t, c) => {
       setTab(t === 'customers' ? 'list' : t);
       if (c) setSelectedCustomer(c);
@@ -10164,6 +10781,8 @@ function App() {
     setServices: setNexusServices,
     serviceLinks: nexusServiceLinks,
     setServiceLinks: setNexusServiceLinks,
+    mission: nexusMission,
+    setMission: setNexusMission,
     onNavigate: (t, c) => {
       setTab(t === 'customers' ? 'list' : t);
       if (c) setSelectedCustomer(c);
