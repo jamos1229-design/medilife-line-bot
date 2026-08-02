@@ -8168,16 +8168,19 @@ function importCSV(file, setCustomers) {
           postalCode: get('郵便番号') || '',
           address: get('住所') || get('address') || '',
           occupation: get('職業') || get('occupation') || '',
-          workplace: get('勤務先') || get('workplace') || '',
+          workplace: get('勤務先') || get('workplace') || get('会社') || '',
           status: get('ステータス') || get('status') || '未接触',
           contactMethod: get('接触方法') || '電話',
           lastContact: get('最終接触日') || '',
           nextAppt: get('次回アポイント') || '',
-          memo: get('面談メモ') || get('memo') || '',
+          memo: get('面談メモ') || get('memo') || get('メモ') || '',
           lineRegistered: get('LINE登録') === '登録済',
           contracts,
           suspects: [],
-          referredBy: ''
+          referredBy: '',
+          // 人脈ネクサスのCSV形式（名前,職業,会社,電話,住所,紹介者,メモ）用：
+          // 紹介者は名前で指定されるため、既存顧客とのマージ後に名前→IDで解決する
+          referrerName: get('紹介者') || ''
         };
       }).filter(Boolean);
       if (imported.length === 0) {
@@ -8185,8 +8188,22 @@ function importCSV(file, setCustomers) {
         return;
       }
       setCustomers(prev => {
-        const merged = [...prev, ...imported];
-        alert(`インポート完了：${imported.length}件追加`);
+        const nameToId = {};
+        prev.forEach(c => {
+          if (c.name && !(c.name in nameToId)) nameToId[c.name] = c.id;
+        });
+        imported.forEach(c => {
+          if (!(c.name in nameToId)) nameToId[c.name] = c.id;
+        });
+        const resolved = imported.map(({
+          referrerName,
+          ...c
+        }) => ({
+          ...c,
+          referredBy: referrerName ? nameToId[referrerName] || '' : ''
+        }));
+        const merged = [...prev, ...resolved];
+        alert(`インポート完了：${resolved.length}件追加`);
         return merged;
       });
     } catch (err) {
@@ -8323,6 +8340,1598 @@ function exportCSV(customers) {
   URL.revokeObjectURL(url);
 }
 
+// ══════════════════════════════════════════════════════════════
+// 人脈ネクサス（既存顧客データを核にした紹介ネットワーク分析）
+// 顧客一覧・提案候補・つながり・サービスの4タブ構成
+// データは customers（customers_v1）をそのままIDで参照する。
+// 別ストア(nexus_services_v1／nexus_service_links_v1)は
+// 「サービスカタログ」と「顧客×サービスの既契約/提案候補フラグ」のみ。
+// ══════════════════════════════════════════════════════════════
+
+const NEXUS_SEED_SERVICES = [{
+  id: 'ns1',
+  name: '医療保険',
+  category: '保険'
+}, {
+  id: 'ns2',
+  name: '生命保険',
+  category: '保険'
+}, {
+  id: 'ns3',
+  name: '就業不能保険',
+  category: '保険'
+}, {
+  id: 'ns4',
+  name: '個人年金',
+  category: '資産形成'
+}, {
+  id: 'ns5',
+  name: 'NISA・資産運用相談',
+  category: '資産形成'
+}, {
+  id: 'ns6',
+  name: '法人保険',
+  category: '法人'
+}, {
+  id: 'ns7',
+  name: '開業支援コンサル',
+  category: '法人'
+}];
+const nexusGroupOf = c => c.customerType === '法人' ? c.industry || '法人' : c.occupation || '';
+const nexusCompanyOf = c => c.customerType === '法人' ? c.corporateName || c.name || '' : c.workplace || '';
+const nexusDisplayName = c => c.customerType === '法人' ? c.corporateName || c.name : c.name;
+const nexusAreaKey = address => {
+  if (!address) return null;
+  const m = address.match(/^.*?[市区町村郡]/);
+  return m ? m[0] : address.slice(0, 6);
+};
+function nexusCluster(customers, field) {
+  const map = {};
+  customers.forEach(c => {
+    const raw = field === 'area' ? nexusAreaKey(c.address) : field === 'company' ? nexusCompanyOf(c) : nexusGroupOf(c);
+    if (!raw) return;
+    if (!map[raw]) map[raw] = [];
+    map[raw].push(c);
+  });
+  return Object.entries(map).filter(([, m]) => m.length >= 2).sort((a, b) => b[1].length - a[1].length);
+}
+function nexusMatchesQuery(c, query) {
+  if (!query) return true;
+  const q = query.toLowerCase();
+  return [nexusDisplayName(c), nexusGroupOf(c), nexusCompanyOf(c), c.address].some(f => f && f.toLowerCase().includes(q));
+}
+function nexusComputeHubs(customers) {
+  return customers.map(c => {
+    const referred = customers.filter(x => x.referredBy === c.id);
+    const distinctGroups = new Set(referred.map(nexusGroupOf).filter(Boolean));
+    const distinctCompanies = new Set(referred.map(nexusCompanyOf).filter(Boolean));
+    const diversity = distinctGroups.size + distinctCompanies.size;
+    const hubScore = referred.length >= 2 ? referred.length + diversity : 0;
+    return {
+      ...c,
+      referredCount: referred.length,
+      diversity,
+      hubScore
+    };
+  }).filter(c => c.hubScore > 0).sort((a, b) => b.hubScore - a.hubScore);
+}
+function nexusOccupationMatrix(customers, services, serviceLinks) {
+  const groups = {};
+  customers.forEach(c => {
+    const g = nexusGroupOf(c);
+    if (!g) return;
+    if (!groups[g]) groups[g] = [];
+    groups[g].push(c);
+  });
+  return Object.entries(groups).map(([group, members]) => {
+    const serviceStats = services.map(s => {
+      const count = members.filter(m => serviceLinks.some(l => l.customerId === m.id && l.serviceId === s.id)).length;
+      return {
+        service: s,
+        count,
+        pct: members.length ? Math.round(count / members.length * 100) : 0
+      };
+    });
+    return {
+      group,
+      size: members.length,
+      serviceStats
+    };
+  }).sort((a, b) => b.size - a.size);
+}
+const nexusPriorityScore = (gap, referredCount) => gap + referredCount * 2;
+
+// ── 統計カード ───────────────────────────────────────────────
+function NexusStatRow({
+  customerCount,
+  heldCount,
+  gapCount
+}) {
+  const items = [{
+    label: '人脈',
+    value: customerCount,
+    icon: '👥'
+  }, {
+    label: '既契約',
+    value: heldCount,
+    icon: '📄'
+  }, {
+    label: '提案候補',
+    value: gapCount,
+    icon: '✨'
+  }];
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 10,
+      marginBottom: 12
+    }
+  }, items.map(it => /*#__PURE__*/React.createElement("div", {
+    key: it.label,
+    className: "stat-card",
+    style: {
+      flex: 1,
+      padding: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 15,
+      marginBottom: 2
+    }
+  }, it.icon), /*#__PURE__*/React.createElement("div", {
+    className: "stat-num",
+    style: {
+      fontSize: 24
+    }
+  }, it.value), /*#__PURE__*/React.createElement("div", {
+    className: "stat-label"
+  }, it.label))));
+}
+
+// ── オービット（顧客を中心に、既契約/提案候補サービスを放射状に表示）──
+function NexusOrbit({
+  customer,
+  services,
+  serviceLinks,
+  onToggle
+}) {
+  const size = 240;
+  const center = size / 2;
+  const radius = 84;
+  const n = services.length || 1;
+  const label = nexusDisplayName(customer);
+  return /*#__PURE__*/React.createElement("svg", {
+    width: size,
+    height: size,
+    viewBox: `0 0 ${size} ${size}`
+  }, /*#__PURE__*/React.createElement("circle", {
+    cx: center,
+    cy: center,
+    r: radius,
+    fill: "none",
+    stroke: "var(--border)",
+    strokeDasharray: "2 5"
+  }), /*#__PURE__*/React.createElement("circle", {
+    cx: center,
+    cy: center,
+    r: 28,
+    fill: "var(--accent)"
+  }), /*#__PURE__*/React.createElement("text", {
+    x: center,
+    y: center + 5,
+    textAnchor: "middle",
+    fill: "#fff",
+    style: {
+      fontSize: 14,
+      fontWeight: 700
+    }
+  }, label.slice(0, 2)), services.map((s, i) => {
+    const angle = i / n * Math.PI * 2 - Math.PI / 2;
+    const x = center + radius * Math.cos(angle);
+    const y = center + radius * Math.sin(angle);
+    const held = serviceLinks.some(l => l.customerId === customer.id && l.serviceId === s.id);
+    return /*#__PURE__*/React.createElement("g", {
+      key: s.id,
+      onClick: () => onToggle(s.id, held),
+      style: {
+        cursor: 'pointer'
+      }
+    }, /*#__PURE__*/React.createElement("line", {
+      x1: center,
+      y1: center,
+      x2: x,
+      y2: y,
+      stroke: held ? 'var(--accent)' : 'var(--border)',
+      strokeWidth: held ? 2 : 1
+    }), /*#__PURE__*/React.createElement("circle", {
+      cx: x,
+      cy: y,
+      r: 17,
+      fill: held ? 'var(--accent)' : 'var(--surface)',
+      stroke: held ? 'var(--accent)' : 'var(--warning)',
+      strokeWidth: held ? 0 : 1.6,
+      strokeDasharray: held ? '0' : '3 3'
+    }), /*#__PURE__*/React.createElement("text", {
+      x: x,
+      y: y + 28,
+      textAnchor: "middle",
+      fill: held ? 'var(--accent)' : 'var(--warning)',
+      style: {
+        fontSize: 10,
+        fontWeight: 600
+      }
+    }, s.name.length > 6 ? s.name.slice(0, 5) + '…' : s.name));
+  }));
+}
+
+// ── フォロー履歴（顧客レコードに activities[] として保存）──────
+function NexusActivityLog({
+  customer,
+  setCustomers
+}) {
+  const [note, setNote] = useState('');
+  const [date, setDate] = useState(todayStr());
+  const activities = [...(customer.activities || [])].sort((a, b) => a.date < b.date ? 1 : -1);
+  const update = fn => setCustomers(prev => prev.map(c => c.id === customer.id ? {
+    ...c,
+    activities: fn(c.activities || [])
+  } : c));
+  const add = () => {
+    if (!note.trim()) return;
+    update(list => [...list, {
+      id: uid(),
+      date,
+      note
+    }]);
+    setNote('');
+  };
+  const remove = id => update(list => list.filter(a => a.id !== id));
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "form-label",
+    style: {
+      marginBottom: 8
+    }
+  }, "🕐 フォロー履歴"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    className: "form-input",
+    style: {
+      flex: '0 0 130px',
+      padding: '9px 8px',
+      fontSize: 13
+    },
+    value: date,
+    onChange: e => setDate(e.target.value)
+  }), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    style: {
+      flex: 1,
+      padding: '9px 10px',
+      fontSize: 13
+    },
+    placeholder: "連絡・提案内容",
+    value: note,
+    onChange: e => setNote(e.target.value)
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-primary btn-sm",
+    style: {
+      padding: '0 14px'
+    },
+    onClick: add
+  }, "＋")), activities.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text-sub)'
+    }
+  }, "記録はまだありません") : /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 6
+    }
+  }, activities.map(a => /*#__PURE__*/React.createElement("div", {
+    key: a.id,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      fontSize: 12.5,
+      background: 'var(--bg)',
+      borderRadius: 8,
+      padding: '7px 10px'
+    }
+  }, /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--text-sub)',
+      marginRight: 6
+    }
+  }, fmtDate(a.date)), a.note), /*#__PURE__*/React.createElement("button", {
+    onClick: () => remove(a.id),
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--text-sub)',
+      cursor: 'pointer',
+      fontSize: 14
+    }
+  }, "×")))));
+}
+
+// ── 顧客詳細ドロワー（人脈ネクサス視点：紹介関係・提案状況・履歴）──
+function NexusDetail({
+  customerId,
+  customers,
+  services,
+  serviceLinks,
+  setServiceLinks,
+  setCustomers,
+  onClose,
+  onOpenCustomer
+}) {
+  const customer = customers.find(c => c.id === customerId);
+  if (!customer) return null;
+  const toggle = (serviceId, held) => {
+    if (held) {
+      setServiceLinks(prev => prev.filter(l => !(l.customerId === customer.id && l.serviceId === serviceId)));
+    } else {
+      setServiceLinks(prev => [...prev, {
+        id: uid(),
+        customerId: customer.id,
+        serviceId,
+        status: '提案中'
+      }]);
+    }
+  };
+  const heldServices = services.filter(s => serviceLinks.some(l => l.customerId === customer.id && l.serviceId === s.id));
+  const gapServices = services.filter(s => !heldServices.includes(s));
+  const referrer = customers.find(c => c.id === customer.referredBy);
+  const referred = customers.filter(c => c.referredBy === customer.id);
+  const group = nexusGroupOf(customer);
+  const company = nexusCompanyOf(customer);
+  const sameCompany = company ? customers.filter(c => c.id !== customer.id && nexusCompanyOf(c) === company) : [];
+  const sameGroup = group ? customers.filter(c => c.id !== customer.id && nexusGroupOf(c) === group) : [];
+  const autoFillFromContracts = () => {
+    const existing = new Set(serviceLinks.filter(l => l.customerId === customer.id).map(l => l.serviceId));
+    const matched = services.filter(s => (customer.contracts || []).some(ct => (ct.type || '').trim() === s.name)).map(s => s.id);
+    const fresh = matched.filter(id => !existing.has(id));
+    if (fresh.length === 0) {
+      alert('新たに反映できる契約はありませんでした（保険種類とサービス名が完全一致するものだけ対象です）');
+      return;
+    }
+    setServiceLinks(prev => [...prev, ...fresh.map(sid => ({
+      id: uid(),
+      customerId: customer.id,
+      serviceId: sid,
+      status: '契約中'
+    }))]);
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: "overlay",
+    onClick: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "drawer",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "drawer-handle"
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'flex-start',
+      marginBottom: 4
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "drawer-title",
+    style: {
+      marginBottom: 2
+    }
+  }, nexusDisplayName(customer)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text-sub)'
+    }
+  }, group, company && ` ・ ${company}`)), /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--text-sub)',
+      cursor: 'pointer',
+      fontSize: 20
+    }
+  }, "×")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 6,
+      margin: '10px 0'
+    }
+  }, customer.phone && /*#__PURE__*/React.createElement("a", {
+    href: `tel:${customer.phone}`,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      textDecoration: 'none',
+      color: 'var(--accent)',
+      fontSize: 13,
+      fontWeight: 600
+    }
+  }, "📞 ", customer.phone), customer.address && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      fontSize: 13,
+      color: 'var(--text)'
+    }
+  }, "📍 ", customer.address), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      fontSize: 13,
+      color: 'var(--text)'
+    }
+  }, "🔗 ", referrer ? `${nexusDisplayName(referrer)} からの紹介` : '紹介者なし（直接の人脈）', referred.length > 0 && ` ・ ${referred.length}人を紹介`)), (sameCompany.length > 0 || sameGroup.length > 0) && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 10,
+      fontSize: 11.5,
+      color: 'var(--text-sub)',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 2
+    }
+  }, sameCompany.length > 0 && /*#__PURE__*/React.createElement("div", null, "同じ勤務先・会社：", sameCompany.map(nexusDisplayName).join('、')), sameGroup.length > 0 && /*#__PURE__*/React.createElement("div", null, "同じ職業・業種：", sameGroup.map(nexusDisplayName).join('、'))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'center',
+      margin: '4px 0'
+    }
+  }, /*#__PURE__*/React.createElement(NexusOrbit, {
+    customer: customer,
+    services: services,
+    serviceLinks: serviceLinks,
+    onToggle: toggle
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      textAlign: 'center',
+      marginBottom: 8
+    }
+  }, "点線の丸をタップすると提案候補として登録します"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-outline btn-full btn-sm",
+    onClick: autoFillFromContracts,
+    style: {
+      marginBottom: 12
+    }
+  }, "📋 既契約データから自動反映"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 6,
+      fontSize: 12,
+      fontWeight: 700,
+      color: 'var(--accent)'
+    }
+  }, "既契約（", heldServices.length, "）"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 6,
+      marginBottom: 12
+    }
+  }, heldServices.length === 0 && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text-sub)'
+    }
+  }, "まだありません"), heldServices.map(s => /*#__PURE__*/React.createElement("span", {
+    key: s.id,
+    onClick: () => toggle(s.id, true),
+    className: "badge",
+    style: {
+      background: 'var(--accent-light)',
+      color: 'var(--accent)',
+      cursor: 'pointer'
+    }
+  }, s.name))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 6,
+      fontSize: 12,
+      fontWeight: 700,
+      color: 'var(--warning)'
+    }
+  }, "提案候補（", gapServices.length, "）"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 6
+    }
+  }, gapServices.map(s => /*#__PURE__*/React.createElement("span", {
+    key: s.id,
+    onClick: () => toggle(s.id, false),
+    className: "badge",
+    style: {
+      background: '#FFF7ED',
+      color: 'var(--warning)',
+      cursor: 'pointer'
+    }
+  }, "+ ", s.name))), /*#__PURE__*/React.createElement(NexusActivityLog, {
+    customer: customer,
+    setCustomers: setCustomers
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-primary btn-full",
+    style: {
+      marginTop: 16
+    },
+    onClick: () => onOpenCustomer(customer)
+  }, "👤 顧客の詳細プロフィールを開く")));
+}
+
+// ── 紹介ツリー（referredByチェーンをSVGで表示）─────────────────
+function nexusBuildTreeLayout(customers, width) {
+  const byId = {};
+  customers.forEach(c => byId[c.id] = c);
+  const childrenMap = {};
+  customers.forEach(c => {
+    const ref = c.referredBy && byId[c.referredBy] ? c.referredBy : '__root__';
+    if (!childrenMap[ref]) childrenMap[ref] = [];
+    childrenMap[ref].push(c.id);
+  });
+  const levels = [];
+  const positions = {};
+  let frontier = childrenMap['__root__'] || [];
+  let depth = 0;
+  const visited = new Set();
+  while (frontier.length > 0 && depth < 8) {
+    levels.push(frontier);
+    frontier.forEach(id => visited.add(id));
+    const next = [];
+    frontier.forEach(id => {
+      (childrenMap[id] || []).forEach(cid => {
+        if (!visited.has(cid)) next.push(cid);
+      });
+    });
+    frontier = next;
+    depth += 1;
+  }
+  const leftover = customers.map(c => c.id).filter(id => !visited.has(id));
+  if (leftover.length) levels.push(leftover);
+  const rowHeight = 92;
+  levels.forEach((ids, level) => {
+    const count = ids.length;
+    ids.forEach((id, i) => {
+      const x = (i + 1) / (count + 1) * width;
+      const y = 40 + level * rowHeight;
+      positions[id] = {
+        x,
+        y,
+        level
+      };
+    });
+  });
+  const height = 40 + levels.length * rowHeight;
+  return {
+    positions,
+    height
+  };
+}
+function NexusNetworkTree({
+  customers,
+  hubIds,
+  onSelect
+}) {
+  const width = 320;
+  const {
+    positions,
+    height
+  } = useMemo(() => nexusBuildTreeLayout(customers, width), [customers]);
+  if (customers.length === 0) {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "empty",
+      style: {
+        padding: '30px 16px'
+      }
+    }, "人脈を登録するとつながりが表示されます");
+  }
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      overflowX: 'auto'
+    }
+  }, /*#__PURE__*/React.createElement("svg", {
+    width: width,
+    height: height,
+    viewBox: `0 0 ${width} ${height}`,
+    style: {
+      minWidth: width
+    }
+  }, customers.map(c => {
+    if (!c.referredBy || !positions[c.referredBy]) return null;
+    const from = positions[c.referredBy];
+    const to = positions[c.id];
+    if (!to) return null;
+    return /*#__PURE__*/React.createElement("line", {
+      key: 'e' + c.id,
+      x1: from.x,
+      y1: from.y + 15,
+      x2: to.x,
+      y2: to.y - 15,
+      stroke: "var(--border)",
+      strokeWidth: 1.4
+    });
+  }), customers.map(c => {
+    const p = positions[c.id];
+    if (!p) return null;
+    const held = false; // 既契約有無は詳細ドロワーで確認
+    const isHub = hubIds.has(c.id);
+    const label = nexusDisplayName(c);
+    return /*#__PURE__*/React.createElement("g", {
+      key: c.id,
+      onClick: () => onSelect(c.id),
+      style: {
+        cursor: 'pointer'
+      }
+    }, isHub && /*#__PURE__*/React.createElement("circle", {
+      cx: p.x,
+      cy: p.y,
+      r: 20,
+      fill: "none",
+      stroke: "var(--warning)",
+      strokeWidth: 1.4,
+      strokeDasharray: "2 3"
+    }), /*#__PURE__*/React.createElement("circle", {
+      cx: p.x,
+      cy: p.y,
+      r: 15,
+      fill: "var(--surface)",
+      stroke: "var(--accent)",
+      strokeWidth: 1.6
+    }), /*#__PURE__*/React.createElement("text", {
+      x: p.x,
+      y: p.y + 4,
+      textAnchor: "middle",
+      fill: "var(--accent)",
+      style: {
+        fontSize: 11,
+        fontWeight: 700
+      }
+    }, label.slice(0, 2)), /*#__PURE__*/React.createElement("text", {
+      x: p.x,
+      y: p.y + 28,
+      textAnchor: "middle",
+      fill: "var(--text-sub)",
+      style: {
+        fontSize: 9.5
+      }
+    }, label.length > 6 ? label.slice(0, 5) + '…' : label));
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      textAlign: 'center',
+      marginTop: 4
+    }
+  }, "点線の輪＝ハブ人物／人物をタップで詳細"));
+}
+
+// ── ランキング表示（紹介力・ハブスコア）─────────────────────────
+function NexusRankedList({
+  items,
+  onSelect,
+  icon,
+  unit
+}) {
+  if (items.length === 0) return null;
+  const medalColor = i => i === 0 ? 'var(--warning)' : i === 1 ? 'var(--text-sub)' : i === 2 ? '#B08968' : 'var(--border)';
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8
+    }
+  }, items.map((c, i) => /*#__PURE__*/React.createElement("div", {
+    key: c.id,
+    onClick: () => onSelect(c.id),
+    className: "card",
+    style: {
+      margin: 0,
+      padding: 12,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      cursor: 'pointer'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 28,
+      height: 28,
+      borderRadius: '50%',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      background: i < 3 ? medalColor(i) : 'var(--bg)',
+      color: i < 3 ? '#fff' : 'var(--text-sub)',
+      fontSize: 13,
+      fontWeight: 700,
+      flexShrink: 0
+    }
+  }, i + 1), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 14.5,
+      fontWeight: 700
+    }
+  }, nexusDisplayName(c)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--text-sub)'
+    }
+  }, nexusGroupOf(c), c.extra && ` ・ ${c.extra}`)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 4,
+      color: 'var(--accent)',
+      flexShrink: 0
+    }
+  }, icon, " ", /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 700,
+      fontSize: 14
+    }
+  }, c.scoreValue), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)'
+    }
+  }, unit)))));
+}
+
+// ── クラスタ表示（職業・会社・地域）─────────────────────────────
+function NexusClusterView({
+  customers,
+  field,
+  emptyLabel,
+  onSelect
+}) {
+  const clusters = useMemo(() => nexusCluster(customers, field), [customers, field]);
+  if (clusters.length === 0) {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "empty",
+      style: {
+        padding: '30px 16px'
+      }
+    }, emptyLabel);
+  }
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8
+    }
+  }, clusters.map(([key, members]) => /*#__PURE__*/React.createElement("div", {
+    key: key,
+    className: "card",
+    style: {
+      margin: 0,
+      padding: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 14.5,
+      fontWeight: 700
+    }
+  }, key), /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    style: {
+      background: 'var(--accent-light)',
+      color: 'var(--accent)'
+    }
+  }, members.length, "人")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 6
+    }
+  }, members.map(m => /*#__PURE__*/React.createElement("span", {
+    key: m.id,
+    onClick: () => onSelect(m.id),
+    style: {
+      background: 'var(--bg)',
+      fontSize: 12,
+      border: '1px solid var(--border)',
+      borderRadius: 20,
+      padding: '5px 10px',
+      cursor: 'pointer'
+    }
+  }, nexusDisplayName(m)))))));
+}
+
+// ── サービス充足率マトリクス ────────────────────────────────────
+function NexusOccupationMatrix({
+  customers,
+  services,
+  serviceLinks
+}) {
+  const matrix = useMemo(() => nexusOccupationMatrix(customers, services, serviceLinks), [customers, services, serviceLinks]);
+  if (matrix.length === 0 || services.length === 0) {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "empty",
+      style: {
+        padding: '30px 16px'
+      }
+    }, "職業・業種を登録すると充足率が表示されます");
+  }
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10
+    }
+  }, matrix.map(g => /*#__PURE__*/React.createElement("div", {
+    key: g.group,
+    className: "card",
+    style: {
+      margin: 0,
+      padding: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 14.5,
+      fontWeight: 700
+    }
+  }, g.group), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)'
+    }
+  }, g.size, "人")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 6
+    }
+  }, g.serviceStats.map(s => /*#__PURE__*/React.createElement("div", {
+    key: s.service.id
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      fontSize: 11.5,
+      color: 'var(--text-sub)',
+      marginBottom: 2
+    }
+  }, /*#__PURE__*/React.createElement("span", null, s.service.name), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 700,
+      color: s.pct < 30 ? 'var(--danger)' : 'var(--accent)'
+    }
+  }, s.pct, "%")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: 'var(--bg)',
+      height: 5,
+      borderRadius: 3,
+      overflow: 'hidden'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: `${s.pct}%`,
+      background: s.pct < 30 ? 'var(--danger)' : 'var(--accent)',
+      height: '100%'
+    }
+  }))))))));
+}
+
+// ── サービス管理 ────────────────────────────────────────────────
+function NexusServiceRow({
+  service,
+  onSave,
+  onDelete,
+  onMoveUp,
+  onMoveDown,
+  isFirst,
+  isLast
+}) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(service.name);
+  const [category, setCategory] = useState(service.category);
+  if (editing) {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "card",
+      style: {
+        margin: 0,
+        marginBottom: 8,
+        padding: 12,
+        border: '1.5px solid var(--accent)'
+      }
+    }, /*#__PURE__*/React.createElement("input", {
+      className: "form-input",
+      style: {
+        marginBottom: 8
+      },
+      value: name,
+      onChange: e => setName(e.target.value)
+    }), /*#__PURE__*/React.createElement("input", {
+      className: "form-input",
+      style: {
+        marginBottom: 8
+      },
+      value: category,
+      onChange: e => setCategory(e.target.value),
+      placeholder: "カテゴリ（例：保険）"
+    }), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8
+      }
+    }, /*#__PURE__*/React.createElement("button", {
+      className: "btn btn-primary btn-sm",
+      onClick: () => {
+        if (!name.trim()) return;
+        onSave({
+          name,
+          category
+        });
+        setEditing(false);
+      }
+    }, "✓ 保存"), /*#__PURE__*/React.createElement("button", {
+      className: "btn btn-outline btn-sm",
+      onClick: () => {
+        setName(service.name);
+        setCategory(service.category);
+        setEditing(false);
+      }
+    }, "キャンセル")));
+  }
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      margin: 0,
+      marginBottom: 8,
+      padding: 12,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between'
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 14.5,
+      fontWeight: 700
+    }
+  }, service.name), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--text-sub)'
+    }
+  }, service.category)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onMoveUp,
+    disabled: isFirst,
+    style: {
+      background: 'none',
+      border: 'none',
+      color: isFirst ? 'var(--border)' : 'var(--text-sub)',
+      cursor: 'pointer',
+      fontSize: 15
+    }
+  }, "▲"), /*#__PURE__*/React.createElement("button", {
+    onClick: onMoveDown,
+    disabled: isLast,
+    style: {
+      background: 'none',
+      border: 'none',
+      color: isLast ? 'var(--border)' : 'var(--text-sub)',
+      cursor: 'pointer',
+      fontSize: 15
+    }
+  }, "▼"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setEditing(true),
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--text-sub)',
+      cursor: 'pointer',
+      fontSize: 15
+    }
+  }, "✎"), /*#__PURE__*/React.createElement("button", {
+    onClick: onDelete,
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--danger)',
+      cursor: 'pointer',
+      fontSize: 15
+    }
+  }, "🗑")));
+}
+function NexusAddServiceForm({
+  onAdd
+}) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState('');
+  const [category, setCategory] = useState('');
+  const submit = () => {
+    if (!name.trim()) return;
+    onAdd({
+      name,
+      category
+    });
+    setName('');
+    setCategory('');
+    setOpen(false);
+  };
+  if (!open) {
+    return /*#__PURE__*/React.createElement("button", {
+      className: "btn btn-outline btn-full",
+      style: {
+        marginBottom: 10,
+        borderStyle: 'dashed'
+      },
+      onClick: () => setOpen(true)
+    }, "＋ 提供サービスを追加");
+  }
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      margin: 0,
+      marginBottom: 10,
+      padding: 12
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    style: {
+      marginBottom: 8
+    },
+    placeholder: "サービス名",
+    value: name,
+    onChange: e => setName(e.target.value),
+    autoFocus: true
+  }), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    style: {
+      marginBottom: 8
+    },
+    placeholder: "カテゴリ（例：保険）",
+    value: category,
+    onChange: e => setCategory(e.target.value)
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-primary btn-sm",
+    onClick: submit
+  }, "追加"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-outline btn-sm",
+    onClick: () => setOpen(false)
+  }, "キャンセル")));
+}
+function NexusServicesSection({
+  services,
+  setServices,
+  setServiceLinks
+}) {
+  const move = (i, dir) => setServices(prev => {
+    const arr = [...prev];
+    const j = i + dir;
+    if (j < 0 || j >= arr.length) return prev;
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+    return arr;
+  });
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(NexusAddServiceForm, {
+    onAdd: v => setServices(prev => [...prev, {
+      id: uid(),
+      name: v.name,
+      category: v.category || ''
+    }])
+  }), services.map((s, i) => /*#__PURE__*/React.createElement(NexusServiceRow, {
+    key: s.id,
+    service: s,
+    isFirst: i === 0,
+    isLast: i === services.length - 1,
+    onSave: v => setServices(prev => prev.map(x => x.id === s.id ? {
+      ...x,
+      ...v
+    } : x)),
+    onDelete: () => {
+      setServices(prev => prev.filter(x => x.id !== s.id));
+      setServiceLinks(prev => prev.filter(l => l.serviceId !== s.id));
+    },
+    onMoveUp: () => move(i, -1),
+    onMoveDown: () => move(i, 1)
+  })), services.length === 0 && /*#__PURE__*/React.createElement("div", {
+    className: "empty",
+    style: {
+      padding: '30px 16px'
+    }
+  }, "サービスを登録すると提案候補の分析ができます"));
+}
+
+// ── 顧客一覧（人脈ネクサス視点：検索・CSV連携）─────────────────
+function NexusListSection({
+  customers,
+  setCustomers,
+  gapsByCustomer,
+  query,
+  setQuery,
+  hubIds,
+  onSelect
+}) {
+  const filtered = customers.filter(c => nexusMatchesQuery(c, query));
+  const csvRef = React.useRef(null);
+  const exportCSV = () => {
+    const byId = {};
+    customers.forEach(c => byId[c.id] = c);
+    const header = ['名前', '職業', '会社', '電話', '住所', '紹介者', 'メモ'];
+    const rows = customers.map(c => [nexusDisplayName(c), nexusGroupOf(c), nexusCompanyOf(c), c.phone || '', c.address || '', c.referredBy && byId[c.referredBy] ? nexusDisplayName(byId[c.referredBy]) : '', c.memo || '']);
+    const esc = v => /[",\n]/.test(v) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
+    const csv = [header, ...rows].map(r => r.map(esc).join(',')).join('\n');
+    const blob = new Blob(['﻿' + csv], {
+      type: 'text/csv;charset=utf-8'
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `人脈一覧_${todayStr()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "search-wrap"
+  }, /*#__PURE__*/React.createElement("span", null, "🔍"), /*#__PURE__*/React.createElement("input", {
+    className: "search-input",
+    placeholder: "名前・職業・会社・住所で検索...",
+    value: query,
+    onChange: e => setQuery(e.target.value)
+  }), query && /*#__PURE__*/React.createElement("button", {
+    className: "search-clear",
+    onClick: () => setQuery('')
+  }, "×")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-outline btn-sm",
+    style: {
+      flex: 1
+    },
+    onClick: () => csvRef.current?.click()
+  }, "📥 CSV取込"), /*#__PURE__*/React.createElement("input", {
+    ref: csvRef,
+    type: "file",
+    accept: ".csv",
+    style: {
+      display: 'none'
+    },
+    onChange: e => {
+      if (e.target.files[0]) {
+        importCSV(e.target.files[0], setCustomers);
+        e.target.value = '';
+      }
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-outline btn-sm",
+    style: {
+      flex: 1
+    },
+    onClick: exportCSV
+  }, "📤 CSV書出")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--text-sub)',
+      marginBottom: 10
+    }
+  }, "CSVの列: 名前,職業,会社,電話,住所,紹介者,メモ（1行目は見出し）／取り込んだ人脈はそのまま「顧客」タブにも反映されます"), filtered.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "empty",
+    style: {
+      padding: '30px 16px'
+    }
+  }, query ? '該当する人脈がありません' : '「顧客」タブで顧客を登録すると、ここに人脈として表示されます') : /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8
+    }
+  }, filtered.map(c => {
+    const g = gapsByCustomer[c.id] || {
+      held: 0,
+      gap: 0
+    };
+    return /*#__PURE__*/React.createElement("div", {
+      key: c.id,
+      className: "card",
+      style: {
+        margin: 0,
+        padding: 12,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        cursor: 'pointer'
+      },
+      onClick: () => onSelect(c.id)
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        minWidth: 0
+      }
+    }, hubIds.has(c.id) && /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 13
+      }
+    }, "⭐"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        minWidth: 0
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 14.5,
+        fontWeight: 700,
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, nexusDisplayName(c)), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--text-sub)'
+      }
+    }, nexusGroupOf(c) || '—'))), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        flexShrink: 0
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 12,
+        color: 'var(--text-sub)'
+      }
+    }, g.held, "件契約"), g.gap > 0 && /*#__PURE__*/React.createElement("span", {
+      className: "badge",
+      style: {
+        background: '#FFF7ED',
+        color: 'var(--warning)'
+      }
+    }, "提案余地 ", g.gap)));
+  })));
+}
+
+// ── 提案候補（既契約の少ない/紹介力の高い順に並び替え）─────────
+function NexusProposalsSection({
+  customers,
+  gapsByCustomer,
+  sortMode,
+  setSortMode,
+  query,
+  setQuery,
+  hubIds,
+  onSelect
+}) {
+  const filtered = customers.filter(c => nexusMatchesQuery(c, query));
+  const sorted = [...filtered].sort((a, b) => sortMode === 'priority' ? gapsByCustomer[b.id].priority - gapsByCustomer[a.id].priority : gapsByCustomer[b.id].gap - gapsByCustomer[a.id].gap);
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "search-wrap"
+  }, /*#__PURE__*/React.createElement("span", null, "🔍"), /*#__PURE__*/React.createElement("input", {
+    className: "search-input",
+    placeholder: "名前・職業・会社・住所で検索...",
+    value: query,
+    onChange: e => setQuery(e.target.value)
+  }), query && /*#__PURE__*/React.createElement("button", {
+    className: "search-clear",
+    onClick: () => setQuery('')
+  }, "×")), /*#__PURE__*/React.createElement("div", {
+    className: "filter-chips"
+  }, [['gap', '提案余地順'], ['priority', '優先度順']].map(([key, label]) => /*#__PURE__*/React.createElement("button", {
+    key: key,
+    className: `chip ${sortMode === key ? 'active' : ''}`,
+    onClick: () => setSortMode(key)
+  }, label))), sorted.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "empty",
+    style: {
+      padding: '30px 16px'
+    }
+  }, "該当する人脈がありません") : /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8
+    }
+  }, sorted.map(c => {
+    const g = gapsByCustomer[c.id];
+    return /*#__PURE__*/React.createElement("div", {
+      key: c.id,
+      className: "card",
+      style: {
+        margin: 0,
+        padding: 12,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        cursor: 'pointer'
+      },
+      onClick: () => onSelect(c.id)
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        minWidth: 0
+      }
+    }, hubIds.has(c.id) && /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 13
+      }
+    }, "⭐"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        minWidth: 0
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 14.5,
+        fontWeight: 700,
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, nexusDisplayName(c)), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--text-sub)'
+      }
+    }, nexusGroupOf(c) || '—'))), sortMode === 'priority' ? /*#__PURE__*/React.createElement("span", {
+      className: "badge",
+      style: {
+        background: '#FFF7ED',
+        color: 'var(--warning)',
+        flexShrink: 0
+      }
+    }, "優先度 ", g.priority) : /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        flexShrink: 0
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 13,
+        fontWeight: 700,
+        color: 'var(--accent)'
+      }
+    }, g.held), g.gap > 0 && /*#__PURE__*/React.createElement("span", {
+      className: "badge",
+      style: {
+        background: '#FFF7ED',
+        color: 'var(--warning)'
+      }
+    }, "提案余地 ", g.gap)));
+  })));
+}
+
+// ── つながり（紹介ツリー・紹介力・ハブ・充足率・職業/会社/地域クラスタ）──
+function NexusNetworkSection({
+  customers,
+  services,
+  serviceLinks,
+  hubs,
+  hubIds,
+  onSelect,
+  networkView,
+  setNetworkView
+}) {
+  const referralRankingItems = customers.map(c => ({
+    ...c,
+    scoreValue: customers.filter(x => x.referredBy === c.id).length
+  })).filter(c => c.scoreValue > 0).sort((a, b) => b.scoreValue - a.scoreValue);
+  const hubItems = hubs.map(h => ({
+    ...h,
+    scoreValue: h.hubScore,
+    extra: h.diversity > 0 ? `${h.diversity}種にまたがる` : ''
+  }));
+  const views = [['referral', '紹介'], ['ranking', '紹介力'], ['hub', 'ハブ'], ['matrix', '充足率'], ['group', '職業'], ['company', '会社'], ['area', '地域']];
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "filter-chips"
+  }, views.map(([key, label]) => /*#__PURE__*/React.createElement("button", {
+    key: key,
+    className: `chip ${networkView === key ? 'active' : ''}`,
+    onClick: () => setNetworkView(key)
+  }, label))), networkView === 'referral' && /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      margin: 0,
+      padding: 12
+    }
+  }, /*#__PURE__*/React.createElement(NexusNetworkTree, {
+    customers: customers,
+    hubIds: hubIds,
+    onSelect: onSelect
+  })), networkView === 'ranking' && (referralRankingItems.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "empty",
+    style: {
+      padding: '30px 16px'
+    }
+  }, "紹介者を登録すると紹介力ランキングが表示されます") : /*#__PURE__*/React.createElement(NexusRankedList, {
+    items: referralRankingItems,
+    onSelect: onSelect,
+    icon: "🏆",
+    unit: "人紹介"
+  })), networkView === 'hub' && (hubItems.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "empty",
+    style: {
+      padding: '30px 16px'
+    }
+  }, "2人以上を、異なる職業・会社に紹介した人がここに出ます") : /*#__PURE__*/React.createElement(NexusRankedList, {
+    items: hubItems,
+    onSelect: onSelect,
+    icon: "📡",
+    unit: "スコア"
+  })), networkView === 'matrix' && /*#__PURE__*/React.createElement(NexusOccupationMatrix, {
+    customers: customers,
+    services: services,
+    serviceLinks: serviceLinks
+  }), networkView === 'group' && /*#__PURE__*/React.createElement(NexusClusterView, {
+    customers: customers,
+    field: "group",
+    emptyLabel: "同じ職業・業種の人がまだ2人以上いません",
+    onSelect: onSelect
+  }), networkView === 'company' && /*#__PURE__*/React.createElement(NexusClusterView, {
+    customers: customers,
+    field: "company",
+    emptyLabel: "会社を登録すると同じ勤務先の人がまとまります",
+    onSelect: onSelect
+  }), networkView === 'area' && /*#__PURE__*/React.createElement(NexusClusterView, {
+    customers: customers,
+    field: "area",
+    emptyLabel: "住所を登録すると同じ地域の人がまとまります",
+    onSelect: onSelect
+  }));
+}
+
+// ── 人脈ネクサス タブ本体（4タブ構成） ──────────────────────────
+function NexusTab({
+  customers,
+  setCustomers,
+  services,
+  setServices,
+  serviceLinks,
+  setServiceLinks,
+  onNavigate
+}) {
+  const [subTab, setSubTab] = useState('list');
+  const [sortMode, setSortMode] = useState('gap');
+  const [networkView, setNetworkView] = useState('referral');
+  const [query, setQuery] = useState('');
+  const [detailId, setDetailId] = useState(null);
+  const gapsByCustomer = useMemo(() => {
+    const map = {};
+    customers.forEach(c => {
+      const held = serviceLinks.filter(l => l.customerId === c.id).length;
+      const referredCount = customers.filter(x => x.referredBy === c.id).length;
+      const gap = services.length - held;
+      map[c.id] = {
+        held,
+        gap,
+        referredCount,
+        priority: nexusPriorityScore(gap, referredCount)
+      };
+    });
+    return map;
+  }, [customers, services, serviceLinks]);
+  const hubs = useMemo(() => nexusComputeHubs(customers), [customers]);
+  const hubIds = useMemo(() => new Set(hubs.map(h => h.id)), [hubs]);
+  const totalGaps = Object.values(gapsByCustomer).reduce((a, b) => a + b.gap, 0);
+  const totalHeld = serviceLinks.length;
+  const tabs = [{
+    key: 'list',
+    label: '顧客一覧'
+  }, {
+    key: 'proposals',
+    label: '提案候補'
+  }, {
+    key: 'network',
+    label: 'つながり'
+  }, {
+    key: 'services',
+    label: 'サービス'
+  }];
+  const openCustomerProfile = c => {
+    setDetailId(null);
+    onNavigate('customers', c);
+  };
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(NexusStatRow, {
+    customerCount: customers.length,
+    heldCount: totalHeld,
+    gapCount: totalGaps
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group",
+    style: {
+      marginBottom: 14
+    }
+  }, tabs.map(t => /*#__PURE__*/React.createElement("button", {
+    key: t.key,
+    type: "button",
+    className: `toggle-btn ${subTab === t.key ? 'sel' : ''}`,
+    onClick: () => setSubTab(t.key)
+  }, t.label))), subTab === 'list' && /*#__PURE__*/React.createElement(NexusListSection, {
+    customers: customers,
+    setCustomers: setCustomers,
+    gapsByCustomer: gapsByCustomer,
+    query: query,
+    setQuery: setQuery,
+    hubIds: hubIds,
+    onSelect: setDetailId
+  }), subTab === 'proposals' && /*#__PURE__*/React.createElement(NexusProposalsSection, {
+    customers: customers,
+    gapsByCustomer: gapsByCustomer,
+    sortMode: sortMode,
+    setSortMode: setSortMode,
+    query: query,
+    setQuery: setQuery,
+    hubIds: hubIds,
+    onSelect: setDetailId
+  }), subTab === 'network' && /*#__PURE__*/React.createElement(NexusNetworkSection, {
+    customers: customers,
+    services: services,
+    serviceLinks: serviceLinks,
+    hubs: hubs,
+    hubIds: hubIds,
+    onSelect: setDetailId,
+    networkView: networkView,
+    setNetworkView: setNetworkView
+  }), subTab === 'services' && /*#__PURE__*/React.createElement(NexusServicesSection, {
+    services: services,
+    setServices: setServices,
+    setServiceLinks: setServiceLinks
+  }), detailId && /*#__PURE__*/React.createElement(NexusDetail, {
+    customerId: detailId,
+    customers: customers,
+    services: services,
+    serviceLinks: serviceLinks,
+    setServiceLinks: setServiceLinks,
+    setCustomers: setCustomers,
+    onClose: () => setDetailId(null),
+    onOpenCustomer: openCustomerProfile
+  }));
+}
+
 // ── App ───────────────────────────────────────────────────────
 function App() {
   // 顧客データ（ins.htmlと同じキーで引継ぎ）
@@ -8346,6 +9955,10 @@ function App() {
     current: 0,
     label: '今月'
   });
+  // 人脈ネクサス：サービスカタログ・顧客×サービスの既契約/提案候補フラグ
+  // （人脈そのものは customers を直接ID参照するため、別ストアには持たない）
+  const [nexusServices, setNexusServices] = useLS('nexus_services_v1', NEXUS_SEED_SERVICES);
+  const [nexusServiceLinks, setNexusServiceLinks] = useLS('nexus_service_links_v1', []);
   const [tab, setTab] = useState('dashboard');
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [editingCustomer, setEditingCustomer] = useState(null);
@@ -8413,6 +10026,10 @@ function App() {
     key: 'task',
     icon: '✅',
     label: 'タスク'
+  }, {
+    key: 'nexus',
+    icon: '🕸️',
+    label: '人脈'
   }];
   const anyOverlay = selectedCustomer || showCustomerForm || selectedMemo || showMemoForm;
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
@@ -8540,6 +10157,17 @@ function App() {
     setLogs: setLogs,
     sales: sales,
     setSales: setSales
+  }), tab === 'nexus' && /*#__PURE__*/React.createElement(NexusTab, {
+    customers: customers,
+    setCustomers: setCustomers,
+    services: nexusServices,
+    setServices: setNexusServices,
+    serviceLinks: nexusServiceLinks,
+    setServiceLinks: setNexusServiceLinks,
+    onNavigate: (t, c) => {
+      setTab(t === 'customers' ? 'list' : t);
+      if (c) setSelectedCustomer(c);
+    }
   })), /*#__PURE__*/React.createElement("nav", {
     className: "bottom-nav"
   }, tabs.map(t => /*#__PURE__*/React.createElement("button", {
