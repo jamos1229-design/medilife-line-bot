@@ -424,6 +424,8 @@ const STATUSES = [{
 }];
 const statusInfo = key => STATUSES.find(s => s.key === key) || STATUSES[0];
 const CONTACT_METHODS = ['電話', '個人LINE', 'その他'];
+// 接点＝最初にどうやって知り合ったか（対面で会ったことがない人脈も記録できるように）
+const CONTACT_CHANNELS = ['対面', 'LINE', 'Zoom', '紹介', 'その他'];
 
 // ── StatusBadge ───────────────────────────────────────────────
 const StatusBadge = ({
@@ -1340,6 +1342,7 @@ function CustomerForm({
     employeeCount: '',
     status: '未接触',
     contactMethod: '電話',
+    contactChannel: '',
     lastContact: '',
     nextAppt: '',
     memo: '',
@@ -1801,6 +1804,17 @@ function CustomerForm({
     className: `toggle-btn ${form.contactMethod === m ? 'sel' : ''}`,
     onClick: () => s('contactMethod')(m)
   }, m)))), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "接点（どうやって知り合ったか）"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, CONTACT_CHANNELS.map(ch => /*#__PURE__*/React.createElement("button", {
+    key: ch,
+    type: "button",
+    className: `toggle-btn ${form.contactChannel === ch ? 'sel' : ''}`,
+    onClick: () => s('contactChannel')(form.contactChannel === ch ? '' : ch)
+  }, ch)))), /*#__PURE__*/React.createElement("div", {
     className: "form-row"
   }, /*#__PURE__*/React.createElement("div", {
     className: "form-group",
@@ -2403,7 +2417,13 @@ function CustomerDetail({
     className: "info-label"
   }, "接触方法"), /*#__PURE__*/React.createElement("div", {
     className: "info-value"
-  }, c.contactMethod || '—')), /*#__PURE__*/React.createElement("div", {
+  }, c.contactMethod || '—')), c.contactChannel && /*#__PURE__*/React.createElement("div", {
+    className: "info-item"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-label"
+  }, "接点"), /*#__PURE__*/React.createElement("div", {
+    className: "info-value"
+  }, c.contactChannel)), /*#__PURE__*/React.createElement("div", {
     className: "info-item"
   }, /*#__PURE__*/React.createElement("div", {
     className: "info-label"
@@ -8505,6 +8525,7 @@ const NEXUS_SEED_SERVICES = [{
 const nexusGroupOf = c => c.customerType === '法人' ? c.industry || '法人' : c.occupation || '';
 const nexusCompanyOf = c => c.customerType === '法人' ? c.corporateName || c.name || '' : c.workplace || '';
 const nexusDisplayName = c => c.customerType === '法人' ? c.corporateName || c.name : c.name;
+const nexusChannelOf = c => c.contactChannel || '';
 const nexusAreaKey = address => {
   if (!address) return null;
   const m = address.match(/^.*?[市区町村郡]/);
@@ -8513,7 +8534,7 @@ const nexusAreaKey = address => {
 function nexusCluster(customers, field) {
   const map = {};
   customers.forEach(c => {
-    const raw = field === 'area' ? nexusAreaKey(c.address) : field === 'company' ? nexusCompanyOf(c) : nexusGroupOf(c);
+    const raw = field === 'area' ? nexusAreaKey(c.address) : field === 'company' ? nexusCompanyOf(c) : field === 'channel' ? nexusChannelOf(c) : nexusGroupOf(c);
     if (!raw) return;
     if (!map[raw]) map[raw] = [];
     map[raw].push(c);
@@ -8523,7 +8544,7 @@ function nexusCluster(customers, field) {
 function nexusMatchesQuery(c, query) {
   if (!query) return true;
   const q = query.toLowerCase();
-  return [nexusDisplayName(c), nexusGroupOf(c), nexusCompanyOf(c), c.address].some(f => f && f.toLowerCase().includes(q));
+  return [nexusDisplayName(c), nexusGroupOf(c), nexusCompanyOf(c), c.address, nexusChannelOf(c)].some(f => f && f.toLowerCase().includes(q));
 }
 function nexusComputeHubs(customers) {
   return customers.map(c => {
@@ -9436,7 +9457,15 @@ function NexusDetail({
       fontSize: 13,
       color: 'var(--text)'
     }
-  }, "📍 ", customer.address), /*#__PURE__*/React.createElement("div", {
+  }, "📍 ", customer.address), customer.contactChannel && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      fontSize: 13,
+      color: 'var(--text)'
+    }
+  }, "💬 ", customer.contactChannel, "で知り合った"), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
@@ -10614,7 +10643,7 @@ function NexusNetworkSection({
     scoreValue: h.hubScore,
     extra: h.diversity > 0 ? `${h.diversity}種にまたがる` : ''
   }));
-  const views = [['referral', 'グラフ'], ['ranking', '紹介力'], ['hub', 'ハブ'], ['matrix', '充足率'], ['group', '職業'], ['company', '会社'], ['area', '地域']];
+  const views = [['referral', 'グラフ'], ['ranking', '紹介力'], ['hub', 'ハブ'], ['matrix', '充足率'], ['group', '職業'], ['company', '会社'], ['area', '地域'], ['channel', '接点']];
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "filter-chips"
   }, views.map(([key, label]) => /*#__PURE__*/React.createElement("button", {
@@ -10667,6 +10696,11 @@ function NexusNetworkSection({
     customers: customers,
     field: "area",
     emptyLabel: "住所を登録すると同じ地域の人がまとまります",
+    onSelect: onSelect
+  }), networkView === 'channel' && /*#__PURE__*/React.createElement(NexusClusterView, {
+    customers: customers,
+    field: "channel",
+    emptyLabel: "顧客編集の「接点」を登録すると、LINE・Zoomなど対面以外で知り合った人同士もまとまります",
     onSelect: onSelect
   }));
 }
@@ -11073,6 +11107,7 @@ function NexusTab({
     onFocus: focusOnCustomer
   }));
 }
+
 
 
 
