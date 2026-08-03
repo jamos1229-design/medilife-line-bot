@@ -10506,6 +10506,32 @@ function NexusServicesSection({
 }
 
 // ── 理念・行動指針 ────────────────────────────────────────────
+// 内容の高さに合わせて自動で伸びるテキストエリア（長文が一部しか見えない問題への対策）
+function NexusAutoGrowTextarea({
+  value,
+  onChange,
+  placeholder
+}) {
+  const ref = React.useRef(null);
+  const resize = () => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  };
+  React.useEffect(resize, [value]);
+  return /*#__PURE__*/React.createElement("textarea", {
+    ref: ref,
+    className: "form-textarea",
+    style: {
+      resize: 'none',
+      overflow: 'hidden'
+    },
+    value: value,
+    onChange: onChange,
+    placeholder: placeholder
+  });
+}
 function NexusMissionSection({
   mission,
   setMission
@@ -10526,8 +10552,7 @@ function NexusMissionSection({
     className: "form-group"
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "Why（なぜこの仕事をするのか）"), /*#__PURE__*/React.createElement("textarea", {
-    className: "form-textarea",
+  }, "Why（なぜこの仕事をするのか）"), /*#__PURE__*/React.createElement(NexusAutoGrowTextarea, {
     value: draft.why || '',
     onChange: e => setDraft(d => ({
       ...d,
@@ -10538,8 +10563,7 @@ function NexusMissionSection({
     className: "form-group"
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "How（どうやって実現するか）"), /*#__PURE__*/React.createElement("textarea", {
-    className: "form-textarea",
+  }, "How（どうやって実現するか）"), /*#__PURE__*/React.createElement(NexusAutoGrowTextarea, {
     value: draft.how || '',
     onChange: e => setDraft(d => ({
       ...d,
@@ -10553,8 +10577,7 @@ function NexusMissionSection({
     }
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "毎日の行動指針"), /*#__PURE__*/React.createElement("textarea", {
-    className: "form-textarea",
+  }, "毎日の行動指針"), /*#__PURE__*/React.createElement(NexusAutoGrowTextarea, {
     value: draft.dailyAction || '',
     onChange: e => setDraft(d => ({
       ...d,
@@ -11050,6 +11073,7 @@ function NexusTab({
     onFocus: focusOnCustomer
   }));
 }
+
 
 
 
