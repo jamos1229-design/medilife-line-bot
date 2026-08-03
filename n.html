@@ -8550,7 +8550,7 @@ function nexusOccupationMatrix(customers, services, serviceLinks) {
   });
   return Object.entries(groups).map(([group, members]) => {
     const serviceStats = services.map(s => {
-      const count = members.filter(m => serviceLinks.some(l => l.customerId === m.id && l.serviceId === s.id)).length;
+      const count = members.filter(m => nexusServiceStatus(serviceLinks, m.id, s.id) === '成約').length;
       return {
         service: s,
         count,
@@ -8565,6 +8565,51 @@ function nexusOccupationMatrix(customers, services, serviceLinks) {
   }).sort((a, b) => b.size - a.size);
 }
 const nexusPriorityScore = (gap, referredCount) => gap + referredCount * 2;
+
+// ── 提案ステータス（4段階）─────────────────────────────────────
+// 記録なし＝未提案。serviceLinksにレコードがある場合のみ提案中/成約/見送り。
+const NEXUS_STATUSES = ['提案中', '成約', '見送り'];
+const NEXUS_DECLINE_REASONS = ['時期尚早', '他社加入済み', '検討中', '予算合わず', 'その他'];
+// 旧データ（2値時代に作られたレコード）は成約扱いにフォールバックする
+const nexusNormalizeStatus = status => NEXUS_STATUSES.includes(status) ? status : '成約';
+const nexusServiceStatus = (serviceLinks, customerId, serviceId) => {
+  const link = serviceLinks.find(l => l.customerId === customerId && l.serviceId === serviceId);
+  return link ? nexusNormalizeStatus(link.status) : '未提案';
+};
+function nexusStatusStyle(status) {
+  if (status === '提案中') return {
+    stroke: 'var(--warning)',
+    fill: 'var(--warning)',
+    badgeBg: '#FFFBEB',
+    badgeColor: '#B45309',
+    dash: '0',
+    solid: true
+  };
+  if (status === '成約') return {
+    stroke: 'var(--success)',
+    fill: 'var(--success)',
+    badgeBg: '#DCFCE7',
+    badgeColor: '#16A34A',
+    dash: '0',
+    solid: true
+  };
+  if (status === '見送り') return {
+    stroke: 'var(--danger)',
+    fill: '#FEF2F2',
+    badgeBg: '#FEE2E2',
+    badgeColor: 'var(--danger)',
+    dash: '0',
+    solid: false
+  };
+  return {
+    stroke: '#9CA3AF',
+    fill: 'var(--surface)',
+    badgeBg: 'var(--bg)',
+    badgeColor: 'var(--text-sub)',
+    dash: '3 3',
+    solid: false
+  };
+}
 
 // 職業・業種の文字列から安定した色を生成（外部ライブラリなし）
 function nexusHashColor(str) {
@@ -8610,26 +8655,28 @@ function nexusFocusSet(customers, centerId, depth) {
 function NexusStatRow({
   customerCount,
   heldCount,
-  gapCount
+  gapCount,
+  proposedCount,
+  declinedCount
 }) {
   const items = [{
     label: '人脈',
     value: customerCount,
     icon: '👥'
   }, {
-    label: '既契約',
+    label: '成約',
     value: heldCount,
     icon: '📄'
   }, {
-    label: '提案候補',
+    label: '未提案',
     value: gapCount,
     icon: '✨'
   }];
-  return /*#__PURE__*/React.createElement("div", {
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       gap: 10,
-      marginBottom: 12
+      marginBottom: 6
     }
   }, items.map(it => /*#__PURE__*/React.createElement("div", {
     key: it.label,
@@ -8650,21 +8697,129 @@ function NexusStatRow({
     }
   }, it.value), /*#__PURE__*/React.createElement("div", {
     className: "stat-label"
-  }, it.label))));
+  }, it.label)))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      textAlign: 'center',
+      marginBottom: 12
+    }
+  }, "提案中 ", proposedCount, "件・見送り ", declinedCount, "件"));
 }
 
-// ── オービット（顧客を中心に、既契約/提案候補サービスを放射状に表示）──
+// ── オービット（カテゴリ→サービスの2段階構成。8件超は呼び出し元でリスト表示に切替）──
 function NexusOrbit({
   customer,
   services,
   serviceLinks,
-  onToggle
+  onSelectService
 }) {
+  const [expandedCategory, setExpandedCategory] = useState(null);
   const size = 240;
   const center = size / 2;
   const radius = 84;
-  const n = services.length || 1;
   const label = nexusDisplayName(customer);
+  const categories = useMemo(() => {
+    const map = {};
+    services.forEach(s => {
+      const cat = s.category || 'その他';
+      if (!map[cat]) map[cat] = [];
+      map[cat].push(s);
+    });
+    return Object.entries(map);
+  }, [services]);
+  React.useEffect(() => {
+    if (expandedCategory && !categories.some(([cat]) => cat === expandedCategory)) setExpandedCategory(null);
+  }, [categories, expandedCategory]);
+  if (expandedCategory) {
+    const list = categories.find(([cat]) => cat === expandedCategory)[1];
+    const n = list.length || 1;
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center'
+      }
+    }, /*#__PURE__*/React.createElement("button", {
+      className: "btn btn-outline btn-sm",
+      style: {
+        alignSelf: 'flex-start',
+        marginBottom: 8
+      },
+      onClick: () => setExpandedCategory(null)
+    }, "← カテゴリ一覧"), /*#__PURE__*/React.createElement("svg", {
+      width: size,
+      height: size,
+      viewBox: `0 0 ${size} ${size}`
+    }, /*#__PURE__*/React.createElement("circle", {
+      cx: center,
+      cy: center,
+      r: radius,
+      fill: "none",
+      stroke: "var(--border)",
+      strokeDasharray: "2 5"
+    }), /*#__PURE__*/React.createElement("circle", {
+      cx: center,
+      cy: center,
+      r: 26,
+      fill: "var(--accent)"
+    }), /*#__PURE__*/React.createElement("text", {
+      x: center,
+      y: center + 4,
+      textAnchor: "middle",
+      fill: "#fff",
+      style: {
+        fontSize: 11,
+        fontWeight: 700
+      }
+    }, expandedCategory.slice(0, 4)), list.map((s, i) => {
+      const angle = i / n * Math.PI * 2 - Math.PI / 2;
+      const x = center + radius * Math.cos(angle);
+      const y = center + radius * Math.sin(angle);
+      const status = nexusServiceStatus(serviceLinks, customer.id, s.id);
+      const st = nexusStatusStyle(status);
+      return /*#__PURE__*/React.createElement("g", {
+        key: s.id,
+        onClick: () => onSelectService(s.id),
+        style: {
+          cursor: 'pointer'
+        }
+      }, /*#__PURE__*/React.createElement("line", {
+        x1: center,
+        y1: center,
+        x2: x,
+        y2: y,
+        stroke: st.solid ? st.stroke : 'var(--border)',
+        strokeWidth: st.solid ? 2 : 1
+      }), /*#__PURE__*/React.createElement("circle", {
+        cx: x,
+        cy: y,
+        r: 17,
+        fill: st.solid ? st.fill : 'var(--surface)',
+        stroke: st.stroke,
+        strokeWidth: st.solid ? 0 : 1.6,
+        strokeDasharray: st.dash
+      }), /*#__PURE__*/React.createElement("text", {
+        x: x,
+        y: y + 4,
+        textAnchor: "middle",
+        fill: st.solid ? '#fff' : 'var(--text-sub)',
+        style: {
+          fontSize: 12
+        }
+      }, status === '成約' ? '✓' : ''), /*#__PURE__*/React.createElement("text", {
+        x: x,
+        y: y + 28,
+        textAnchor: "middle",
+        fill: "var(--text-sub)",
+        style: {
+          fontSize: 10,
+          fontWeight: 600
+        }
+      }, s.name.length > 6 ? s.name.slice(0, 5) + '…' : s.name));
+    })));
+  }
+  const n = categories.length || 1;
   return /*#__PURE__*/React.createElement("svg", {
     width: size,
     height: size,
@@ -8690,14 +8845,14 @@ function NexusOrbit({
       fontSize: 14,
       fontWeight: 700
     }
-  }, label.slice(0, 2)), services.map((s, i) => {
+  }, label.slice(0, 2)), categories.map(([cat, list], i) => {
     const angle = i / n * Math.PI * 2 - Math.PI / 2;
     const x = center + radius * Math.cos(angle);
     const y = center + radius * Math.sin(angle);
-    const held = serviceLinks.some(l => l.customerId === customer.id && l.serviceId === s.id);
+    const won = list.filter(s => nexusServiceStatus(serviceLinks, customer.id, s.id) === '成約').length;
     return /*#__PURE__*/React.createElement("g", {
-      key: s.id,
-      onClick: () => onToggle(s.id, held),
+      key: cat,
+      onClick: () => setExpandedCategory(cat),
       style: {
         cursor: 'pointer'
       }
@@ -8706,26 +8861,34 @@ function NexusOrbit({
       y1: center,
       x2: x,
       y2: y,
-      stroke: held ? 'var(--accent)' : 'var(--border)',
-      strokeWidth: held ? 2 : 1
+      stroke: won > 0 ? 'var(--accent)' : 'var(--border)',
+      strokeWidth: won > 0 ? 2 : 1
     }), /*#__PURE__*/React.createElement("circle", {
       cx: x,
       cy: y,
-      r: 17,
-      fill: held ? 'var(--accent)' : 'var(--surface)',
-      stroke: held ? 'var(--accent)' : 'var(--warning)',
-      strokeWidth: held ? 0 : 1.6,
-      strokeDasharray: held ? '0' : '3 3'
+      r: 22,
+      fill: won > 0 ? 'var(--accent-light)' : 'var(--surface)',
+      stroke: "var(--accent)",
+      strokeWidth: 1.6
     }), /*#__PURE__*/React.createElement("text", {
       x: x,
-      y: y + 28,
+      y: y - 2,
       textAnchor: "middle",
-      fill: held ? 'var(--accent)' : 'var(--warning)',
+      fill: "var(--accent)",
       style: {
-        fontSize: 10,
+        fontSize: 10.5,
+        fontWeight: 700
+      }
+    }, cat.length > 5 ? cat.slice(0, 4) + '…' : cat), /*#__PURE__*/React.createElement("text", {
+      x: x,
+      y: y + 11,
+      textAnchor: "middle",
+      fill: "var(--accent)",
+      style: {
+        fontSize: 9.5,
         fontWeight: 600
       }
-    }, s.name.length > 6 ? s.name.slice(0, 5) + '…' : s.name));
+    }, won, "/", list.length));
   }));
 }
 
@@ -8831,57 +8994,36 @@ function NexusActivityLog({
   }, "×")))));
 }
 
-// ── 提案候補サービス（タップで展開し、悩み・感情価値をトークスクリプトとして表示）──
-function NexusGapServiceCard({
+// ── サービスの提案ステータス編集（未提案/提案中/成約/見送り＋見送り理由）──
+function NexusServiceStatusEditor({
   service,
-  expanded,
-  onToggleExpand,
-  onAdd
+  link,
+  status,
+  onSetStatus,
+  onSetDecline
 }) {
+  const [reason, setReason] = useState(link?.declineReason || NEXUS_DECLINE_REASONS[0]);
+  const [other, setOther] = useState(link?.declineReasonOther || '');
+  const [declinedAt, setDeclinedAt] = useState(link?.declinedAt || todayStr());
+  const [nextApproachDate, setNextApproachDate] = useState(link?.nextApproachDate || '');
   return /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      margin: 0,
-      marginBottom: 8,
-      padding: 12
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    onClick: onToggleExpand,
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      cursor: 'pointer'
-    }
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 14,
-      fontWeight: 700,
-      color: 'var(--warning)'
-    }
-  }, "+ ", service.name), service.category && /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 11,
-      color: 'var(--text-sub)'
-    }
-  }, service.category)), /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: 'var(--text-sub)',
-      fontSize: 12
-    }
-  }, expanded ? '▲' : '▼')), expanded && /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 10,
+      paddingTop: 10,
+      borderTop: '1px solid var(--border)'
+    }
+  }, (service.painPoint || service.emotionalValue) && status !== '成約' && /*#__PURE__*/React.createElement("div", {
+    style: {
       background: '#FFF7ED',
       borderRadius: 10,
       padding: '10px 12px',
+      marginBottom: 10,
       border: '1px solid #FEF0D9'
     }
   }, service.painPoint && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12.5,
-      color: 'var(--text)',
-      marginBottom: 6
+      marginBottom: service.emotionalValue ? 6 : 0
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
@@ -8889,24 +9031,197 @@ function NexusGapServiceCard({
     }
   }, "💭 悩み："), service.painPoint), service.emotionalValue && /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 12.5,
-      color: 'var(--text)',
-      marginBottom: 10
+      fontSize: 12.5
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
       fontWeight: 700
     }
-  }, "💛 得られる安心："), service.emotionalValue), !service.painPoint && !service.emotionalValue && /*#__PURE__*/React.createElement("div", {
+  }, "💛 得られる安心："), service.emotionalValue)), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group",
     style: {
-      fontSize: 12,
-      color: 'var(--text-sub)',
+      marginBottom: 8
+    }
+  }, ['未提案', '提案中', '成約', '見送り'].map(st => /*#__PURE__*/React.createElement("button", {
+    key: st,
+    type: "button",
+    className: `toggle-btn ${status === st ? 'sel' : ''}`,
+    onClick: () => onSetStatus(st)
+  }, st))), status === '見送り' && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: '#FEF2F2',
+      borderRadius: 10,
+      padding: '10px 12px',
+      border: '1px solid #FEE2E2'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "filter-chips",
+    style: {
+      marginBottom: 8
+    }
+  }, NEXUS_DECLINE_REASONS.map(r => /*#__PURE__*/React.createElement("button", {
+    key: r,
+    type: "button",
+    className: `chip ${reason === r ? 'active' : ''}`,
+    onClick: () => setReason(r)
+  }, r))), reason === 'その他' && /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    style: {
+      marginBottom: 8
+    },
+    placeholder: "理由を入力",
+    value: other,
+    onChange: e => setOther(e.target.value)
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "form-row",
+    style: {
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label",
+    style: {
+      fontSize: 11
+    }
+  }, "見送り日"), /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    className: "form-input",
+    value: declinedAt,
+    onChange: e => setDeclinedAt(e.target.value)
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label",
+    style: {
+      fontSize: 11
+    }
+  }, "次回アプローチ予定"), /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    className: "form-input",
+    value: nextApproachDate,
+    onChange: e => setNextApproachDate(e.target.value)
+  }))), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-primary btn-sm btn-full",
+    onClick: () => onSetDecline(reason, reason === 'その他' ? other : '', declinedAt, nextApproachDate)
+  }, "理由を保存")));
+}
+
+// ── サービス状況一覧（カテゴリ見出し付き。顧客詳細の常設セクション）──
+function NexusServiceStatusList({
+  services,
+  serviceLinks,
+  customer,
+  setServiceLinks,
+  expandedId,
+  setExpandedId
+}) {
+  const groups = useMemo(() => {
+    const map = {};
+    services.forEach(s => {
+      const cat = s.category || 'その他';
+      if (!map[cat]) map[cat] = [];
+      map[cat].push(s);
+    });
+    return Object.entries(map);
+  }, [services]);
+  const linkFor = sid => serviceLinks.find(l => l.customerId === customer.id && l.serviceId === sid);
+  const setStatus = (service, status, extra) => {
+    setServiceLinks(prev => {
+      const existing = prev.find(l => l.customerId === customer.id && l.serviceId === service.id);
+      if (status === '未提案') {
+        return prev.filter(l => !(l.customerId === customer.id && l.serviceId === service.id));
+      }
+      if (existing) {
+        return prev.map(l => l.id === existing.id ? {
+          ...l,
+          status,
+          ...(extra || {})
+        } : l);
+      }
+      return [...prev, {
+        id: uid(),
+        customerId: customer.id,
+        serviceId: service.id,
+        status,
+        ...(extra || {})
+      }];
+    });
+  };
+  if (services.length === 0) {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "empty",
+      style: {
+        padding: '20px 16px'
+      }
+    }, "「サービス」タブでサービスを登録してください");
+  }
+  return /*#__PURE__*/React.createElement("div", null, groups.map(([cat, list]) => /*#__PURE__*/React.createElement("div", {
+    key: cat,
+    style: {
       marginBottom: 10
     }
-  }, "「サービス」タブでこのサービスを編集すると、トークスクリプトを登録できます"), /*#__PURE__*/React.createElement("button", {
-    className: "btn btn-primary btn-sm btn-full",
-    onClick: onAdd
-  }, "✓ 提案候補として追加")));
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: 'var(--text-sub)',
+      marginBottom: 6,
+      letterSpacing: 0.4
+    }
+  }, cat), list.map(s => {
+    const link = linkFor(s.id);
+    const status = link ? nexusNormalizeStatus(link.status) : '未提案';
+    const expanded = expandedId === s.id;
+    const st = nexusStatusStyle(status);
+    return /*#__PURE__*/React.createElement("div", {
+      key: s.id,
+      className: "card",
+      style: {
+        margin: 0,
+        marginBottom: 8,
+        padding: 12,
+        borderLeft: `3px solid ${st.stroke}`
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      onClick: () => setExpandedId(prev => prev === s.id ? null : s.id),
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        cursor: 'pointer'
+      }
+    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 14,
+        fontWeight: 700
+      }
+    }, status === '成約' ? '✓ ' : '', s.name), /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'inline-block',
+        marginTop: 4,
+        fontSize: 11,
+        fontWeight: 700,
+        padding: '2px 8px',
+        borderRadius: 8,
+        background: st.badgeBg,
+        color: st.badgeColor,
+        border: status === '未提案' ? '1px dashed var(--border)' : 'none'
+      }
+    }, status)), /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: 'var(--text-sub)',
+        fontSize: 12
+      }
+    }, expanded ? '▲' : '▼')), expanded && /*#__PURE__*/React.createElement(NexusServiceStatusEditor, {
+      service: s,
+      link: link,
+      status: status,
+      onSetStatus: newStatus => setStatus(s, newStatus),
+      onSetDecline: (reason, other, declinedAt, nextApproachDate) => setStatus(s, '見送り', {
+        declineReason: reason,
+        declineReasonOther: other,
+        declinedAt,
+        nextApproachDate
+      })
+    }));
+  }))));
 }
 
 // ── 顧客詳細ドロワー（人脈ネクサス視点：紹介関係・提案状況・履歴）──
@@ -8922,22 +9237,13 @@ function NexusDetail({
   onFocus
 }) {
   const customer = customers.find(c => c.id === customerId);
-  const [expandedGapId, setExpandedGapId] = useState(null);
+  const [expandedServiceId, setExpandedServiceId] = useState(null);
   if (!customer) return null;
-  const toggle = (serviceId, held) => {
-    if (held) {
-      setServiceLinks(prev => prev.filter(l => !(l.customerId === customer.id && l.serviceId === serviceId)));
-    } else {
-      setServiceLinks(prev => [...prev, {
-        id: uid(),
-        customerId: customer.id,
-        serviceId,
-        status: '提案中'
-      }]);
-    }
-  };
-  const heldServices = services.filter(s => serviceLinks.some(l => l.customerId === customer.id && l.serviceId === s.id));
-  const gapServices = services.filter(s => !heldServices.includes(s));
+  const customerLinks = serviceLinks.filter(l => l.customerId === customer.id);
+  const wonCount = customerLinks.filter(l => nexusNormalizeStatus(l.status) === '成約').length;
+  const proposedCount = customerLinks.filter(l => nexusNormalizeStatus(l.status) === '提案中').length;
+  const declinedCount = customerLinks.filter(l => nexusNormalizeStatus(l.status) === '見送り').length;
+  const notProposedCount = services.length - customerLinks.length;
   const referrer = customers.find(c => c.id === customer.referredBy);
   const referred = customers.filter(c => c.referredBy === customer.id);
   const group = nexusGroupOf(customer);
@@ -8956,7 +9262,7 @@ function NexusDetail({
       id: uid(),
       customerId: customer.id,
       serviceId: sid,
-      status: '契約中'
+      status: '成約'
     }))]);
   };
   return /*#__PURE__*/React.createElement("div", {
@@ -9036,7 +9342,14 @@ function NexusDetail({
       flexDirection: 'column',
       gap: 2
     }
-  }, sameCompany.length > 0 && /*#__PURE__*/React.createElement("div", null, "同じ勤務先・会社：", sameCompany.map(nexusDisplayName).join('、')), sameGroup.length > 0 && /*#__PURE__*/React.createElement("div", null, "同じ職業・業種：", sameGroup.map(nexusDisplayName).join('、'))), /*#__PURE__*/React.createElement("div", {
+  }, sameCompany.length > 0 && /*#__PURE__*/React.createElement("div", null, "同じ勤務先・会社：", sameCompany.map(nexusDisplayName).join('、')), sameGroup.length > 0 && /*#__PURE__*/React.createElement("div", null, "同じ職業・業種：", sameGroup.map(nexusDisplayName).join('、'))), services.length > 8 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      textAlign: 'center',
+      marginBottom: 10
+    }
+  }, "サービス数が多いため、下の一覧から確認・変更してください") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       justifyContent: 'center',
@@ -9046,7 +9359,7 @@ function NexusDetail({
     customer: customer,
     services: services,
     serviceLinks: serviceLinks,
-    onToggle: toggle
+    onSelectService: sid => setExpandedServiceId(prev => prev === sid ? null : sid)
   })), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11,
@@ -9054,7 +9367,7 @@ function NexusDetail({
       textAlign: 'center',
       marginBottom: 8
     }
-  }, "点線の丸をタップすると提案候補として登録します"), /*#__PURE__*/React.createElement("div", {
+  }, "カテゴリの円をタップすると内訳／サービスをタップすると下で編集できます")), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       gap: 8,
@@ -9074,51 +9387,63 @@ function NexusDetail({
     onClick: () => onFocus(customer.id)
   }, "🎯 つながりで中心表示")), /*#__PURE__*/React.createElement("div", {
     style: {
-      marginBottom: 6,
-      fontSize: 12,
-      fontWeight: 700,
-      color: 'var(--accent)'
-    }
-  }, "既契約（", heldServices.length, "）"), /*#__PURE__*/React.createElement("div", {
-    style: {
       display: 'flex',
       flexWrap: 'wrap',
       gap: 6,
-      marginBottom: 16
+      marginBottom: 10
     }
-  }, heldServices.length === 0 && /*#__PURE__*/React.createElement("span", {
+  }, /*#__PURE__*/React.createElement("span", {
     style: {
-      fontSize: 12,
-      color: 'var(--text-sub)'
+      fontSize: 11,
+      fontWeight: 700,
+      padding: '3px 9px',
+      borderRadius: 8,
+      background: '#DCFCE7',
+      color: '#16A34A'
     }
-  }, "まだありません"), heldServices.map(s => /*#__PURE__*/React.createElement("span", {
-    key: s.id,
-    onClick: () => toggle(s.id, true),
-    className: "badge",
+  }, "成約 ", wonCount), /*#__PURE__*/React.createElement("span", {
     style: {
-      background: 'var(--accent-light)',
-      color: 'var(--accent)',
-      cursor: 'pointer'
+      fontSize: 11,
+      fontWeight: 700,
+      padding: '3px 9px',
+      borderRadius: 8,
+      background: '#FFFBEB',
+      color: '#B45309'
     }
-  }, s.name))), /*#__PURE__*/React.createElement("div", {
+  }, "提案中 ", proposedCount), /*#__PURE__*/React.createElement("span", {
     style: {
-      marginBottom: 6,
+      fontSize: 11,
+      fontWeight: 700,
+      padding: '3px 9px',
+      borderRadius: 8,
+      background: '#FEE2E2',
+      color: 'var(--danger)'
+    }
+  }, "見送り ", declinedCount), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      padding: '3px 9px',
+      borderRadius: 8,
+      background: 'var(--bg)',
+      color: 'var(--text-sub)',
+      border: '1px dashed var(--border)'
+    }
+  }, "未提案 ", notProposedCount)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 8,
       fontSize: 12,
       fontWeight: 700,
-      color: 'var(--warning)'
-    }
-  }, "提案候補（", gapServices.length, "）"), gapServices.length === 0 ? /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12,
       color: 'var(--text-sub)'
     }
-  }, "すべてのサービスが既契約です") : /*#__PURE__*/React.createElement("div", null, gapServices.map(s => /*#__PURE__*/React.createElement(NexusGapServiceCard, {
-    key: s.id,
-    service: s,
-    expanded: expandedGapId === s.id,
-    onToggleExpand: () => setExpandedGapId(prev => prev === s.id ? null : s.id),
-    onAdd: () => toggle(s.id, false)
-  }))), /*#__PURE__*/React.createElement(NexusActivityLog, {
+  }, "サービス状況"), /*#__PURE__*/React.createElement(NexusServiceStatusList, {
+    services: services,
+    serviceLinks: serviceLinks,
+    customer: customer,
+    setServiceLinks: setServiceLinks,
+    expandedId: expandedServiceId,
+    setExpandedId: setExpandedServiceId
+  }), /*#__PURE__*/React.createElement(NexusActivityLog, {
     customer: customer,
     setCustomers: setCustomers
   }), /*#__PURE__*/React.createElement("button", {
@@ -10471,11 +10796,16 @@ function NexusTab({
   const gapsByCustomer = useMemo(() => {
     const map = {};
     customers.forEach(c => {
-      const held = serviceLinks.filter(l => l.customerId === c.id).length;
+      const links = serviceLinks.filter(l => l.customerId === c.id);
+      const held = links.filter(l => nexusNormalizeStatus(l.status) === '成約').length;
+      const proposed = links.filter(l => nexusNormalizeStatus(l.status) === '提案中').length;
+      const declined = links.filter(l => nexusNormalizeStatus(l.status) === '見送り').length;
       const referredCount = customers.filter(x => x.referredBy === c.id).length;
-      const gap = services.length - held;
+      const gap = services.length - links.length;
       map[c.id] = {
         held,
+        proposed,
+        declined,
         gap,
         referredCount,
         priority: nexusPriorityScore(gap, referredCount)
@@ -10486,7 +10816,9 @@ function NexusTab({
   const hubs = useMemo(() => nexusComputeHubs(customers), [customers]);
   const hubIds = useMemo(() => new Set(hubs.map(h => h.id)), [hubs]);
   const totalGaps = Object.values(gapsByCustomer).reduce((a, b) => a + b.gap, 0);
-  const totalHeld = serviceLinks.length;
+  const totalHeld = serviceLinks.filter(l => nexusNormalizeStatus(l.status) === '成約').length;
+  const totalProposed = serviceLinks.filter(l => nexusNormalizeStatus(l.status) === '提案中').length;
+  const totalDeclined = serviceLinks.filter(l => nexusNormalizeStatus(l.status) === '見送り').length;
   const tabs = [{
     key: 'list',
     label: '顧客一覧'
@@ -10516,7 +10848,9 @@ function NexusTab({
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(NexusStatRow, {
     customerCount: customers.length,
     heldCount: totalHeld,
-    gapCount: totalGaps
+    gapCount: totalGaps,
+    proposedCount: totalProposed,
+    declinedCount: totalDeclined
   }), /*#__PURE__*/React.createElement("div", {
     className: "toggle-group",
     style: {
@@ -10576,6 +10910,7 @@ function NexusTab({
     onFocus: focusOnCustomer
   }));
 }
+
 
 
 
