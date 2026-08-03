@@ -8620,6 +8620,18 @@ function nexusHashColor(str) {
   return `hsl(${hue}, 62%, 52%)`;
 }
 
+// IDから決定的な初期配置のずれを作る（Math.randomだと孤立ノードが毎回別の場所に出るため）
+function nexusSeededJitter(id) {
+  let hash = 0;
+  for (let i = 0; i < String(id).length; i++) hash = hash * 31 + String(id).charCodeAt(i) >>> 0;
+  const a = hash % 1000 / 1000;
+  const b = Math.floor(hash / 1000) % 1000 / 1000;
+  return {
+    dx: (a - 0.5) * 20,
+    dy: (b - 0.5) * 20
+  };
+}
+
 // 中心人物からreferredByの双方向グラフをBFSで辿り、depth以内のIDを集める
 function nexusFocusSet(customers, centerId, depth) {
   const adj = {};
@@ -9103,14 +9115,12 @@ function NexusServiceStatusEditor({
   }, "理由を保存")));
 }
 
-// ── サービス状況一覧（カテゴリ見出し付き。顧客詳細の常設セクション）──
-function NexusServiceStatusList({
+// ── サービス状況の圧縮ドット表示（カテゴリごとにドットを並べ、全体の色バランスを一瞬で把握）──
+function NexusServiceDotGrid({
   services,
   serviceLinks,
   customer,
-  setServiceLinks,
-  expandedId,
-  setExpandedId
+  onTapService
 }) {
   const groups = useMemo(() => {
     const map = {};
@@ -9121,6 +9131,98 @@ function NexusServiceStatusList({
     });
     return Object.entries(map);
   }, [services]);
+  if (services.length === 0) return null;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      margin: 0,
+      marginBottom: 12,
+      padding: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: 'var(--text-sub)',
+      marginBottom: 8
+    }
+  }, "ひと目で確認"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8
+    }
+  }, groups.map(([cat, list]) => /*#__PURE__*/React.createElement("div", {
+    key: cat,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      flexWrap: 'wrap'
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      fontWeight: 600,
+      flexShrink: 0
+    }
+  }, cat), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 4,
+      flexWrap: 'wrap'
+    }
+  }, list.map(s => {
+    const status = nexusServiceStatus(serviceLinks, customer.id, s.id);
+    const st = nexusStatusStyle(status);
+    return /*#__PURE__*/React.createElement("span", {
+      key: s.id,
+      onClick: () => onTapService(s.id),
+      title: `${s.name}：${status}`,
+      style: {
+        display: 'block',
+        width: 14,
+        height: 14,
+        borderRadius: '50%',
+        cursor: 'pointer',
+        flexShrink: 0,
+        boxSizing: 'border-box',
+        background: st.solid ? st.fill : 'var(--surface)',
+        border: `2px ${st.dash !== '0' ? 'dashed' : 'solid'} ${st.stroke}`
+      }
+    });
+  }))))));
+}
+
+// ── サービス状況一覧（カテゴリ見出し付き。顧客詳細の常設セクション・詳細確認用）──
+function NexusServiceStatusList({
+  services,
+  serviceLinks,
+  customer,
+  setServiceLinks,
+  expandedId,
+  setExpandedId,
+  scrollToId
+}) {
+  const groups = useMemo(() => {
+    const map = {};
+    services.forEach(s => {
+      const cat = s.category || 'その他';
+      if (!map[cat]) map[cat] = [];
+      map[cat].push(s);
+    });
+    return Object.entries(map);
+  }, [services]);
+  const rowRefs = React.useRef({});
+  React.useEffect(() => {
+    if (scrollToId && rowRefs.current[scrollToId]) {
+      rowRefs.current[scrollToId].scrollIntoView({
+        behavior: 'smooth',
+        block: 'center'
+      });
+    }
+  }, [scrollToId]);
   const linkFor = sid => serviceLinks.find(l => l.customerId === customer.id && l.serviceId === sid);
   const setStatus = (service, status, extra) => {
     setServiceLinks(prev => {
@@ -9172,6 +9274,9 @@ function NexusServiceStatusList({
     const st = nexusStatusStyle(status);
     return /*#__PURE__*/React.createElement("div", {
       key: s.id,
+      ref: el => {
+        if (el) rowRefs.current[s.id] = el;
+      },
       className: "card",
       style: {
         margin: 0,
@@ -9238,7 +9343,13 @@ function NexusDetail({
 }) {
   const customer = customers.find(c => c.id === customerId);
   const [expandedServiceId, setExpandedServiceId] = useState(null);
+  const [scrollToServiceId, setScrollToServiceId] = useState(null);
   if (!customer) return null;
+  const handleTapDot = sid => {
+    setExpandedServiceId(sid);
+    setScrollToServiceId(sid);
+    setTimeout(() => setScrollToServiceId(null), 50);
+  };
   const customerLinks = serviceLinks.filter(l => l.customerId === customer.id);
   const wonCount = customerLinks.filter(l => nexusNormalizeStatus(l.status) === '成約').length;
   const proposedCount = customerLinks.filter(l => nexusNormalizeStatus(l.status) === '提案中').length;
@@ -9429,7 +9540,12 @@ function NexusDetail({
       color: 'var(--text-sub)',
       border: '1px dashed var(--border)'
     }
-  }, "未提案 ", notProposedCount)), /*#__PURE__*/React.createElement("div", {
+  }, "未提案 ", notProposedCount)), /*#__PURE__*/React.createElement(NexusServiceDotGrid, {
+    services: services,
+    serviceLinks: serviceLinks,
+    customer: customer,
+    onTapService: handleTapDot
+  }), /*#__PURE__*/React.createElement("div", {
     style: {
       marginBottom: 8,
       fontSize: 12,
@@ -9442,7 +9558,8 @@ function NexusDetail({
     customer: customer,
     setServiceLinks: setServiceLinks,
     expandedId: expandedServiceId,
-    setExpandedId: setExpandedServiceId
+    setExpandedId: setExpandedServiceId,
+    scrollToId: scrollToServiceId
   }), /*#__PURE__*/React.createElement(NexusActivityLog, {
     customer: customer,
     setCustomers: setCustomers
@@ -9510,9 +9627,10 @@ function NexusForceGraph({
         next[id] = nodes[id];
       } else {
         const angle = i / Math.max(visibleIds.length, 1) * Math.PI * 2;
+        const jitter = nexusSeededJitter(id);
         next[id] = {
-          x: width / 2 + Math.cos(angle) * 70 + (Math.random() - 0.5) * 12,
-          y: height / 2 + Math.sin(angle) * 70 + (Math.random() - 0.5) * 12,
+          x: width / 2 + Math.cos(angle) * 70 + jitter.dx,
+          y: height / 2 + Math.sin(angle) * 70 + jitter.dy,
           vx: 0,
           vy: 0,
           fx: null,
@@ -9540,7 +9658,16 @@ function NexusForceGraph({
             let dx = a.x - b.x,
               dy = a.y - b.y;
             let distSq = dx * dx + dy * dy;
-            if (distSq < 1) distSq = 1;
+            if (distSq < 0.0001) {
+              // 完全に重なっていると方向ベクトルが(0,0)になり力が働かず離れられないため、
+              // インデックスから決定的な向きを与えて重なりを解消する（毎回ランダムだと暴れるので固定シード）
+              const seedAngle = (i * 37 + j * 53) % 360 * Math.PI / 180;
+              dx = Math.cos(seedAngle);
+              dy = Math.sin(seedAngle);
+              distSq = 1;
+            } else if (distSq < 1) {
+              distSq = 1;
+            }
             const dist = Math.sqrt(distSq);
             const force = 950 / distSq;
             const fx = dx / dist * force,
@@ -9584,6 +9711,13 @@ function NexusForceGraph({
           }
           n.vx *= 0.8;
           n.vy *= 0.8;
+          // 速度上限：反発力が瞬間的に大きくなってもノードが画面外へ飛ばないようにする
+          const speed = Math.hypot(n.vx, n.vy);
+          const maxSpeed = 40;
+          if (speed > maxSpeed) {
+            n.vx = n.vx / speed * maxSpeed;
+            n.vy = n.vy / speed * maxSpeed;
+          }
           n.x += n.vx;
           n.y += n.vy;
           n.x = Math.max(18, Math.min(width - 18, n.x));
@@ -9631,7 +9765,10 @@ function NexusForceGraph({
     gestureRef.current = {
       type: 'node',
       id,
-      pointerId: e.pointerId
+      pointerId: e.pointerId,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      moved: false
     };
     simRef.current.alpha = Math.max(simRef.current.alpha, 0.6);
   };
@@ -9674,6 +9811,8 @@ function NexusForceGraph({
         n.fy = p.y;
       }
       simRef.current.alpha = Math.max(simRef.current.alpha, 0.4);
+      // タップとドラッグの誤判定防止：指が少しぶれた程度ではドラッグ扱いにしない
+      if (!g.moved && Math.hypot(e.clientX - g.startClientX, e.clientY - g.startClientY) > 6) g.moved = true;
     } else if (g.type === 'pan') {
       const nx = g.startView.x + (e.clientX - g.startX);
       const ny = g.startView.y + (e.clientY - g.startY);
@@ -9701,6 +9840,8 @@ function NexusForceGraph({
         n.fx = null;
         n.fy = null;
       }
+      // 移動量が閾値未満ならドラッグではなくタップとして選択する
+      if (!g.moved) onSelect(g.id);
     }
     if (pointersRef.current.size < 2) gestureRef.current = null;
   };
@@ -9806,7 +9947,6 @@ function NexusForceGraph({
       },
       onPointerDown: e => onNodePointerDown(c.id, e),
       onPointerUp: endGesture,
-      onClick: () => onSelect(c.id),
       style: {
         cursor: 'pointer'
       }
@@ -10910,6 +11050,7 @@ function NexusTab({
     onFocus: focusOnCustomer
   }));
 }
+
 
 
 
