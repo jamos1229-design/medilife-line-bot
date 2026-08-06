@@ -1626,6 +1626,22 @@ function CustomerForm({
   }]);
   const updateSuspect = (id, data) => s('suspects')((form.suspects || []).map(sp => sp.id === id ? data : sp));
   const removeSuspect = id => s('suspects')((form.suspects || []).filter(sp => sp.id !== id));
+  // 「お子様」は続柄=子供・同居=trueのサスペクトとして管理（世帯属性の自動判定に使用）
+  const children = (form.suspects || []).filter(sp => sp.relation === '子供' && sp.cohabiting);
+  const addChild = () => s('suspects')([...(form.suspects || []), {
+    id: uid(),
+    name: `お子様${children.length + 1}`,
+    age: '',
+    relation: '子供',
+    cohabiting: true,
+    disability: 'なし',
+    memo: ''
+  }]);
+  const updateChild = (id, data) => s('suspects')((form.suspects || []).map(sp => sp.id === id ? {
+    ...sp,
+    ...data
+  } : sp));
+  const removeChild = id => removeSuspect(id);
   const otherCustomers = customers.filter(c => c.id !== form.id);
   const save = () => {
     if (form.customerType === '法人') {
@@ -1941,7 +1957,86 @@ function CustomerForm({
       boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
       transition: 'left 0.2s'
     }
-  })))), /*#__PURE__*/React.createElement("div", {
+  }))), /*#__PURE__*/React.createElement("div", {
+  className: "form-group",
+  style: {
+    marginTop: 10,
+    marginBottom: 0
+  }
+}, /*#__PURE__*/React.createElement("label", {
+  className: "form-label"
+}, "お子様（世帯属性の自動判定に使用）"), children.length === 0 && /*#__PURE__*/React.createElement("div", {
+  style: {
+    fontSize: 12,
+    color: 'var(--text-sub)',
+    marginBottom: 8
+  }
+}, "未登録（「＋ お子様を追加」で登録すると世帯属性の判定に反映されます）"), children.map((child, i) => /*#__PURE__*/React.createElement("div", {
+  key: child.id,
+  style: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    background: 'var(--bg)',
+    borderRadius: 10,
+    padding: '8px 10px',
+    marginBottom: 6
+  }
+}, /*#__PURE__*/React.createElement("span", {
+  style: {
+    fontSize: 12.5,
+    fontWeight: 600,
+    flexShrink: 0
+  }
+}, "お子様", i + 1), /*#__PURE__*/React.createElement("input", {
+  className: "form-input",
+  type: "number",
+  placeholder: "年齢",
+  style: {
+    flex: 1
+  },
+  value: child.age || '',
+  onChange: e => updateChild(child.id, {
+    age: e.target.value,
+    ageYear: new Date().getFullYear()
+  })
+}), /*#__PURE__*/React.createElement("select", {
+  value: child.disability || 'なし',
+  style: {
+    fontSize: 12,
+    padding: '6px 8px',
+    borderRadius: 8,
+    border: '1px solid var(--border)',
+    background: 'var(--card-bg)',
+    color: 'var(--text)'
+  },
+  onChange: e => updateChild(child.id, {
+    disability: e.target.value
+  })
+}, DISABILITY_TYPES.map(dt => /*#__PURE__*/React.createElement("option", {
+  key: dt,
+  value: dt
+}, dt))), /*#__PURE__*/React.createElement("button", {
+  type: "button",
+  onClick: () => removeChild(child.id),
+  style: {
+    background: 'none',
+    border: 'none',
+    color: 'var(--danger)',
+    fontSize: 18,
+    cursor: 'pointer',
+    flexShrink: 0
+  }
+}, "×"))), /*#__PURE__*/React.createElement("button", {
+  type: "button",
+  className: "btn btn-outline",
+  style: {
+    fontSize: 12,
+    padding: '8px 12px',
+    marginTop: 4
+  },
+  onClick: addChild
+}, "＋ お子様を追加"))), /*#__PURE__*/React.createElement("div", {
     className: "form-row",
     style: {
       marginTop: 14
