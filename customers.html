@@ -440,6 +440,14 @@ function ContractBlock({ contract, onChange, onRemove, index }) {
         <label className="form-label">証券番号</label>
         <input className="form-input" placeholder="例：AB-1234567" value={contract.policyNum || ''} onChange={s('policyNum')} />
       </div>
+      <div className="form-group" style={{ marginBottom: 8 }}>
+        <label className="form-label">保険金額</label>
+        <AmountInput prefix="¥" value={contract.coverageAmount || ''} onChange={s('coverageAmount')} placeholder="例：10000000" />
+      </div>
+      <div className="form-group" style={{ marginBottom: 8 }}>
+        <label className="form-label">備考</label>
+        <textarea className="form-textarea" style={{ minHeight: 60 }} placeholder="例：特約の詳細、担当者からの申し送りなど" value={contract.memo || ''} onChange={s('memo')} />
+      </div>
 
       {/* 被保険者（契約者と異なる場合） */}
       <div style={{ background: 'var(--bg)', borderRadius: 10, padding: '10px 12px', marginBottom: 8 }}>
@@ -1350,6 +1358,8 @@ function CustomerDetail({ customer, customers, onEdit, onDelete, onClose, onRegi
                   <div className="info-item"><div className="info-label">保険種類</div><div className="info-value">{ct.type || '—'}</div></div>
                   <div className="info-item"><div className="info-label">保険会社</div><div className="info-value">{ct.company || '—'}</div></div>
                   {ct.policyNum && <div className="info-item" style={{gridColumn:'1/-1'}}><div className="info-label">証券番号</div><div className="info-value" style={{fontSize:15,letterSpacing:0.5}}>{ct.policyNum}</div></div>}
+                  {ct.coverageAmount && <div className="info-item" style={{gridColumn:'1/-1'}}><div className="info-label">保険金額</div><div className="info-value">¥{Number(ct.coverageAmount).toLocaleString()}</div></div>}
+                  {ct.memo && <div className="info-item" style={{gridColumn:'1/-1'}}><div className="info-label">備考</div><div className="info-value" style={{fontSize:13,fontWeight:500,whiteSpace:'pre-wrap'}}>{ct.memo}</div></div>}
 
                   {/* 被保険者 */}
                   {ct.insuredName && <div className="info-item"><div className="info-label">被保険者</div><div className="info-value">{ct.insuredName}</div></div>}
