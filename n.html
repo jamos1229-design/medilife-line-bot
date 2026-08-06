@@ -1137,6 +1137,142 @@ const calcStoredAge = (age, ageYear) => {
   return Number(age) + diff;
 };
 
+// ── 世帯属性の自動分類ロジック ──────────────────────────────────
+// 入力: 年齢・婚姻状況・同居家族構成（サスペクトの「同居」フラグ付き）
+// 出力: 世帯カテゴリー1つ（優先順位に沿って上から判定し、最初に一致した
+//       ルールを採用する）。保険提案用に、各カテゴリーの「想定必要保障額の
+//       傾向」をコメントとして付記している。
+const HOUSEHOLD_CATEGORIES = {
+  MULTI_GEN: {
+    code: 'multi_gen',
+    label: '二世帯・三世代同居',
+    coverageNote: '親世帯の介護・医療費負担が将来発生しうるため、死亡保障に加えて介護保障・医療保障の比重を高めに検討。相続・資産承継の相談ニーズも高い。'
+  },
+  SINGLE_PARENT: {
+    code: 'single_parent',
+    label: 'ひとり親世帯',
+    coverageNote: '自分に万一があった場合、子の生活費・教育費を単独でカバーする必要があるため、死亡保障は最も手厚く。就業不能保障の優先度も高い。'
+  },
+  ELDERLY_SINGLE: {
+    code: 'elderly_single',
+    label: '高齢単身世帯(65歳以上)',
+    coverageNote: '死亡保障の必要性は低下する一方、医療・介護保障や葬儀費用のニーズが相対的に高い。終身医療・少額の死亡保障（葬儀代目的）が中心。'
+  },
+  BEREAVED_DIVORCED: {
+    code: 'bereaved_divorced',
+    label: '死別・離婚世帯',
+    coverageNote: '扶養する同居の子がいない場合は死亡保障の必要額は下がるが、単身での医療・就業不能への備えは重要。財産分与・年金分割等を踏まえた資産形成相談も有効。'
+  },
+  CHILDCARE_PRESCHOOL: {
+    code: 'childcare_preschool',
+    label: '子育て世帯(未就学児あり)',
+    coverageNote: '教育費が今後長期にわたり発生するため、死亡保障・就業不能保障ともに必要保障額が最大になりやすい層。学資保険・収入保障保険の提案が有効。'
+  },
+  CHILDCARE_SCHOOLAGE: {
+    code: 'childcare_schoolage',
+    label: '子育て世帯(就学児あり)',
+    coverageNote: '教育費のピーク（高校・大学）が近づくため、必要保障額はやや逓減しつつも高水準を維持。進学時期に合わせた保障の見直し提案が効果的。'
+  },
+  DINKS: {
+    code: 'dinks',
+    label: 'DINKs(共働き・子なし)',
+    coverageNote: '互いの収入で生計が成り立つため死亡保障の必要額は比較的小さいが、どちらかが就業不能になった際の世帯収入減リスクへの備え（就業不能保険）が重要。'
+  },
+  MARRIED_NO_CHILD: {
+    code: 'married_no_child',
+    label: '既婚・子なし',
+    coverageNote: '配偶者の生活保障を目的とした死亡保障が中心。子の教育費を見込む必要がない分、必要保障額はDINKsや子育て世帯より抑えめ。'
+  },
+  COHABITING: {
+    code: 'cohabiting',
+    label: '同棲・事実婚',
+    coverageNote: 'パートナーへの保障（受取人指定などの実務課題を含む）を確認しつつ提案。法律婚に比べ公的保障が薄い分、私的保障の必要性を伝えやすい。'
+  },
+  SINGLE: {
+    code: 'single',
+    label: '独身(単身)',
+    coverageNote: '扶養家族がいないため死亡保障の必要額は小さい。医療保険・就業不能保険など「自分自身の収入・生活を守る」保障が中心。'
+  }
+};
+
+// customer（顧客レコード）から分類ロジックの入力形式を組み立てる。
+// ロジック本体（classifyHousehold）はアプリのデータ構造に依存しない
+// 純粋関数にしてあるので、他画面・他ツールに移植する場合はこのアダプター
+// 部分だけを差し替えれば良い。
+function buildHouseholdInput(customer) {
+  const age = customer.birthdate ? calcAge(customer.birthdate) : calcStoredAge(customer.age, customer.ageYear);
+  const householdMembers = (customer.suspects || []).filter(sp => sp.cohabiting).map(sp => ({
+    relation: sp.relation || '',
+    age: sp.birthdate ? calcAge(sp.birthdate) : calcStoredAge(sp.age, sp.ageYear)
+  }));
+  return {
+    age,
+    maritalStatus: customer.maritalStatus || '不明',
+    dualIncome: !!customer.dualIncome,
+    householdMembers
+  };
+}
+
+// 世帯属性の判定ロジック本体（純粋関数・アプリのデータ構造に非依存）
+// input: { age, maritalStatus, dualIncome, householdMembers: [{relation, age}] }
+function classifyHousehold(input) {
+  const age = input.age ?? null;
+  const marital = input.maritalStatus || '不明';
+  const members = input.householdMembers || [];
+  const children = members.filter(m => m.relation === '子供');
+  const hasChildren = children.length > 0;
+  const childAges = children.map(c => c.age).filter(a => a !== null && a !== undefined);
+  const youngestChildAge = childAges.length ? Math.min(...childAges) : null;
+  const hasCohabitingParent = members.some(m => m.relation === '親');
+  const hasSpouse = members.some(m => m.relation === '配偶者') || marital === '既婚';
+  const livesAlone = members.length === 0;
+
+  const result = (category, reason) => ({
+    code: category.code,
+    label: category.label,
+    reason,
+    coverageNote: category.coverageNote
+  });
+
+  // 1. 二世帯・三世代同居：親と同居している場合は他の条件より優先して判定
+  if (hasCohabitingParent) {
+    return result(HOUSEHOLD_CATEGORIES.MULTI_GEN, '親と同居しているため');
+  }
+  // 2. ひとり親世帯：配偶者なしで同居の子がいる場合（既婚・子なしより優先）
+  if (hasChildren && !hasSpouse) {
+    return result(HOUSEHOLD_CATEGORIES.SINGLE_PARENT, '配偶者なしで同居の子がいるため');
+  }
+  // 3. 高齢単身世帯：65歳以上かつ同居家族なし（婚姻歴による分類より優先）
+  if (age !== null && age >= 65 && livesAlone) {
+    return result(HOUSEHOLD_CATEGORIES.ELDERLY_SINGLE, '65歳以上で同居家族がいないため');
+  }
+  // 4. 死別・離婚世帯：婚姻状況が死別/離婚で、同居の子はいない場合
+  if (marital === '死別' || marital === '離婚') {
+    return result(HOUSEHOLD_CATEGORIES.BEREAVED_DIVORCED, `婚姻状況が「${marital}」のため`);
+  }
+  // 5・6. 子育て世帯：同居の子がいる場合。最年少の子が未就学(6歳未満)かどうかで分岐
+  if (hasChildren) {
+    if (youngestChildAge !== null && youngestChildAge < 6) {
+      return result(HOUSEHOLD_CATEGORIES.CHILDCARE_PRESCHOOL, '未就学（6歳未満）の同居の子がいるため');
+    }
+    return result(HOUSEHOLD_CATEGORIES.CHILDCARE_SCHOOLAGE, '就学年齢（6歳以上）の同居の子がいるため');
+  }
+  // 7. DINKs：配偶者と同居・子なし・共働きの場合
+  if (hasSpouse && input.dualIncome) {
+    return result(HOUSEHOLD_CATEGORIES.DINKS, '配偶者と同居し共働きで子がいないため');
+  }
+  // 8. 既婚・子なし：配偶者と同居・子なし（共働きでない、または不明）
+  if (hasSpouse) {
+    return result(HOUSEHOLD_CATEGORIES.MARRIED_NO_CHILD, '配偶者と同居し子がいないため');
+  }
+  // 9. 同棲・事実婚：婚姻状況が事実婚
+  if (marital === '事実婚') {
+    return result(HOUSEHOLD_CATEGORIES.COHABITING, '婚姻状況が「事実婚」のため');
+  }
+  // 10. 独身（単身）：上記いずれにも該当しない場合のデフォルト
+  return result(HOUSEHOLD_CATEGORIES.SINGLE, '該当する世帯類型がないため');
+}
+
 // ── 顧客ランク自動判定 ────────────────────────────────────────
 // S: 複数契約 + (紹介あり or 高額)
 // A: 1件以上契約 + (高額 or 紹介あり)
@@ -1329,7 +1465,33 @@ function SuspectBlock({
       ...suspect,
       relation: r
     })
-  }, r)))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+  }, r)))), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "同居（世帯属性の自動判定に使用）"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, [{
+    v: true,
+    label: '同居している'
+  }, {
+    v: false,
+    label: '同居していない'
+  }].map(({
+    v,
+    label
+  }) => /*#__PURE__*/React.createElement("button", {
+    key: label,
+    type: "button",
+    className: `toggle-btn ${!!suspect.cohabiting === v ? 'sel' : ''}`,
+    onClick: () => onChange({
+      ...suspect,
+      cohabiting: v
+    })
+  }, label)))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
   }, "メモ"), /*#__PURE__*/React.createElement("textarea", {
     className: "form-textarea",
@@ -1362,6 +1524,9 @@ function CustomerForm({
     address: '',
     occupation: '',
     workplace: '',
+    // 世帯属性の自動判定に使用
+    maritalStatus: '',
+    dualIncome: false,
     // 法人専用
     corporateName: '',
     representative: '',
@@ -1666,6 +1831,62 @@ function CustomerForm({
     value: form.birthdate,
     onChange: si('birthdate')
   })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginTop: 14,
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "婚姻状況（世帯属性の自動判定に使用）"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, ['未婚', '既婚', '事実婚', '離婚', '死別'].map(ms => /*#__PURE__*/React.createElement("button", {
+    key: ms,
+    type: "button",
+    className: `toggle-btn ${form.maritalStatus === ms ? 'sel' : ''}`,
+    onClick: () => s('maritalStatus')(form.maritalStatus === ms ? '' : ms)
+  }, ms))), (form.maritalStatus === '既婚' || form.maritalStatus === '事実婚') && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      background: 'var(--bg)',
+      borderRadius: 10,
+      padding: '10px 12px'
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 13,
+      fontWeight: 600
+    }
+  }, "共働き"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => s('dualIncome')(!form.dualIncome),
+    style: {
+      width: 48,
+      height: 28,
+      borderRadius: 14,
+      border: 'none',
+      cursor: 'pointer',
+      background: form.dualIncome ? 'var(--success)' : '#D1D5DB',
+      transition: 'background 0.2s',
+      position: 'relative',
+      flexShrink: 0
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: 'absolute',
+      top: 3,
+      left: form.dualIncome ? 22 : 3,
+      width: 22,
+      height: 22,
+      borderRadius: '50%',
+      background: '#fff',
+      boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+      transition: 'left 0.2s'
+    }
+  })))), /*#__PURE__*/React.createElement("div", {
     className: "form-row",
     style: {
       marginTop: 14
@@ -2159,6 +2380,7 @@ function CustomerDetail({
   const referredToIds = Array.isArray(c.referredTo) ? c.referredTo : c.referredTo ? [c.referredTo] : [];
   const referredToCustomers = referredToIds.map(id => customers.find(x => x.id === id)).filter(Boolean);
   const apptDays = daysUntil(c.nextAppt);
+  const household = c.customerType !== '法人' ? classifyHousehold(buildHouseholdInput(c)) : null;
   return /*#__PURE__*/React.createElement("div", {
     className: "full-screen"
   }, /*#__PURE__*/React.createElement("div", {
@@ -2432,7 +2654,53 @@ function CustomerDetail({
       fontSize: 15,
       fontWeight: 600
     }
-  }, [c.occupation, c.workplace].filter(Boolean).join('　'))))), /*#__PURE__*/React.createElement("div", {
+  }, [c.occupation, c.workplace].filter(Boolean).join('　'))))), household && /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "世帯属性（自動判定）"), household && /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 17
+    }
+  }, "🏠"), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 16,
+      fontWeight: 800
+    }
+  }, household.label)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--text-sub)',
+      marginBottom: 10
+    }
+  }, "判定理由：", household.reason), /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: 'var(--accent-light)',
+      borderRadius: 10,
+      padding: '10px 12px',
+      fontSize: 12.5,
+      lineHeight: 1.6,
+      color: 'var(--text)'
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 700,
+      color: 'var(--accent)'
+    }
+  }, "💡 想定必要保障額の傾向：\xa0"), household.coverageNote), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--text-sub)',
+      marginTop: 8
+    }
+  }, "※ 婚姻状況・同居家族の登録内容から自動判定した参考情報です。実際の保障提案は個別の事情も踏まえてご検討ください。")), /*#__PURE__*/React.createElement("div", {
     className: "section-header"
   }, "接触管理"), /*#__PURE__*/React.createElement("div", {
     className: "card"
