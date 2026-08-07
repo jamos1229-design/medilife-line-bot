@@ -1143,6 +1143,11 @@ const calcStoredAge = (age, ageYear) => {
 //       ルールを採用する）。保険提案用に、各カテゴリーの「想定必要保障額の
 //       傾向」をコメントとして付記している。
 const HOUSEHOLD_CATEGORIES = {
+  MINOR: {
+    code: 'minor',
+    label: '未成年',
+    coverageNote: '本人名義での死亡・就業不能保障のニーズは基本的にない。学資保険など教育資金の準備や、入院時の医療保障（子供保険）を保護者向けに提案するのが中心。'
+  },
   MULTI_GEN: {
     code: 'multi_gen',
     label: '二世帯・三世代同居',
@@ -1265,6 +1270,11 @@ function classifyHousehold(input) {
     employmentNote
   });
 
+  // 0. 未成年：18歳未満は婚姻・世帯の分類対象外として最優先で判定
+  //    （本人が自分自身の保障を検討する主体ではないため）
+  if (age !== null && age < 18) {
+    return result(HOUSEHOLD_CATEGORIES.MINOR, `${age}歳の未成年のため`);
+  }
   // 1. 二世帯・三世代同居：親と同居している場合は他の条件より優先して判定
   if (hasCohabitingParent) {
     return result(HOUSEHOLD_CATEGORIES.MULTI_GEN, '親と同居しているため');
