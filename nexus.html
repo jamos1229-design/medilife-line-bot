@@ -1178,6 +1178,11 @@ const HOUSEHOLD_CATEGORIES = {
     label: '子育て世帯(就学児あり)',
     coverageNote: '教育費のピーク（高校・大学）が近づくため、必要保障額はやや逓減しつつも高水準を維持。進学時期に合わせた保障の見直し提案が効果的。'
   },
+  EMPTY_NEST: {
+    code: 'empty_nest',
+    label: '子育て卒業後(既婚)',
+    coverageNote: '教育費の負担がなくなり必要保障額は逓減する時期。死亡保障よりも、老後資金の準備（個人年金・資産形成）や相続・資産承継の相談ニーズが高まる。'
+  },
   DINKS: {
     code: 'dinks',
     label: 'DINKs(共働き・子なし)',
@@ -1247,8 +1252,13 @@ function classifyHousehold(input) {
   const age = input.age ?? null;
   const marital = input.maritalStatus || '不明';
   const members = input.householdMembers || [];
-  const children = members.filter(m => m.relation === '子供');
+  const allChildren = members.filter(m => m.relation === '子供');
+  // 22歳以上（年齢不明を除く）は経済的に独立した「成人した子」として扱い、
+  // 教育費を前提とする子育て世帯の判定からは除外する
+  const children = allChildren.filter(c => c.age === null || c.age === undefined || c.age < 22);
+  const grownChildren = allChildren.filter(c => c.age !== null && c.age !== undefined && c.age >= 22);
   const hasChildren = children.length > 0;
+  const hasGrownChildren = grownChildren.length > 0;
   const childAges = children.map(c => c.age).filter(a => a !== null && a !== undefined);
   const youngestChildAge = childAges.length ? Math.min(...childAges) : null;
   const hasCohabitingParent = members.some(m => m.relation === '親');
@@ -1298,19 +1308,23 @@ function classifyHousehold(input) {
     }
     return result(HOUSEHOLD_CATEGORIES.CHILDCARE_SCHOOLAGE, '就学年齢（6歳以上）の同居の子がいるため');
   }
-  // 7. DINKs：配偶者と同居・子なし・共働きの場合
+  // 7. 子育て卒業後：配偶者と同居し、22歳以上の成人した子がいる（もう教育費がかからない）場合
+  if (hasSpouse && hasGrownChildren) {
+    return result(HOUSEHOLD_CATEGORIES.EMPTY_NEST, '配偶者と同居し、同居の子が22歳以上（独立済み）のため');
+  }
+  // 8. DINKs：配偶者と同居・子なし・共働きの場合
   if (hasSpouse && input.dualIncome) {
     return result(HOUSEHOLD_CATEGORIES.DINKS, '配偶者と同居し共働きで子がいないため');
   }
-  // 8. 既婚・子なし：配偶者と同居・子なし（共働きでない、または不明）
+  // 9. 既婚・子なし：配偶者と同居・子なし（共働きでない、または不明）
   if (hasSpouse) {
     return result(HOUSEHOLD_CATEGORIES.MARRIED_NO_CHILD, '配偶者と同居し子がいないため');
   }
-  // 9. 同棲・事実婚：婚姻状況が事実婚
+  // 10. 同棲・事実婚：婚姻状況が事実婚
   if (marital === '事実婚') {
     return result(HOUSEHOLD_CATEGORIES.COHABITING, '婚姻状況が「事実婚」のため');
   }
-  // 10. 独身（単身）：上記いずれにも該当しない場合のデフォルト
+  // 11. 独身（単身）：上記いずれにも該当しない場合のデフォルト
   return result(HOUSEHOLD_CATEGORIES.SINGLE, '該当する世帯類型がないため');
 }
 
