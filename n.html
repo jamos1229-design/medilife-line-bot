@@ -350,6 +350,7 @@
     .print-doc th, .print-doc td { border: 1px solid #999; padding: 4px 6px; text-align: center; }
     .print-doc th { background: #eee; }
     @media print {
+      @page { size: landscape; margin: 12mm; }
       body.ml-printing > *:not(.ml-print-overlay) { display: none !important; }
       .ml-print-overlay .no-print { display: none !important; }
       .ml-print-overlay { position: static !important; }
@@ -1266,13 +1267,25 @@ const DISABILITY_NOTES = {
 // ロジック本体（classifyHousehold）はアプリのデータ構造に依存しない
 // 純粋関数にしてあるので、他画面・他ツールに移植する場合はこのアダプター
 // 部分だけを差し替えれば良い。
-function buildHouseholdInput(customer) {
+function buildHouseholdInput(customer, customers) {
   const age = customer.birthdate ? calcAge(customer.birthdate) : calcStoredAge(customer.age, customer.ageYear);
   const householdMembers = (customer.suspects || []).filter(sp => sp.cohabiting).map(sp => ({
     relation: sp.relation || '',
     age: sp.birthdate ? calcAge(sp.birthdate) : calcStoredAge(sp.age, sp.ageYear),
     disability: sp.disability || 'なし'
   }));
+  // 配偶者がサスペクトではなく別の顧客として登録済みの場合、その顧客データから世帯情報に反映する
+  const hasSuspectSpouse = householdMembers.some(m => m.relation === '配偶者');
+  if (!hasSuspectSpouse && customer.spouseCustomerId && customers) {
+    const spouseCustomer = customers.find(x => x.id === customer.spouseCustomerId);
+    if (spouseCustomer) {
+      householdMembers.push({
+        relation: '配偶者',
+        age: spouseCustomer.birthdate ? calcAge(spouseCustomer.birthdate) : calcStoredAge(spouseCustomer.age, spouseCustomer.ageYear),
+        disability: 'なし'
+      });
+    }
+  }
   return {
     age,
     maritalStatus: customer.maritalStatus || '不明',
@@ -1642,6 +1655,7 @@ function CustomerForm({
     maritalStatus: '',
     dualIncome: false,
     employmentType: '',
+    spouseCustomerId: '',
     // 法人専用
     corporateName: '',
     representative: '',
@@ -2097,6 +2111,17 @@ function CustomerForm({
   },
   onClick: addChild
 }, "＋ お子様を追加"))), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginTop: 14,
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement(CustomerSelect, {
+    label: "配偶者（既に顧客登録されている場合はここで連携。サスペクトへの二重入力は不要）",
+    value: form.spouseCustomerId,
+    onChange: v => s('spouseCustomerId')(v),
+    customers: otherCustomers
+  })), /*#__PURE__*/React.createElement("div", {
     className: "form-row",
     style: {
       marginTop: 14
@@ -2605,7 +2630,7 @@ function CustomerDetail({
   const referredToIds = Array.isArray(c.referredTo) ? c.referredTo : c.referredTo ? [c.referredTo] : [];
   const referredToCustomers = referredToIds.map(id => customers.find(x => x.id === id)).filter(Boolean);
   const apptDays = daysUntil(c.nextAppt);
-  const household = c.customerType !== '法人' ? classifyHousehold(buildHouseholdInput(c)) : null;
+  const household = c.customerType !== '法人' ? classifyHousehold(buildHouseholdInput(c, customers)) : null;
   return /*#__PURE__*/React.createElement("div", {
     className: "full-screen"
   }, /*#__PURE__*/React.createElement("div", {
@@ -11566,6 +11591,10 @@ const FAMILY_INSURANCE_LABEL = {
   no: '既契約なし',
   unknown: '不明'
 };
+// 確定申告の所得区分に合わせた収入の種類
+const LP_INCOME_TYPES = ['給与所得', '事業所得', '不動産所得', '年金所得', '配当所得', '利子所得', '一時所得', '雑所得（その他）'];
+// 家計簿でよく使う支出の費目
+const LP_EXPENSE_CATEGORIES = ['住居費', '食費', '水道光熱費', '通信費（携帯等）', '保険料', '被服費', '教育費', '交際費', '娯楽費', '医療費', '車両費', 'その他'];
 function nexusLpCategoryMonthly(cat) {
   const total = parseFloat(cat && cat.total) || 0;
   const years = parseFloat(cat && cat.years) || 0;
@@ -11850,6 +11879,7 @@ function NexusPurposeSummaryTable({
 // ── 家系図（本人・配偶者・親・兄弟姉妹・子ども。suspects から自動構成）──
 function NexusFamilyTree({
   customer,
+  customers,
   onSetInsurance
 }) {
   const suspects = customer.suspects || [];
@@ -11863,7 +11893,8 @@ function NexusFamilyTree({
     editable: false
   };
   const spouseSp = suspects.find(sp => sp.relation === '配偶者');
-  const spouseAge = spouseSp ? spouseSp.birthdate ? calcAge(spouseSp.birthdate) : calcStoredAge(spouseSp.age, spouseSp.ageYear) : null;
+  const linkedSpouseCustomer = !spouseSp && customer.spouseCustomerId ? (customers || []).find(x => x.id === customer.spouseCustomerId) : null;
+  const spouseAge = spouseSp ? spouseSp.birthdate ? calcAge(spouseSp.birthdate) : calcStoredAge(spouseSp.age, spouseSp.ageYear) : linkedSpouseCustomer ? linkedSpouseCustomer.birthdate ? calcAge(linkedSpouseCustomer.birthdate) : calcStoredAge(linkedSpouseCustomer.age, linkedSpouseCustomer.ageYear) : null;
   const spouseNode = spouseSp ? {
     key: spouseSp.id,
     name: spouseSp.name || '配偶者',
@@ -11872,6 +11903,13 @@ function NexusFamilyTree({
     hasInsurance: spouseSp.hasInsurance || 'unknown',
     editable: true,
     suspectId: spouseSp.id
+  } : linkedSpouseCustomer ? {
+    key: 'linked-' + linkedSpouseCustomer.id,
+    name: linkedSpouseCustomer.name || '配偶者',
+    age: spouseAge,
+    roleLabel: '配偶者（顧客連携）',
+    hasInsurance: (linkedSpouseCustomer.contracts || []).length > 0 ? 'yes' : 'unknown',
+    editable: false
   } : null;
   const parents = suspects.filter(sp => sp.relation === '親').map(sp => ({
     key: sp.id,
@@ -12114,7 +12152,12 @@ function NexusFamilyTree({
       flex: 1,
       fontSize: 12.5
     }
-  }, m.name, "（", m.roleLabel, "）"), /*#__PURE__*/React.createElement("div", {
+  }, m.name, "（", m.roleLabel, "）"), m.editable === false ? /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: FAMILY_INSURANCE_COLOR[m.hasInsurance]
+    }
+  }, FAMILY_INSURANCE_LABEL[m.hasInsurance], "（顧客本人の契約から自動判定）") : /*#__PURE__*/React.createElement("div", {
     className: "toggle-group",
     style: {
       flexShrink: 0
@@ -12180,6 +12223,56 @@ function NexusPlanningSection({
       }
     });
   };
+  const addLoan = () => updateLp({
+    loans: [...(customer.lp && customer.lp.loans || []), {
+      id: uid(),
+      name: '',
+      balance: '',
+      rate: '',
+      years: ''
+    }]
+  });
+  const updateLoan = (id, patch) => updateLp({
+    loans: (customer.lp && customer.lp.loans || []).map(l => l.id === id ? {
+      ...l,
+      ...patch
+    } : l)
+  });
+  const removeLoan = id => updateLp({
+    loans: (customer.lp && customer.lp.loans || []).filter(l => l.id !== id)
+  });
+  const addIncomeItem = () => updateLp({
+    incomeItems: [...(customer.lp && customer.lp.incomeItems || []), {
+      id: uid(),
+      type: LP_INCOME_TYPES[0],
+      amount: ''
+    }]
+  });
+  const updateIncomeItem = (id, patch) => updateLp({
+    incomeItems: (customer.lp && customer.lp.incomeItems || []).map(x => x.id === id ? {
+      ...x,
+      ...patch
+    } : x)
+  });
+  const removeIncomeItem = id => updateLp({
+    incomeItems: (customer.lp && customer.lp.incomeItems || []).filter(x => x.id !== id)
+  });
+  const addExpenseItem = () => updateLp({
+    expenseItems: [...(customer.lp && customer.lp.expenseItems || []), {
+      id: uid(),
+      category: LP_EXPENSE_CATEGORIES[0],
+      amount: ''
+    }]
+  });
+  const updateExpenseItem = (id, patch) => updateLp({
+    expenseItems: (customer.lp && customer.lp.expenseItems || []).map(x => x.id === id ? {
+      ...x,
+      ...patch
+    } : x)
+  });
+  const removeExpenseItem = id => updateLp({
+    expenseItems: (customer.lp && customer.lp.expenseItems || []).filter(x => x.id !== id)
+  });
   const setSuspectInsurance = (suspectId, val) => {
     const suspects = (customer.suspects || []).map(sp => sp.id === suspectId ? {
       ...sp,
@@ -12213,9 +12306,19 @@ function NexusPlanningSection({
   const categories = lp.categories || {};
   const budget = lp.budget || {};
   const portfolio = lp.portfolio || {};
+  const loans = lp.loans || [];
+  const incomeItems = lp.incomeItems || [];
+  const expenseItems = lp.expenseItems || [];
+  const totalLoanBalance = loans.reduce((s, l) => s + (parseFloat(l.balance) || 0), 0);
+  const totalIncome = incomeItems.reduce((s, x) => s + (parseFloat(x.amount) || 0), 0);
+  const totalExpense = expenseItems.reduce((s, x) => s + (parseFloat(x.amount) || 0), 0);
+  const eventIncome = parseFloat(budget.eventIncome) || 0;
+  const eventExpense = parseFloat(budget.eventExpense) || 0;
+  const computedAnnualSavings = totalIncome - totalExpense + eventIncome - eventExpense;
   const ageSelf = customer.birthdate ? calcAge(customer.birthdate) : calcStoredAge(customer.age, customer.ageYear);
   const spouseSp = (customer.suspects || []).find(sp => sp.relation === '配偶者');
-  const ageSpouse = spouseSp ? spouseSp.birthdate ? calcAge(spouseSp.birthdate) : calcStoredAge(spouseSp.age, spouseSp.ageYear) : null;
+  const linkedSpouseCustomer = !spouseSp && customer.spouseCustomerId ? customers.find(x => x.id === customer.spouseCustomerId) : null;
+  const ageSpouse = spouseSp ? spouseSp.birthdate ? calcAge(spouseSp.birthdate) : calcStoredAge(spouseSp.age, spouseSp.ageYear) : linkedSpouseCustomer ? linkedSpouseCustomer.birthdate ? calcAge(linkedSpouseCustomer.birthdate) : calcStoredAge(linkedSpouseCustomer.age, linkedSpouseCustomer.ageYear) : null;
   const kids = (customer.suspects || []).filter(sp => sp.relation === '子供');
   const kidsSummary = kids.length ? kids.map(k => {
     const a = k.birthdate ? calcAge(k.birthdate) : calcStoredAge(k.age, k.ageYear);
@@ -12334,15 +12437,18 @@ function NexusPlanningSection({
       <table>
         <tr><th>本人年齢</th><td>${ageSelf !== null ? ageSelf + '歳' : ''}</td><th>配偶者年齢</th><td>${ageSpouse !== null ? ageSpouse + '歳' : ''}</td></tr>
         <tr><th>お子様</th><td colspan="3">${escapeHtmlForPrint(kidsSummary)}</td></tr>
-        <tr><th>年間収入・預貯金</th><td colspan="3">${escapeHtmlForPrint(lp.income)}</td></tr>
-        <tr><th>負債（ローン）</th><td colspan="3">${escapeHtmlForPrint(lp.debt)}</td></tr>
         <tr><th>理想月間貯蓄額</th><td colspan="3">${monthlyTarget.toLocaleString()}円／月</td></tr>
       </table>
+      <h3>ローン明細</h3>
+      <table><tr><th>名称</th><th>残高</th><th>金利</th><th>返済期間</th></tr>${loans.length ? loans.map(l => `<tr><td>${escapeHtmlForPrint(l.name)}</td><td>${l.balance ? Number(l.balance).toLocaleString() + '円' : ''}</td><td>${escapeHtmlForPrint(l.rate)}${l.rate ? '%' : ''}</td><td>${escapeHtmlForPrint(l.years)}${l.years ? '年' : ''}</td></tr>`).join('') : '<tr><td colspan="4">登録なし</td></tr>'}</table>
+      <p style="font-size:12px;"><b>ローン残高合計：${totalLoanBalance.toLocaleString()}円</b></p>
       <h3>家計収支</h3>
+      <table><tr><th>収入の種類</th><th>金額</th></tr>${incomeItems.length ? incomeItems.map(x => `<tr><td>${escapeHtmlForPrint(x.type)}</td><td>${x.amount ? Number(x.amount).toLocaleString() + '円' : ''}</td></tr>`).join('') : '<tr><td colspan="2">登録なし</td></tr>'}</table>
+      <table><tr><th>支出の費目</th><th>金額</th></tr>${expenseItems.length ? expenseItems.map(x => `<tr><td>${escapeHtmlForPrint(x.category)}</td><td>${x.amount ? Number(x.amount).toLocaleString() + '円' : ''}</td></tr>`).join('') : '<tr><td colspan="2">登録なし</td></tr>'}</table>
       <table>
-        <tr><th>収入</th><td>${escapeHtmlForPrint(budget.income)}</td><th>基本支出</th><td>${escapeHtmlForPrint(budget.basicExpense)}</td></tr>
-        <tr><th>イベント収入</th><td>${escapeHtmlForPrint(budget.eventIncome)}</td><th>イベント支出</th><td>${escapeHtmlForPrint(budget.eventExpense)}</td></tr>
-        <tr><th>年間貯蓄</th><td colspan="3">${escapeHtmlForPrint(budget.annualSavings)}</td></tr>
+        <tr><th>収入合計</th><td>${totalIncome.toLocaleString()}円</td><th>支出合計</th><td>${totalExpense.toLocaleString()}円</td></tr>
+        <tr><th>イベント収入</th><td>${eventIncome.toLocaleString()}円</td><th>イベント支出</th><td>${eventExpense.toLocaleString()}円</td></tr>
+        <tr><th>年間貯蓄（自動計算）</th><td colspan="3">${computedAnnualSavings.toLocaleString()}円</td></tr>
       </table>
       <h3>既契約一覧（本人）</h3>
       <table><tr><th>No</th><th>目的</th><th>保険種類</th><th>保険会社</th><th>証券番号</th><th>契約日</th><th>保険期間</th><th>払込期間</th><th>保険金額</th><th>保険料</th></tr>${rowsHtml(contracts)}</table>
@@ -12403,30 +12509,6 @@ function NexusPlanningSection({
     ageSelf: ageSelf,
     ageSpouse: ageSpouse
   }), /*#__PURE__*/React.createElement("div", {
-    className: "form-row"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "form-group"
-  }, /*#__PURE__*/React.createElement("label", {
-    className: "form-label"
-  }, "年間収入・預貯金（メモ）"), /*#__PURE__*/React.createElement("input", {
-    className: "form-input",
-    placeholder: "例：年収800万円／預貯金500万円",
-    value: lp.income || '',
-    onChange: e => updateLp({
-      income: e.target.value
-    })
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "form-group"
-  }, /*#__PURE__*/React.createElement("label", {
-    className: "form-label"
-  }, "負債（ローン）"), /*#__PURE__*/React.createElement("input", {
-    className: "form-input",
-    placeholder: "例：住宅ローン残債2,800万円",
-    value: lp.debt || '',
-    onChange: e => updateLp({
-      debt: e.target.value
-    })
-  }))), /*#__PURE__*/React.createElement("div", {
     className: "form-group"
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
@@ -12438,7 +12520,10 @@ function NexusPlanningSection({
     }),
     placeholder: "例：80000"
   })), /*#__PURE__*/React.createElement("div", {
-    className: "form-group"
+    className: "form-group",
+    style: {
+      marginBottom: 0
+    }
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
   }, "収支メモ"), /*#__PURE__*/React.createElement(NexusAutoGrowTextarea, {
@@ -12448,6 +12533,113 @@ function NexusPlanningSection({
     }),
     placeholder: "面談中に聞き取ったことを自由記入"
   }))), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 13,
+      color: 'var(--text)',
+      marginBottom: 10
+    }
+  }, "ローン明細"), loans.length === 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text-sub)',
+      marginBottom: 8
+    }
+  }, "登録なし"), loans.map(l => /*#__PURE__*/React.createElement("div", {
+    key: l.id,
+    style: {
+      border: '1px solid var(--border)',
+      borderRadius: 8,
+      padding: 10,
+      marginBottom: 8,
+      background: 'var(--bg)'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      alignItems: 'center',
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    style: {
+      flex: 1
+    },
+    placeholder: "例：住宅ローン",
+    value: l.name || '',
+    onChange: e => updateLoan(l.id, {
+      name: e.target.value
+    })
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => removeLoan(l.id),
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--danger)',
+      fontSize: 18,
+      cursor: 'pointer',
+      flexShrink: 0
+    }
+  }, "×")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      flexWrap: 'wrap',
+      fontSize: 12
+    }
+  }, "残高", /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    className: "form-input",
+    style: {
+      width: 100
+    },
+    value: l.balance || '',
+    onChange: e => updateLoan(l.id, {
+      balance: e.target.value
+    })
+  }), "円 金利", /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    className: "form-input",
+    style: {
+      width: 64
+    },
+    value: l.rate || '',
+    onChange: e => updateLoan(l.id, {
+      rate: e.target.value
+    })
+  }), "% 返済期間", /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    className: "form-input",
+    style: {
+      width: 64
+    },
+    value: l.years || '',
+    onChange: e => updateLoan(l.id, {
+      years: e.target.value
+    })
+  }), "年"))), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline",
+    style: {
+      fontSize: 12,
+      padding: '8px 12px'
+    },
+    onClick: addLoan
+  }, "＋ ローンを追加"), totalLoanBalance > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      marginTop: 8
+    }
+  }, "ローン残高合計：", /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: 'var(--accent)'
+    }
+  }, totalLoanBalance.toLocaleString(), "円"))), /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -12522,36 +12714,147 @@ function NexusPlanningSection({
   }, "家計収支"), /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
-    className: "form-row"
+    style: {
+      fontWeight: 700,
+      fontSize: 12.5,
+      marginBottom: 8
+    }
+  }, "収入（年間・種類別）"), incomeItems.map(x => /*#__PURE__*/React.createElement("div", {
+    key: x.id,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("select", {
+    className: "form-input",
+    style: {
+      flex: 1,
+      fontSize: 12.5
+    },
+    value: x.type,
+    onChange: e => updateIncomeItem(x.id, {
+      type: e.target.value
+    })
+  }, LP_INCOME_TYPES.map(t => /*#__PURE__*/React.createElement("option", {
+    key: t,
+    value: t
+  }, t))), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    className: "form-input",
+    style: {
+      width: 110
+    },
+    placeholder: "円",
+    value: x.amount || '',
+    onChange: e => updateIncomeItem(x.id, {
+      amount: e.target.value
+    })
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => removeIncomeItem(x.id),
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--danger)',
+      fontSize: 18,
+      cursor: 'pointer',
+      flexShrink: 0
+    }
+  }, "×"))), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline",
+    style: {
+      fontSize: 12,
+      padding: '8px 12px',
+      marginBottom: 6
+    },
+    onClick: addIncomeItem
+  }, "＋ 収入を追加"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5
+    }
+  }, "収入合計：", /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: 'var(--accent)'
+    }
+  }, totalIncome.toLocaleString(), "円／年")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 12.5,
+      margin: '16px 0 8px'
+    }
+  }, "支出（年間・費目別）"), expenseItems.map(x => /*#__PURE__*/React.createElement("div", {
+    key: x.id,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("select", {
+    className: "form-input",
+    style: {
+      flex: 1,
+      fontSize: 12.5
+    },
+    value: x.category,
+    onChange: e => updateExpenseItem(x.id, {
+      category: e.target.value
+    })
+  }, LP_EXPENSE_CATEGORIES.map(c => /*#__PURE__*/React.createElement("option", {
+    key: c,
+    value: c
+  }, c))), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    className: "form-input",
+    style: {
+      width: 110
+    },
+    placeholder: "円",
+    value: x.amount || '',
+    onChange: e => updateExpenseItem(x.id, {
+      amount: e.target.value
+    })
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => removeExpenseItem(x.id),
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--danger)',
+      fontSize: 18,
+      cursor: 'pointer',
+      flexShrink: 0
+    }
+  }, "×"))), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline",
+    style: {
+      fontSize: 12,
+      padding: '8px 12px',
+      marginBottom: 6
+    },
+    onClick: addExpenseItem
+  }, "＋ 支出を追加"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5
+    }
+  }, "支出合計：", /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: 'var(--danger)'
+    }
+  }, totalExpense.toLocaleString(), "円／年")), /*#__PURE__*/React.createElement("div", {
+    className: "form-row",
+    style: {
+      marginTop: 16
+    }
   }, /*#__PURE__*/React.createElement("div", {
     className: "form-group"
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "収入"), /*#__PURE__*/React.createElement(AmountInput, {
-    prefix: "¥",
-    value: budget.income || '',
-    onChange: e => updateLpBudget({
-      income: e.target.value
-    }),
-    placeholder: "年間"
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "form-group"
-  }, /*#__PURE__*/React.createElement("label", {
-    className: "form-label"
-  }, "基本支出"), /*#__PURE__*/React.createElement(AmountInput, {
-    prefix: "¥",
-    value: budget.basicExpense || '',
-    onChange: e => updateLpBudget({
-      basicExpense: e.target.value
-    }),
-    placeholder: "年間"
-  }))), /*#__PURE__*/React.createElement("div", {
-    className: "form-row"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "form-group"
-  }, /*#__PURE__*/React.createElement("label", {
-    className: "form-label"
-  }, "イベント収入"), /*#__PURE__*/React.createElement(AmountInput, {
+  }, "イベント収入（臨時収入等）"), /*#__PURE__*/React.createElement(AmountInput, {
     prefix: "¥",
     value: budget.eventIncome || '',
     onChange: e => updateLpBudget({
@@ -12562,7 +12865,7 @@ function NexusPlanningSection({
     className: "form-group"
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "イベント支出"), /*#__PURE__*/React.createElement(AmountInput, {
+  }, "イベント支出（旅行・車等）"), /*#__PURE__*/React.createElement(AmountInput, {
     prefix: "¥",
     value: budget.eventExpense || '',
     onChange: e => updateLpBudget({
@@ -12576,14 +12879,13 @@ function NexusPlanningSection({
     }
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "年間貯蓄"), /*#__PURE__*/React.createElement(AmountInput, {
-    prefix: "¥",
-    value: budget.annualSavings || '',
-    onChange: e => updateLpBudget({
-      annualSavings: e.target.value
-    }),
-    placeholder: "年間"
-  }))), /*#__PURE__*/React.createElement("div", {
+  }, "年間貯蓄（自動計算：収入−支出＋イベント収支）"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 15,
+      fontWeight: 700,
+      color: computedAnnualSavings >= 0 ? 'var(--success)' : 'var(--danger)'
+    }
+  }, computedAnnualSavings.toLocaleString(), "円／年"))), /*#__PURE__*/React.createElement("div", {
     className: "section-header"
   }, "既契約一覧", linkedCorp ? '（本人）' : ''), /*#__PURE__*/React.createElement("div", {
     className: "card"
@@ -12753,6 +13055,7 @@ function NexusPlanningSection({
     className: "card"
   }, /*#__PURE__*/React.createElement(NexusFamilyTree, {
     customer: customer,
+    customers: customers,
     onSetInsurance: setSuspectInsurance
   })), /*#__PURE__*/React.createElement("div", {
     className: "section-header"
