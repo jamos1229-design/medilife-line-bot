@@ -1269,23 +1269,22 @@ const DISABILITY_NOTES = {
 // 部分だけを差し替えれば良い。
 function buildHouseholdInput(customer, customers) {
   const age = customer.birthdate ? calcAge(customer.birthdate) : calcStoredAge(customer.age, customer.ageYear);
-  const householdMembers = (customer.suspects || []).filter(sp => sp.cohabiting).map(sp => ({
-    relation: sp.relation || '',
-    age: sp.birthdate ? calcAge(sp.birthdate) : calcStoredAge(sp.age, sp.ageYear),
-    disability: sp.disability || 'なし'
-  }));
-  // 配偶者がサスペクトではなく別の顧客として登録済みの場合、その顧客データから世帯情報に反映する
-  const hasSuspectSpouse = householdMembers.some(m => m.relation === '配偶者');
-  if (!hasSuspectSpouse && customer.spouseCustomerId && customers) {
-    const spouseCustomer = customers.find(x => x.id === customer.spouseCustomerId);
-    if (spouseCustomer) {
-      householdMembers.push({
-        relation: '配偶者',
-        age: spouseCustomer.birthdate ? calcAge(spouseCustomer.birthdate) : calcStoredAge(spouseCustomer.age, spouseCustomer.ageYear),
-        disability: 'なし'
-      });
+  // サスペクトが既存の顧客と連携（linkedCustomerId）している場合、年齢等はその顧客の登録情報を優先する
+  const householdMembers = (customer.suspects || []).filter(sp => sp.cohabiting).map(sp => {
+    const linked = sp.linkedCustomerId && customers ? customers.find(x => x.id === sp.linkedCustomerId) : null;
+    if (linked) {
+      return {
+        relation: sp.relation || '',
+        age: linked.birthdate ? calcAge(linked.birthdate) : calcStoredAge(linked.age, linked.ageYear),
+        disability: sp.disability || 'なし'
+      };
     }
-  }
+    return {
+      relation: sp.relation || '',
+      age: sp.birthdate ? calcAge(sp.birthdate) : calcStoredAge(sp.age, sp.ageYear),
+      disability: sp.disability || 'なし'
+    };
+  });
   return {
     age,
     maritalStatus: customer.maritalStatus || '不明',
@@ -1310,7 +1309,7 @@ function classifyHousehold(input) {
   const hasGrownChildren = grownChildren.length > 0;
   const childAges = children.map(c => c.age).filter(a => a !== null && a !== undefined);
   const youngestChildAge = childAges.length ? Math.min(...childAges) : null;
-  const hasCohabitingParent = members.some(m => m.relation === '親');
+  const hasCohabitingParent = members.some(m => m.relation === '親' || m.relation === '祖父母');
   const hasSpouse = members.some(m => m.relation === '配偶者') || marital === '既婚';
   const livesAlone = members.length === 0;
   const disabledDependents = members.filter(m => m.disability && m.disability !== 'なし');
@@ -1447,17 +1446,35 @@ const calcCustomerRank = (c, allCustomers) => {
 };
 
 // ── Suspect Block ─────────────────────────────────────────────
-const RELATIONS = ['配偶者', '子供', '親', '兄弟姉妹', '友人', '職場', '知人', 'その他'];
+const RELATIONS = ['配偶者', '子供', '親', '祖父母', '兄弟姉妹', '従兄弟', '友人', '職場', '知人', 'その他'];
 function SuspectBlock({
   suspect,
   onChange,
   onRemove,
-  index
+  index,
+  customers,
+  excludeId
 }) {
   const s = k => e => onChange({
     ...suspect,
     [k]: e.target.value
   });
+  const linkableCustomers = (customers || []).filter(c => c.id !== excludeId);
+  const linkedCustomer = suspect.linkedCustomerId ? linkableCustomers.find(c => c.id === suspect.linkedCustomerId) : null;
+  const setLinked = id => {
+    if (!id) {
+      onChange({
+        ...suspect,
+        linkedCustomerId: ''
+      });
+      return;
+    }
+    onChange({
+      ...suspect,
+      linkedCustomerId: id
+    });
+  };
+  const linkedAge = linkedCustomer ? linkedCustomer.birthdate ? calcAge(linkedCustomer.birthdate) : calcStoredAge(linkedCustomer.age, linkedCustomer.ageYear) : null;
   const autoAge = calcAge(suspect.birthdate);
   // 生年月日がない場合は手動年齢を入力年から自動加算
   const displayAge = autoAge !== null ? autoAge : calcStoredAge(suspect.age, suspect.ageYear);
@@ -1493,6 +1510,24 @@ function SuspectBlock({
       lineHeight: 1
     }
   }, "×")), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement(CustomerSelect, {
+    label: "既に顧客登録されている人と連携（選ぶと名前・年齢を自動反映）",
+    value: suspect.linkedCustomerId || '',
+    onChange: setLinked,
+    customers: linkableCustomers
+  })), linkedCustomer ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: 'var(--accent-light)',
+      borderRadius: 10,
+      padding: '10px 12px',
+      marginBottom: 8,
+      fontSize: 13
+    }
+  }, "🔗 ", /*#__PURE__*/React.createElement("b", null, linkedCustomer.name), linkedAge !== null ? `（${linkedAge}歳）` : '', " と連携中") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "form-row",
     style: {
       marginBottom: 8
@@ -1546,7 +1581,7 @@ function SuspectBlock({
       age: e.target.value,
       ageYear: new Date().getFullYear()
     })
-  })), /*#__PURE__*/React.createElement("div", {
+  }))), /*#__PURE__*/React.createElement("div", {
     className: "form-group",
     style: {
       marginBottom: 8
@@ -1655,7 +1690,6 @@ function CustomerForm({
     maritalStatus: '',
     dualIncome: false,
     employmentType: '',
-    spouseCustomerId: '',
     // 法人専用
     corporateName: '',
     representative: '',
@@ -1671,6 +1705,8 @@ function CustomerForm({
     contracts: [],
     suspects: [],
     referredBy: '',
+    referredByName: '',
+    // 紹介元が顧客未登録の場合の名前直接入力（referredByと併用可）
     referredTo: [] // 複数可・IDの配列
   };
   const [form, setForm] = useState({
@@ -2111,17 +2147,6 @@ function CustomerForm({
   },
   onClick: addChild
 }, "＋ お子様を追加"))), /*#__PURE__*/React.createElement("div", {
-    className: "form-group",
-    style: {
-      marginTop: 14,
-      marginBottom: 0
-    }
-  }, /*#__PURE__*/React.createElement(CustomerSelect, {
-    label: "配偶者（既に顧客登録されている場合はここで連携。サスペクトへの二重入力は不要）",
-    value: form.spouseCustomerId,
-    onChange: v => s('spouseCustomerId')(v),
-    customers: otherCustomers
-  })), /*#__PURE__*/React.createElement("div", {
     className: "form-row",
     style: {
       marginTop: 14
@@ -2372,7 +2397,9 @@ function CustomerForm({
     suspect: sp,
     index: i,
     onChange: data => updateSuspect(sp.id, data),
-    onRemove: () => removeSuspect(sp.id)
+    onRemove: () => removeSuspect(sp.id),
+    customers: otherCustomers,
+    excludeId: form.id
   })), /*#__PURE__*/React.createElement("button", {
     className: "btn btn-outline btn-full",
     style: {
@@ -2389,6 +2416,19 @@ function CustomerForm({
     onChange: v => s('referredBy')(v),
     customers: otherCustomers
   }), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginTop: 10,
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "紹介元（顧客未登録の場合は名前を直接入力）"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    placeholder: "例：友人の田中さん",
+    value: form.referredByName || '',
+    onChange: si('referredByName')
+  })), /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 14
     }
@@ -3667,11 +3707,11 @@ function CustomerDetail({
       marginTop: 8,
       lineHeight: 1.5
     }
-  }, sp.memo)))), (referredByCustomer || referredToCustomers.length > 0) && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  }, sp.memo)))), (referredByCustomer || c.referredByName || referredToCustomers.length > 0) && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "section-header"
   }, "紹介ネットワーク"), /*#__PURE__*/React.createElement("div", {
     className: "card"
-  }, referredByCustomer && /*#__PURE__*/React.createElement("div", {
+  }, (referredByCustomer || c.referredByName) && /*#__PURE__*/React.createElement("div", {
     style: {
       marginBottom: referredToCustomers.length > 0 ? 12 : 0
     }
@@ -3685,7 +3725,14 @@ function CustomerDetail({
       fontSize: 15,
       fontWeight: 700
     }
-  }, "👤 ", referredByCustomer.name)), referredToCustomers.length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }, "👤 ", referredByCustomer ? referredByCustomer.name : c.referredByName, !referredByCustomer && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      fontWeight: 500,
+      color: 'var(--text-sub)',
+      marginLeft: 6
+    }
+  }, "（未登録）"))), referredToCustomers.length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "info-label",
     style: {
       marginBottom: 6
@@ -11892,63 +11939,52 @@ function NexusFamilyTree({
     hasInsurance: (customer.contracts || []).length > 0 ? 'yes' : 'unknown',
     editable: false
   };
+  // サスペクトが既存の顧客と連携している場合、名前・年齢・既契約有無はその顧客の登録情報から自動反映する
+  const resolveMember = (sp, roleLabel) => {
+    const linked = sp.linkedCustomerId ? (customers || []).find(x => x.id === sp.linkedCustomerId) : null;
+    if (linked) {
+      return {
+        key: 'linked-' + sp.id,
+        name: linked.name || roleLabel,
+        age: linked.birthdate ? calcAge(linked.birthdate) : calcStoredAge(linked.age, linked.ageYear),
+        roleLabel: roleLabel + '（顧客連携）',
+        hasInsurance: (linked.contracts || []).length > 0 ? 'yes' : 'unknown',
+        editable: false,
+        suspectId: sp.id
+      };
+    }
+    return {
+      key: sp.id,
+      name: sp.name || roleLabel,
+      age: sp.birthdate ? calcAge(sp.birthdate) : calcStoredAge(sp.age, sp.ageYear),
+      roleLabel,
+      hasInsurance: sp.hasInsurance || 'unknown',
+      editable: true,
+      suspectId: sp.id
+    };
+  };
   const spouseSp = suspects.find(sp => sp.relation === '配偶者');
-  const linkedSpouseCustomer = !spouseSp && customer.spouseCustomerId ? (customers || []).find(x => x.id === customer.spouseCustomerId) : null;
-  const spouseAge = spouseSp ? spouseSp.birthdate ? calcAge(spouseSp.birthdate) : calcStoredAge(spouseSp.age, spouseSp.ageYear) : linkedSpouseCustomer ? linkedSpouseCustomer.birthdate ? calcAge(linkedSpouseCustomer.birthdate) : calcStoredAge(linkedSpouseCustomer.age, linkedSpouseCustomer.ageYear) : null;
-  const spouseNode = spouseSp ? {
-    key: spouseSp.id,
-    name: spouseSp.name || '配偶者',
-    age: spouseAge,
-    roleLabel: '配偶者',
-    hasInsurance: spouseSp.hasInsurance || 'unknown',
-    editable: true,
-    suspectId: spouseSp.id
-  } : linkedSpouseCustomer ? {
-    key: 'linked-' + linkedSpouseCustomer.id,
-    name: linkedSpouseCustomer.name || '配偶者',
-    age: spouseAge,
-    roleLabel: '配偶者（顧客連携）',
-    hasInsurance: (linkedSpouseCustomer.contracts || []).length > 0 ? 'yes' : 'unknown',
-    editable: false
-  } : null;
-  const parents = suspects.filter(sp => sp.relation === '親').map(sp => ({
-    key: sp.id,
-    name: sp.name || '親',
-    age: sp.birthdate ? calcAge(sp.birthdate) : calcStoredAge(sp.age, sp.ageYear),
-    roleLabel: '親',
-    hasInsurance: sp.hasInsurance || 'unknown',
-    editable: true,
-    suspectId: sp.id
-  }));
-  const siblings = suspects.filter(sp => sp.relation === '兄弟姉妹').map(sp => ({
-    key: sp.id,
-    name: sp.name || '兄弟姉妹',
-    age: sp.birthdate ? calcAge(sp.birthdate) : calcStoredAge(sp.age, sp.ageYear),
-    roleLabel: '兄弟姉妹',
-    hasInsurance: sp.hasInsurance || 'unknown',
-    editable: true,
-    suspectId: sp.id
-  }));
-  const kids = suspects.filter(sp => sp.relation === '子供').map(sp => ({
-    key: sp.id,
-    name: sp.name || '子',
-    age: sp.birthdate ? calcAge(sp.birthdate) : calcStoredAge(sp.age, sp.ageYear),
-    roleLabel: '子ども',
-    hasInsurance: sp.hasInsurance || 'unknown',
-    editable: true,
-    suspectId: sp.id
-  }));
+  const spouseNode = spouseSp ? resolveMember(spouseSp, '配偶者') : null;
+  const grandparents = suspects.filter(sp => sp.relation === '祖父母').map(sp => resolveMember(sp, '祖父母'));
+  const parents = suspects.filter(sp => sp.relation === '親').map(sp => resolveMember(sp, '親'));
+  const siblings = suspects.filter(sp => sp.relation === '兄弟姉妹').map(sp => resolveMember(sp, '兄弟姉妹'));
+  const cousins = suspects.filter(sp => sp.relation === '従兄弟').map(sp => resolveMember(sp, '従兄弟'));
+  const kids = suspects.filter(sp => sp.relation === '子供').map(sp => resolveMember(sp, '子ども'));
   const others = suspects.filter(sp => ['友人', '職場', '知人', 'その他'].includes(sp.relation));
-  const midRow = [...siblings, selfNode, ...(spouseNode ? [spouseNode] : [])];
+  const midRow = [...siblings, ...cousins, selfNode, ...(spouseNode ? [spouseNode] : [])];
+  const ROW_GAP = 78;
   const rowsDef = [{
-    items: parents,
+    items: grandparents,
     y: 34
   }, {
+    items: parents,
+    y: 34 + ROW_GAP
+  }, {
     items: midRow,
-    y: 34 + 84
+    y: 34 + ROW_GAP * 2
   }, {
     items: kids,
-    y: 34 + 84 * 2
+    y: 34 + ROW_GAP * 3
   }];
   const BOX_W = 108,
     BOX_H = 50,
@@ -11969,7 +12005,7 @@ function NexusFamilyTree({
       y: r.y
     }));
   });
-  const svgH = 34 + 84 * 2 + BOX_H + 24;
+  const svgH = 34 + ROW_GAP * 3 + BOX_H + 24;
   const midX = positions => {
     if (!positions || positions.length === 0) return null;
     const xs = positions.map(p => p.x);
@@ -12024,9 +12060,10 @@ function NexusFamilyTree({
       }));
     });
   };
-  busConnect(midX(rowsDef[0].positions), rowsDef[0].y + BOX_H / 2, rowsDef[1].positions, 'p2m');
-  const selfPos = rowsDef[1].positions.find(p => p.member.key === 'self');
-  const spousePos = spouseNode ? rowsDef[1].positions.find(p => p.member.key === spouseNode.key) : null;
+  busConnect(midX(rowsDef[0].positions), rowsDef[0].y + BOX_H / 2, rowsDef[1].positions, 'gp2p');
+  busConnect(midX(rowsDef[1].positions), rowsDef[1].y + BOX_H / 2, rowsDef[2].positions, 'p2m');
+  const selfPos = rowsDef[2].positions.find(p => p.member.key === 'self');
+  const spousePos = spouseNode ? rowsDef[2].positions.find(p => p.member.key === spouseNode.key) : null;
   if (selfPos && spousePos) {
     const y = selfPos.y + BOX_H / 2;
     lines.push(/*#__PURE__*/React.createElement("line", {
@@ -12040,9 +12077,9 @@ function NexusFamilyTree({
       strokeDasharray: "4,3"
     }));
   }
-  if (rowsDef[2].positions.length) {
-    let originX = selfPos ? spousePos ? (selfPos.x + spousePos.x) / 2 : selfPos.x : midX(rowsDef[1].positions);
-    busConnect(originX, rowsDef[1].y + BOX_H / 2, rowsDef[2].positions, 'm2c');
+  if (rowsDef[3].positions.length) {
+    let originX = selfPos ? spousePos ? (selfPos.x + spousePos.x) / 2 : selfPos.x : midX(rowsDef[2].positions);
+    busConnect(originX, rowsDef[2].y + BOX_H / 2, rowsDef[3].positions, 'm2c');
   }
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -12133,12 +12170,12 @@ function NexusFamilyTree({
       color: 'var(--text-sub)',
       marginBottom: 6
     }
-  }, "家族の既契約状況（タップで切替）"), [...(spouseNode ? [spouseNode] : []), ...parents, ...siblings, ...kids].length === 0 ? /*#__PURE__*/React.createElement("div", {
+  }, "家族の既契約状況（タップで切替）"), [...(spouseNode ? [spouseNode] : []), ...grandparents, ...parents, ...siblings, ...cousins, ...kids].length === 0 ? /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12,
       color: 'var(--text-sub)'
     }
-  }, "同居家族が未登録です（顧客登録フォームの「サスペクト」から追加できます）") : [...(spouseNode ? [spouseNode] : []), ...parents, ...siblings, ...kids].map(m => /*#__PURE__*/React.createElement("div", {
+  }, "同居家族が未登録です（顧客登録フォームの「サスペクト」から追加できます）") : [...(spouseNode ? [spouseNode] : []), ...grandparents, ...parents, ...siblings, ...cousins, ...kids].map(m => /*#__PURE__*/React.createElement("div", {
     key: m.key,
     style: {
       display: 'flex',
@@ -12317,8 +12354,8 @@ function NexusPlanningSection({
   const computedAnnualSavings = totalIncome - totalExpense + eventIncome - eventExpense;
   const ageSelf = customer.birthdate ? calcAge(customer.birthdate) : calcStoredAge(customer.age, customer.ageYear);
   const spouseSp = (customer.suspects || []).find(sp => sp.relation === '配偶者');
-  const linkedSpouseCustomer = !spouseSp && customer.spouseCustomerId ? customers.find(x => x.id === customer.spouseCustomerId) : null;
-  const ageSpouse = spouseSp ? spouseSp.birthdate ? calcAge(spouseSp.birthdate) : calcStoredAge(spouseSp.age, spouseSp.ageYear) : linkedSpouseCustomer ? linkedSpouseCustomer.birthdate ? calcAge(linkedSpouseCustomer.birthdate) : calcStoredAge(linkedSpouseCustomer.age, linkedSpouseCustomer.ageYear) : null;
+  const linkedSpouseCustomer = spouseSp && spouseSp.linkedCustomerId ? customers.find(x => x.id === spouseSp.linkedCustomerId) : null;
+  const ageSpouse = linkedSpouseCustomer ? linkedSpouseCustomer.birthdate ? calcAge(linkedSpouseCustomer.birthdate) : calcStoredAge(linkedSpouseCustomer.age, linkedSpouseCustomer.ageYear) : spouseSp ? spouseSp.birthdate ? calcAge(spouseSp.birthdate) : calcStoredAge(spouseSp.age, spouseSp.ageYear) : null;
   const kids = (customer.suspects || []).filter(sp => sp.relation === '子供');
   const kidsSummary = kids.length ? kids.map(k => {
     const a = k.birthdate ? calcAge(k.birthdate) : calcStoredAge(k.age, k.ageYear);
