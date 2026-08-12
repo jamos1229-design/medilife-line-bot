@@ -11506,6 +11506,954 @@ function NexusProposalsSection({
   })));
 }
 
+// ── プランニング（LPシート・既契約・家系図・分析・印刷）※人脈タブの新サブタブ ──
+// 既存の顧客データ（contracts / suspects）をそのまま使い、二重入力にしない。
+const LP_CATEGORY_LABELS = {
+  education: '教育費',
+  housing: '住宅ローン・家賃',
+  retirement: '老後費用',
+  care: '介護費用'
+};
+const FAMILY_INSURANCE_COLOR = {
+  yes: '#3D7A5C',
+  no: '#A63D40',
+  unknown: '#9A9186'
+};
+const FAMILY_INSURANCE_LABEL = {
+  yes: '既契約あり',
+  no: '既契約なし',
+  unknown: '不明'
+};
+function nexusLpCategoryMonthly(cat) {
+  const total = parseFloat(cat && cat.total) || 0;
+  const years = parseFloat(cat && cat.years) || 0;
+  return years > 0 ? Math.round(total * 10000 / years / 12) : 0;
+}
+function NexusPlanningTimeline({
+  ageSelf,
+  ageSpouse
+}) {
+  const ticks = [];
+  for (let age = 0; age <= 100; age += 10) ticks.push(age);
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: 'relative',
+      height: 66,
+      margin: '18px 4px 6px'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      top: 30,
+      height: 2,
+      background: 'var(--border)'
+    }
+  }), ticks.map(age => /*#__PURE__*/React.createElement("div", {
+    key: age,
+    style: {
+      position: 'absolute',
+      top: 20,
+      left: age + '%',
+      transform: 'translateX(-50%)',
+      fontSize: 10,
+      color: 'var(--text-sub)',
+      textAlign: 'center',
+      width: 30
+    }
+  }, age)), ageSelf !== null && ageSelf >= 0 && ageSelf <= 100 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: 'absolute',
+      top: 38,
+      left: ageSelf + '%',
+      transform: 'translateX(-50%)',
+      background: 'var(--accent)',
+      color: '#fff',
+      fontSize: 10.5,
+      padding: '2px 7px',
+      borderRadius: 10,
+      whiteSpace: 'nowrap'
+    }
+  }, "本人 ", ageSelf, "歳"), ageSpouse !== null && ageSpouse >= 0 && ageSpouse <= 100 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: 'absolute',
+      top: 52,
+      left: ageSpouse + '%',
+      transform: 'translateX(-50%)',
+      background: '#B98A3D',
+      color: '#fff',
+      fontSize: 10.5,
+      padding: '2px 7px',
+      borderRadius: 10,
+      whiteSpace: 'nowrap'
+    }
+  }, "配偶者 ", ageSpouse, "歳"));
+}
+function NexusPlanningBarChart({
+  items,
+  unit
+}) {
+  if (items.length === 0) {
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        color: 'var(--text-sub)'
+      }
+    }, "データがありません");
+  }
+  const max = Math.max(...items.map(i => i.value), 1);
+  const sorted = [...items].sort((a, b) => b.value - a.value);
+  return /*#__PURE__*/React.createElement("div", null, sorted.map((item, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      marginBottom: 8,
+      fontSize: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 96,
+      flexShrink: 0,
+      color: 'var(--text-sub)',
+      textAlign: 'right',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
+    }
+  }, item.label), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      background: 'var(--bg)',
+      borderRadius: 4,
+      height: 14,
+      overflow: 'hidden'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      height: '100%',
+      width: Math.round(item.value / max * 100) + '%',
+      background: 'var(--accent)',
+      borderRadius: 4
+    }
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 84,
+      flexShrink: 0,
+      fontWeight: 700,
+      color: 'var(--accent)',
+      fontSize: 11.5
+    }
+  }, item.value.toLocaleString(), unit))));
+}
+
+// ── 家系図（本人・配偶者・親・兄弟姉妹・子ども。suspects から自動構成）──
+function NexusFamilyTree({
+  customer,
+  onSetInsurance
+}) {
+  const suspects = customer.suspects || [];
+  const ageSelf = customer.birthdate ? calcAge(customer.birthdate) : calcStoredAge(customer.age, customer.ageYear);
+  const selfNode = {
+    key: 'self',
+    name: customer.name || '本人',
+    age: ageSelf,
+    roleLabel: '本人',
+    hasInsurance: (customer.contracts || []).length > 0 ? 'yes' : 'unknown',
+    editable: false
+  };
+  const spouseSp = suspects.find(sp => sp.relation === '配偶者');
+  const spouseAge = spouseSp ? spouseSp.birthdate ? calcAge(spouseSp.birthdate) : calcStoredAge(spouseSp.age, spouseSp.ageYear) : null;
+  const spouseNode = spouseSp ? {
+    key: spouseSp.id,
+    name: spouseSp.name || '配偶者',
+    age: spouseAge,
+    roleLabel: '配偶者',
+    hasInsurance: spouseSp.hasInsurance || 'unknown',
+    editable: true,
+    suspectId: spouseSp.id
+  } : null;
+  const parents = suspects.filter(sp => sp.relation === '親').map(sp => ({
+    key: sp.id,
+    name: sp.name || '親',
+    age: sp.birthdate ? calcAge(sp.birthdate) : calcStoredAge(sp.age, sp.ageYear),
+    roleLabel: '親',
+    hasInsurance: sp.hasInsurance || 'unknown',
+    editable: true,
+    suspectId: sp.id
+  }));
+  const siblings = suspects.filter(sp => sp.relation === '兄弟姉妹').map(sp => ({
+    key: sp.id,
+    name: sp.name || '兄弟姉妹',
+    age: sp.birthdate ? calcAge(sp.birthdate) : calcStoredAge(sp.age, sp.ageYear),
+    roleLabel: '兄弟姉妹',
+    hasInsurance: sp.hasInsurance || 'unknown',
+    editable: true,
+    suspectId: sp.id
+  }));
+  const kids = suspects.filter(sp => sp.relation === '子供').map(sp => ({
+    key: sp.id,
+    name: sp.name || '子',
+    age: sp.birthdate ? calcAge(sp.birthdate) : calcStoredAge(sp.age, sp.ageYear),
+    roleLabel: '子ども',
+    hasInsurance: sp.hasInsurance || 'unknown',
+    editable: true,
+    suspectId: sp.id
+  }));
+  const others = suspects.filter(sp => ['友人', '職場', '知人', 'その他'].includes(sp.relation));
+  const midRow = [...siblings, selfNode, ...(spouseNode ? [spouseNode] : [])];
+  const rowsDef = [{
+    items: parents,
+    y: 34
+  }, {
+    items: midRow,
+    y: 34 + 84
+  }, {
+    items: kids,
+    y: 34 + 84 * 2
+  }];
+  const BOX_W = 108,
+    BOX_H = 50,
+    MIN_SPACING = 128,
+    PAD = 40;
+  const maxCount = Math.max(1, ...rowsDef.map(r => r.items.length));
+  const totalWidth = Math.max(360, maxCount * MIN_SPACING + PAD * 2);
+  rowsDef.forEach(r => {
+    const n = r.items.length;
+    if (n === 0) {
+      r.positions = [];
+      return;
+    }
+    const spacing = totalWidth / (n + 1);
+    r.positions = r.items.map((m, i) => ({
+      member: m,
+      x: spacing * (i + 1),
+      y: r.y
+    }));
+  });
+  const svgH = 34 + 84 * 2 + BOX_H + 24;
+  const midX = positions => {
+    if (!positions || positions.length === 0) return null;
+    const xs = positions.map(p => p.x);
+    return (Math.min(...xs) + Math.max(...xs)) / 2;
+  };
+  const lines = [];
+  const busConnect = (fromX, fromY, positions, keyPrefix) => {
+    if (!positions || positions.length === 0 || fromX === null) return;
+    const busY = fromY + (positions[0].y - fromY) / 2;
+    lines.push(/*#__PURE__*/React.createElement("line", {
+      key: keyPrefix + '-v0',
+      x1: fromX,
+      y1: fromY,
+      x2: fromX,
+      y2: busY,
+      stroke: "var(--accent)",
+      strokeWidth: "1.4"
+    }));
+    const xs = positions.map(p => p.x);
+    const minX = Math.min(...xs),
+      maxX = Math.max(...xs);
+    if (positions.length > 1) {
+      lines.push(/*#__PURE__*/React.createElement("line", {
+        key: keyPrefix + '-h',
+        x1: minX,
+        y1: busY,
+        x2: maxX,
+        y2: busY,
+        stroke: "var(--accent)",
+        strokeWidth: "1.4"
+      }));
+    } else {
+      lines.push(/*#__PURE__*/React.createElement("line", {
+        key: keyPrefix + '-h1',
+        x1: fromX,
+        y1: busY,
+        x2: xs[0],
+        y2: busY,
+        stroke: "var(--accent)",
+        strokeWidth: "1.4"
+      }));
+    }
+    positions.forEach((p, i) => {
+      lines.push(/*#__PURE__*/React.createElement("line", {
+        key: keyPrefix + '-v-' + i,
+        x1: p.x,
+        y1: busY,
+        x2: p.x,
+        y2: p.y,
+        stroke: "var(--accent)",
+        strokeWidth: "1.4"
+      }));
+    });
+  };
+  busConnect(midX(rowsDef[0].positions), rowsDef[0].y + BOX_H / 2, rowsDef[1].positions, 'p2m');
+  const selfPos = rowsDef[1].positions.find(p => p.member.key === 'self');
+  const spousePos = spouseNode ? rowsDef[1].positions.find(p => p.member.key === spouseNode.key) : null;
+  if (selfPos && spousePos) {
+    const y = selfPos.y + BOX_H / 2;
+    lines.push(/*#__PURE__*/React.createElement("line", {
+      key: "marriage",
+      x1: selfPos.x + BOX_W / 2,
+      y1: y,
+      x2: spousePos.x - BOX_W / 2,
+      y2: y,
+      stroke: "var(--accent)",
+      strokeWidth: "1.4",
+      strokeDasharray: "4,3"
+    }));
+  }
+  if (rowsDef[2].positions.length) {
+    let originX = selfPos ? spousePos ? (selfPos.x + spousePos.x) / 2 : selfPos.x : midX(rowsDef[1].positions);
+    busConnect(originX, rowsDef[1].y + BOX_H / 2, rowsDef[2].positions, 'm2c');
+  }
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 12,
+      flexWrap: 'wrap',
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      marginBottom: 10
+    }
+  }, ['yes', 'no', 'unknown'].map(k => /*#__PURE__*/React.createElement("span", {
+    key: k,
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 4
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: 8,
+      height: 8,
+      borderRadius: '50%',
+      background: FAMILY_INSURANCE_COLOR[k],
+      display: 'inline-block'
+    }
+  }), FAMILY_INSURANCE_LABEL[k]))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      overflowX: 'auto',
+      background: 'var(--bg)',
+      borderRadius: 10,
+      padding: 10
+    }
+  }, /*#__PURE__*/React.createElement("svg", {
+    width: Math.max(totalWidth, 360),
+    height: svgH,
+    viewBox: `0 0 ${totalWidth} ${svgH}`,
+    style: {
+      display: 'block'
+    }
+  }, lines, rowsDef.flatMap(r => (r.positions || []).map(p => /*#__PURE__*/React.createElement("g", {
+    key: p.member.key
+  }, /*#__PURE__*/React.createElement("rect", {
+    x: p.x - BOX_W / 2,
+    y: p.y - BOX_H / 2,
+    width: BOX_W,
+    height: BOX_H,
+    rx: 8,
+    fill: "var(--card-bg)",
+    stroke: FAMILY_INSURANCE_COLOR[p.member.hasInsurance],
+    strokeWidth: "2.5"
+  }), /*#__PURE__*/React.createElement("text", {
+    x: p.x,
+    y: p.y - 6,
+    textAnchor: "middle",
+    fontSize: "11.5",
+    fontWeight: "700",
+    fill: "var(--text)"
+  }, p.member.name), /*#__PURE__*/React.createElement("text", {
+    x: p.x,
+    y: p.y + 11,
+    textAnchor: "middle",
+    fontSize: "9.5",
+    fill: "var(--text-sub)"
+  }, p.member.roleLabel, p.member.age !== null && p.member.age !== undefined ? `／${p.member.age}歳` : '')))))), others.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      flexWrap: 'wrap',
+      marginTop: 10
+    }
+  }, others.map(sp => /*#__PURE__*/React.createElement("span", {
+    key: sp.id,
+    style: {
+      background: 'var(--card-bg)',
+      border: '1px solid var(--border)',
+      borderRadius: 16,
+      padding: '5px 12px',
+      fontSize: 11.5
+    }
+  }, sp.name || sp.relation, "（", sp.relation, "）"))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 700,
+      color: 'var(--text-sub)',
+      marginBottom: 6
+    }
+  }, "家族の既契約状況（タップで切替）"), [...(spouseNode ? [spouseNode] : []), ...parents, ...siblings, ...kids].length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text-sub)'
+    }
+  }, "同居家族が未登録です（顧客登録フォームの「サスペクト」から追加できます）") : [...(spouseNode ? [spouseNode] : []), ...parents, ...siblings, ...kids].map(m => /*#__PURE__*/React.createElement("div", {
+    key: m.key,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      padding: '6px 0',
+      borderBottom: '1px solid var(--border)'
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      flex: 1,
+      fontSize: 12.5
+    }
+  }, m.name, "（", m.roleLabel, "）"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group",
+    style: {
+      flexShrink: 0
+    }
+  }, ['yes', 'no', 'unknown'].map(k => /*#__PURE__*/React.createElement("button", {
+    key: k,
+    type: "button",
+    className: `toggle-btn ${m.hasInsurance === k ? 'sel' : ''}`,
+    style: {
+      padding: '5px 9px',
+      fontSize: 11
+    },
+    onClick: () => onSetInsurance(m.suspectId, k)
+  }, FAMILY_INSURANCE_LABEL[k])))))));
+}
+function NexusPlanningSection({
+  customers,
+  setCustomers
+}) {
+  const [selectedId, setSelectedId] = useState(customers[0] && customers[0].id || null);
+  const customer = customers.find(c => c.id === selectedId) || null;
+  const updateCustomer = patch => {
+    setCustomers(customers.map(c => c.id === selectedId ? {
+      ...c,
+      ...patch
+    } : c));
+  };
+  const updateLp = patch => {
+    updateCustomer({
+      lp: {
+        ...(customer.lp || {}),
+        ...patch
+      }
+    });
+  };
+  const updateLpCategory = (key, patch) => {
+    const categories = {
+      ...(customer.lp && customer.lp.categories || {})
+    };
+    categories[key] = {
+      ...(categories[key] || {}),
+      ...patch
+    };
+    updateLp({
+      categories
+    });
+  };
+  const setSuspectInsurance = (suspectId, val) => {
+    const suspects = (customer.suspects || []).map(sp => sp.id === suspectId ? {
+      ...sp,
+      hasInsurance: val
+    } : sp);
+    updateCustomer({
+      suspects
+    });
+  };
+  if (customers.length === 0) {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "card"
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 13,
+        color: 'var(--text-sub)'
+      }
+    }, "まず「顧客一覧」から顧客を登録してください。"));
+  }
+  if (!customer) {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "card"
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 13,
+        color: 'var(--text-sub)'
+      }
+    }, "顧客を選択してください。"));
+  }
+  const lp = customer.lp || {};
+  const categories = lp.categories || {};
+  const ageSelf = customer.birthdate ? calcAge(customer.birthdate) : calcStoredAge(customer.age, customer.ageYear);
+  const spouseSp = (customer.suspects || []).find(sp => sp.relation === '配偶者');
+  const ageSpouse = spouseSp ? spouseSp.birthdate ? calcAge(spouseSp.birthdate) : calcStoredAge(spouseSp.age, spouseSp.ageYear) : null;
+  const kids = (customer.suspects || []).filter(sp => sp.relation === '子供');
+  const kidsSummary = kids.length ? kids.map(k => {
+    const a = k.birthdate ? calcAge(k.birthdate) : calcStoredAge(k.age, k.ageYear);
+    return `${k.name || '子'}${a !== null ? a + '歳' : ''}`;
+  }).join('、') : '未登録';
+  const monthlyTarget = Object.keys(LP_CATEGORY_LABELS).reduce((sum, key) => sum + nexusLpCategoryMonthly(categories[key]), 0);
+  const capacity = parseFloat(lp.savingsCapacity) || 0;
+  const diff = capacity - monthlyTarget;
+  const contracts = customer.contracts || [];
+  const companyChart = (() => {
+    const byCompany = {};
+    contracts.forEach(r => {
+      const c = (r.company || '').trim() || '未記入';
+      const v = parseFloat(r.premium) || 0;
+      if (v > 0) byCompany[c] = (byCompany[c] || 0) + v;
+    });
+    return Object.entries(byCompany).map(([label, value]) => ({
+      label,
+      value
+    }));
+  })();
+  const typeChart = (() => {
+    const byType = {};
+    contracts.forEach(r => {
+      const t = (r.type || '').trim() || '未記入';
+      byType[t] = (byType[t] || 0) + 1;
+    });
+    return Object.entries(byType).map(([label, value]) => ({
+      label,
+      value
+    }));
+  })();
+  const handlePrint = () => {
+    const rowsHtml = list => list.length ? list.map((r, i) => `
+      <tr><td>${i + 1}</td><td>${escapeHtmlForPrint(r.type)}</td><td>${escapeHtmlForPrint(r.company)}</td><td>${escapeHtmlForPrint(r.policyNum)}</td>
+      <td>${escapeHtmlForPrint(r.date)}</td><td>${escapeHtmlForPrint(r.termNote || r.termEnd)}</td><td>${escapeHtmlForPrint(r.paymentTermNote || r.paymentTermEnd)}</td>
+      <td>${escapeHtmlForPrint(r.coverageAmount)}</td><td>${escapeHtmlForPrint(r.premium)}${r.paymentCycle || ''}</td></tr>`).join('') : '<tr><td colspan="9">登録なし</td></tr>';
+    const famRows = (customer.suspects || []).length ? (customer.suspects || []).map(m => `
+      <tr><td>${escapeHtmlForPrint(m.name)}</td><td>${escapeHtmlForPrint(m.relation)}</td><td>${m.birthdate ? calcAge(m.birthdate) : calcStoredAge(m.age, m.ageYear) || ''}</td>
+      <td>${FAMILY_INSURANCE_LABEL[m.hasInsurance || 'unknown']}</td><td>${escapeHtmlForPrint(m.memo)}</td></tr>`).join('') : '<tr><td colspan="5">登録なし</td></tr>';
+    const html = `<!doctype html><html lang="ja"><head><meta charset="UTF-8"><title>${escapeHtmlForPrint(customer.name)} 様　プランニング資料</title>
+      <style>
+        body{font-family:"Hiragino Sans","Yu Gothic",sans-serif;color:#22303f;padding:24px;}
+        h2{color:#1c2b3a;} h3{color:#1c2b3a;border-bottom:2px solid #b98a3d;padding-bottom:4px;margin-top:24px;}
+        table{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:10px;}
+        th,td{border:1px solid #999;padding:5px;text-align:center;}
+        th{background:#eee;}
+      </style></head><body>
+      <h2>${escapeHtmlForPrint(customer.name)} 様　プランニング資料</h2>
+      <p style="font-size:11px;color:#666;">出力日：${new Date().toLocaleDateString('ja-JP')}</p>
+      <h3>既契約一覧</h3>
+      <table><tr><th>No</th><th>保険種類</th><th>保険会社</th><th>証券番号</th><th>契約日</th><th>保険期間</th><th>払込期間</th><th>保険金額</th><th>保険料</th></tr>${rowsHtml(contracts)}</table>
+      <h3>LPシート要約</h3>
+      <table>
+        <tr><th>本人年齢</th><td>${ageSelf !== null ? ageSelf + '歳' : ''}</td><th>配偶者年齢</th><td>${ageSpouse !== null ? ageSpouse + '歳' : ''}</td></tr>
+        <tr><th>お子様</th><td colspan="3">${escapeHtmlForPrint(kidsSummary)}</td></tr>
+        <tr><th>年間収入・預貯金</th><td colspan="3">${escapeHtmlForPrint(lp.income)}</td></tr>
+        <tr><th>負債（ローン）</th><td colspan="3">${escapeHtmlForPrint(lp.debt)}</td></tr>
+        <tr><th>理想月間貯蓄額</th><td colspan="3">${monthlyTarget.toLocaleString()}円／月</td></tr>
+      </table>
+      <h3>家族構成</h3>
+      <table><tr><th>お名前</th><th>続柄</th><th>年齢</th><th>既契約</th><th>メモ</th></tr>${famRows}</table>
+      </body></html>`;
+    const w = window.open('', '_blank');
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+    setTimeout(() => w.print(), 300);
+  };
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "対象顧客"), /*#__PURE__*/React.createElement("select", {
+    className: "form-input",
+    value: selectedId || '',
+    onChange: e => setSelectedId(e.target.value)
+  }, customers.map(c => /*#__PURE__*/React.createElement("option", {
+    key: c.id,
+    value: c.id
+  }, c.customerType === '法人' ? c.corporateName : c.name))))), /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "LPシート"), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 16,
+      flexWrap: 'wrap',
+      fontSize: 12.5,
+      marginBottom: 4
+    }
+  }, /*#__PURE__*/React.createElement("div", null, "本人年齢：", /*#__PURE__*/React.createElement("b", null, ageSelf !== null ? ageSelf + '歳' : '未登録')), /*#__PURE__*/React.createElement("div", null, "配偶者年齢：", /*#__PURE__*/React.createElement("b", null, ageSpouse !== null ? ageSpouse + '歳' : '未登録')), /*#__PURE__*/React.createElement("div", null, "お子様：", /*#__PURE__*/React.createElement("b", null, kidsSummary))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--text-sub)'
+    }
+  }, "※ 年齢・お子様は顧客登録フォームの生年月日・サスペクト登録から自動反映されます"), /*#__PURE__*/React.createElement(NexusPlanningTimeline, {
+    ageSelf: ageSelf,
+    ageSpouse: ageSpouse
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "form-row"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "年間収入・預貯金（メモ）"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    placeholder: "例：年収800万円／預貯金500万円",
+    value: lp.income || '',
+    onChange: e => updateLp({
+      income: e.target.value
+    })
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "負債（ローン）"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    placeholder: "例：住宅ローン残債2,800万円",
+    value: lp.debt || '',
+    onChange: e => updateLp({
+      debt: e.target.value
+    })
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "月間貯蓄可能額"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
+    value: lp.savingsCapacity || '',
+    onChange: e => updateLp({
+      savingsCapacity: e.target.value
+    }),
+    placeholder: "例：80000"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "収支メモ"), /*#__PURE__*/React.createElement(NexusAutoGrowTextarea, {
+    value: lp.memo || '',
+    onChange: e => updateLp({
+      memo: e.target.value
+    }),
+    placeholder: "面談中に聞き取ったことを自由記入"
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 13,
+      color: 'var(--text)',
+      marginBottom: 10
+    }
+  }, "ライフイベント費用（4区分）"), Object.keys(LP_CATEGORY_LABELS).map(key => {
+    const cat = categories[key] || {};
+    const monthly = nexusLpCategoryMonthly(cat);
+    return /*#__PURE__*/React.createElement("div", {
+      key: key,
+      style: {
+        border: '1px solid var(--border)',
+        borderRadius: 8,
+        padding: 10,
+        marginBottom: 8,
+        background: 'var(--bg)'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        fontSize: 12.5,
+        color: 'var(--text)',
+        marginBottom: 6
+      }
+    }, LP_CATEGORY_LABELS[key]), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        flexWrap: 'wrap',
+        fontSize: 12
+      }
+    }, "合計", /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      className: "form-input",
+      style: {
+        width: 90
+      },
+      value: cat.total || '',
+      onChange: e => updateLpCategory(key, {
+        total: e.target.value
+      })
+    }), "万円 ÷", /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      className: "form-input",
+      style: {
+        width: 70
+      },
+      value: cat.years || '',
+      onChange: e => updateLpCategory(key, {
+        years: e.target.value
+      })
+    }), "年 ÷12ヶ月＝", /*#__PURE__*/React.createElement("b", {
+      style: {
+        color: 'var(--accent)'
+      }
+    }, monthly.toLocaleString(), "円／月")));
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      marginTop: 4
+    }
+  }, "理想月間貯蓄額（4区分合計）：", /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: 'var(--accent)'
+    }
+  }, monthlyTarget.toLocaleString(), "円／月"))), /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "既契約一覧"), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, contracts.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--text-sub)'
+    }
+  }, "既契約が未登録です（顧客詳細の編集から追加できます）") : /*#__PURE__*/React.createElement("div", {
+    style: {
+      overflowX: 'auto'
+    }
+  }, /*#__PURE__*/React.createElement("table", {
+    style: {
+      width: '100%',
+      borderCollapse: 'collapse',
+      fontSize: 11.5
+    }
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
+    style: {
+      background: 'var(--navy, #1c2b3a)'
+    }
+  }, ['保険種類', '保険会社', '証券番号', '契約日', '保険期間', '払込期間', '保険金額', '保険料'].map(h => /*#__PURE__*/React.createElement("th", {
+    key: h,
+    style: {
+      border: '1px solid var(--border)',
+      padding: '5px 4px',
+      color: '#fff',
+      background: 'var(--accent)',
+      fontWeight: 500,
+      fontSize: 10.5
+    }
+  }, h)))), /*#__PURE__*/React.createElement("tbody", null, contracts.map((r, i) => /*#__PURE__*/React.createElement("tr", {
+    key: i
+  }, /*#__PURE__*/React.createElement("td", {
+    style: {
+      border: '1px solid var(--border)',
+      padding: '5px 4px',
+      textAlign: 'center'
+    }
+  }, r.type || '—'), /*#__PURE__*/React.createElement("td", {
+    style: {
+      border: '1px solid var(--border)',
+      padding: '5px 4px',
+      textAlign: 'center'
+    }
+  }, r.company || '—'), /*#__PURE__*/React.createElement("td", {
+    style: {
+      border: '1px solid var(--border)',
+      padding: '5px 4px',
+      textAlign: 'center'
+    }
+  }, r.policyNum || '—'), /*#__PURE__*/React.createElement("td", {
+    style: {
+      border: '1px solid var(--border)',
+      padding: '5px 4px',
+      textAlign: 'center'
+    }
+  }, r.date || '—'), /*#__PURE__*/React.createElement("td", {
+    style: {
+      border: '1px solid var(--border)',
+      padding: '5px 4px',
+      textAlign: 'center'
+    }
+  }, r.termNote || r.termEnd || '—'), /*#__PURE__*/React.createElement("td", {
+    style: {
+      border: '1px solid var(--border)',
+      padding: '5px 4px',
+      textAlign: 'center'
+    }
+  }, r.paymentTermNote || r.paymentTermEnd || '—'), /*#__PURE__*/React.createElement("td", {
+    style: {
+      border: '1px solid var(--border)',
+      padding: '5px 4px',
+      textAlign: 'center'
+    }
+  }, r.coverageAmount ? Number(r.coverageAmount).toLocaleString() + '円' : '—'), /*#__PURE__*/React.createElement("td", {
+    style: {
+      border: '1px solid var(--border)',
+      padding: '5px 4px',
+      textAlign: 'center'
+    }
+  }, r.premium ? Number(r.premium).toLocaleString() + '円' : '—', r.paymentCycle || ''))))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--text-sub)',
+      marginTop: 6
+    }
+  }, "※ 編集は顧客詳細の契約編集から行ってください"))), /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "家系図"), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement(NexusFamilyTree, {
+    customer: customer,
+    onSetInsurance: setSuspectInsurance
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "分析"), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 12.5,
+      marginBottom: 8
+    }
+  }, "保険会社別 月払保険料"), /*#__PURE__*/React.createElement(NexusPlanningBarChart, {
+    items: companyChart,
+    unit: "円"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 12.5,
+      marginBottom: 8
+    }
+  }, "保険種類別 契約件数"), /*#__PURE__*/React.createElement(NexusPlanningBarChart, {
+    items: typeChart,
+    unit: "件"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 12.5,
+      marginBottom: 8
+    }
+  }, "貯蓄目標 vs 貯蓄可能額"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      marginBottom: 6,
+      fontSize: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 110,
+      flexShrink: 0,
+      color: 'var(--text-sub)',
+      textAlign: 'right'
+    }
+  }, "理想月間貯蓄額"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      background: 'var(--bg)',
+      borderRadius: 4,
+      height: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      height: '100%',
+      width: Math.round(monthlyTarget / Math.max(monthlyTarget, capacity, 1) * 100) + '%',
+      background: '#B98A3D',
+      borderRadius: 4
+    }
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 90,
+      flexShrink: 0,
+      fontWeight: 700,
+      fontSize: 11.5
+    }
+  }, monthlyTarget.toLocaleString(), "円")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      marginBottom: 6,
+      fontSize: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 110,
+      flexShrink: 0,
+      color: 'var(--text-sub)',
+      textAlign: 'right'
+    }
+  }, "貯蓄可能額"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      background: 'var(--bg)',
+      borderRadius: 4,
+      height: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      height: '100%',
+      width: Math.round(capacity / Math.max(monthlyTarget, capacity, 1) * 100) + '%',
+      background: capacity >= monthlyTarget ? 'var(--success)' : 'var(--danger)',
+      borderRadius: 4
+    }
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 90,
+      flexShrink: 0,
+      fontWeight: 700,
+      fontSize: 11.5
+    }
+  }, capacity.toLocaleString(), "円")), monthlyTarget === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text-sub)'
+    }
+  }, "上のLPシートでライフイベント費用を入力すると目標額が計算されます") : diff >= 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 13,
+      color: 'var(--success)'
+    }
+  }, "目標達成中：月間 ", diff.toLocaleString(), "円の余力があります") : /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 13,
+      color: 'var(--danger)'
+    }
+  }, "不足：月間 ", Math.abs(diff).toLocaleString(), "円足りません")), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    onClick: handlePrint
+  }, "🖨️ プランニング資料を印刷／PDF保存"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--text-sub)',
+      marginTop: 8
+    }
+  }, "印刷ダイアログで「PDFとして保存」を選べば、コンビニ印刷（ネットプリント／PrintSmash）にも使えます")));
+}
+function escapeHtmlForPrint(v) {
+  if (v === undefined || v === null) return '';
+  return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 // ── 人脈ネクサス タブ本体（顧客一覧・提案候補・つながり・サービス・理念）──
 function NexusTab({
   customers,
@@ -11563,6 +12511,9 @@ function NexusTab({
   }, {
     key: 'services',
     label: 'サービス'
+  }, {
+    key: 'planning',
+    label: 'プランニング'
   }, {
     key: 'mission',
     label: '理念'
@@ -11627,6 +12578,9 @@ function NexusTab({
     services: services,
     setServices: setServices,
     setServiceLinks: setServiceLinks
+  }), subTab === 'planning' && /*#__PURE__*/React.createElement(NexusPlanningSection, {
+    customers: customers,
+    setCustomers: setCustomers
   }), subTab === 'mission' && /*#__PURE__*/React.createElement(NexusMissionSection, {
     mission: mission,
     setMission: setMission
