@@ -12550,6 +12550,8 @@ function nexusPurposeSummary(contracts) {
     byPurpose[p] = 0;
   });
   let unclassified = 0;
+  let deathTotal = 0;
+  let medicalTotal = 0;
   contracts.forEach(ct => {
     const amt = parseFloat(ct.coverageAmount) || 0;
     if (!amt) return;
@@ -12564,9 +12566,13 @@ function nexusPurposeSummary(contracts) {
     } else {
       unclassified += amt;
     }
+    // 死亡保険金額合計・医療保険金額合計は「契約1件につき1回」だけ計上する。
+    // 例えば法人保険で「死亡保障」と「事業保障・退職金」を同時にタグ付けした場合、
+    // byPurposeの合計をそのまま足すと同じ保険金額が2回計上されてしまうため、
+    // 契約単位でグループに該当するかどうかを判定してから1回だけ加算する。
+    if (purposes.some(p => CONTRACT_PURPOSE_DEATH_GROUP.includes(p))) deathTotal += amt;
+    if (purposes.some(p => CONTRACT_PURPOSE_MEDICAL_GROUP.includes(p))) medicalTotal += amt;
   });
-  const deathTotal = CONTRACT_PURPOSE_DEATH_GROUP.reduce((s, p) => s + (byPurpose[p] || 0), 0);
-  const medicalTotal = CONTRACT_PURPOSE_MEDICAL_GROUP.reduce((s, p) => s + (byPurpose[p] || 0), 0);
   return {
     byPurpose,
     deathTotal,
