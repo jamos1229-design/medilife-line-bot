@@ -2610,7 +2610,9 @@ function CustomerForm({
 // 結果一覧はdocument.bodyへポータル描画するボトムシート形式。
 // フォームのスクロール・仮想キーボードの影響を受けず、常に確実にタップできるようにするため。
 function nexusCustomerDisplayName(c) {
-  return c && (c.name || c.corporateName) || '(名称未設定)';
+  if (!c) return '(名称未設定)';
+  // 法人は「会社名」を優先表示（name欄は担当者名のため、会社名で検索できなくなるのを防ぐ）
+  return (c.customerType === '法人' ? c.corporateName || c.name : c.name || c.corporateName) || '(名称未設定)';
 }
 function CustomerSelect({
   label,
@@ -12006,6 +12008,20 @@ function nexusContractPremiumJpy(ct) {
   };
 }
 
+// 一覧・印刷用の保険料表示テキスト。外貨建てはドルの生数字だけだと分かりづらいため、
+// 円換算額をメインに、元のドル額を括弧で添える（例：5,000,000円（$31,306.74））。
+function nexusContractPremiumText(ct) {
+  const raw = parseFloat(ct.premium) || 0;
+  if (!raw) return '';
+  if ((ct.currency || '円') === '円') return raw.toLocaleString() + '円';
+  const {
+    amount,
+    convertible
+  } = nexusContractPremiumJpy(ct);
+  if (convertible) return amount.toLocaleString() + '円（$' + raw.toLocaleString() + '）';
+  return '$' + raw.toLocaleString() + '（円換算未設定）';
+}
+
 // ── ポートフォリオ（通貨別・資産クラス別）集計 ──
 // 保険（貯蓄性＝目的「年金・貯蓄型」）は既存の契約データから自動算出。
 // 投資信託・株式や不動産等は保険契約に存在しないため、手入力分（portfolioInputs）を加算する。
@@ -13206,7 +13222,7 @@ function NexusPlanningSection({
       <td>${escapeHtmlForPrint(r.date)}</td><td>${escapeHtmlForPrint(r.termNote || r.termEnd)}</td><td>${escapeHtmlForPrint(r.paymentTermNote || r.paymentTermEnd)}</td>
       <td>${r.coverageAmount ? Number(r.coverageAmount).toLocaleString() + (r.currency || '円') : ''}</td>
       <td>${r.currentSurrenderValue ? Number(r.currentSurrenderValue).toLocaleString() + (r.currency || '円') : ''}</td>
-      <td>${r.premium ? Number(r.premium).toLocaleString() + (r.currency || '円') : ''}${r.paymentCycle || ''}</td></tr>`).join('') : '<tr><td colspan="11">登録なし</td></tr>';
+      <td>${escapeHtmlForPrint(nexusContractPremiumText(r))}${r.paymentCycle || ''}</td></tr>`).join('') : '<tr><td colspan="11">登録なし</td></tr>';
     const famRows = (customer.suspects || []).length ? (customer.suspects || []).map(m => {
       const linked = m.linkedCustomerId ? customers.find(x => x.id === m.linkedCustomerId) : null;
       const fName = linked ? linked.name || linked.corporateName || '(名称未設定)' : m.name;
@@ -14615,7 +14631,7 @@ function NexusPlanningSection({
       padding: '5px 4px',
       textAlign: 'center'
     }
-  }, r.premium ? Number(r.premium).toLocaleString() + (r.currency || '円') : '—', r.paymentCycle || ''))))), /*#__PURE__*/React.createElement("div", {
+  }, nexusContractPremiumText(r) || '—', r.paymentCycle || ''))))), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 10.5,
       color: 'var(--text-sub)',
@@ -14691,7 +14707,7 @@ function NexusPlanningSection({
       padding: '5px 4px',
       textAlign: 'center'
     }
-  }, r.premium ? Number(r.premium).toLocaleString() + (r.currency || '円') : '—', r.paymentCycle || '')))))), /*#__PURE__*/React.createElement(NexusPurposeSummaryTable, {
+  }, nexusContractPremiumText(r) || '—', r.paymentCycle || '')))))), /*#__PURE__*/React.createElement(NexusPurposeSummaryTable, {
     title: "保障集計（法人）",
     contracts: corpContracts
   }))), /*#__PURE__*/React.createElement("div", {
