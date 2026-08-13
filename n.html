@@ -12216,7 +12216,7 @@ function NexusPlanningTimeline({
       color: 'var(--accent)',
       marginTop: 6
     }
-  }, "👇 下の「ライフイベント費用」で各区分の「開始年齢」を入力すると、ここに色付きブロックが表示されます"));
+  }, "👇 下の「ライフイベント費用」で各区分の「開始年齢」と「継続年数」を両方入力すると、ここに色付きブロックが表示されます"));
 }
 
 // 印刷でも見えるよう、画像なしでCSSだけで組む簡易タイムライン
@@ -12311,13 +12311,12 @@ function nexusPurposeSummary(contracts) {
     byPurpose[p] = 0;
   });
   let unclassified = 0;
-  let deathTotal = 0,
-    medicalTotal = 0;
   contracts.forEach(ct => {
     const amt = parseFloat(ct.coverageAmount) || 0;
     if (!amt) return;
-    // 目的は複数選択可（例：変額保険が積立と死亡保障を兼ねる場合）。
-    // 該当する目的すべてに同額を計上する（death/medical等は別区分の集計のため、これで正しい）。
+    // 目的は複数選択可（例：変額保険が積立と死亡保障を兼ねる場合、終身保険が死亡保障と貯蓄性を兼ねる場合など）。
+    // どの目的が「実際の保障額」を表すかは商品次第でアプリ側からは判断できないため、
+    // タグ付けされた目的をそのまま信用して計上する（自動で除外しない）。
     const purposes = nexusContractPurposes(ct).filter(p => byPurpose[p] !== undefined);
     if (purposes.length > 0) {
       purposes.forEach(p => {
@@ -12326,13 +12325,9 @@ function nexusPurposeSummary(contracts) {
     } else {
       unclassified += amt;
     }
-    // 年金・貯蓄型の保険金額は「将来、一定の年齢になってから受け取る年金額」であり、
-    // 今すぐの死亡・医療保障額ではない。他の目的も併せて選択されていても、
-    // 死亡保険金額合計・医療保険金額合計には計上しない。
-    if (purposes.includes('年金・貯蓄型')) return;
-    if (purposes.some(p => CONTRACT_PURPOSE_DEATH_GROUP.includes(p))) deathTotal += amt;
-    if (purposes.some(p => CONTRACT_PURPOSE_MEDICAL_GROUP.includes(p))) medicalTotal += amt;
   });
+  const deathTotal = CONTRACT_PURPOSE_DEATH_GROUP.reduce((s, p) => s + (byPurpose[p] || 0), 0);
+  const medicalTotal = CONTRACT_PURPOSE_MEDICAL_GROUP.reduce((s, p) => s + (byPurpose[p] || 0), 0);
   return {
     byPurpose,
     deathTotal,
@@ -12440,7 +12435,7 @@ function NexusPurposeSummaryTable({
       color: 'var(--text-sub)',
       marginTop: 6
     }
-  }, "※ 年金・貯蓄型（", byPurpose['年金・貯蓄型'].toLocaleString(), "円）は将来の年金受取額のため、死亡・医療保険金額合計には含めていません"));
+  }, "※ 年金・貯蓄型（", byPurpose['年金・貯蓄型'].toLocaleString(), "円）は、その契約に死亡保障・医療保障などの目的も併せてタグ付けされている場合のみ、死亡・医療保険金額合計に含まれます。年金原資の額をそのまま死亡保険金として計上したくない場合は、その契約に「死亡保障」等のタグを付けないでください。"));
 }
 
 // ── 家系図（本人・配偶者・親・兄弟姉妹・子ども。suspects から自動構成）──
@@ -13298,7 +13293,7 @@ function NexusPlanningSection({
     if (timelineCats.every(c => c.startAge === null)) {
       ws.mergeCells(row, 1, row, totalCols);
       const noteCell = ws.getCell(row, 1);
-      noteCell.value = '※ 各区分の「開始年齢」を入力すると、年齢タイムラインに色付きブロックが表示されます（プランニング画面の「ライフイベント費用」から入力）';
+      noteCell.value = '※ 各区分の「開始年齢」と「継続年数」を両方入力すると、年齢タイムラインに色付きブロックが表示されます（プランニング画面の「ライフイベント費用」から入力）';
       noteCell.font = {
         size: 10,
         color: {
@@ -14066,7 +14061,7 @@ function NexusPlanningSection({
         display: 'flex',
         alignItems: 'center',
         gap: 6,
-        marginBottom: 6
+        marginBottom: 8
       }
     }, /*#__PURE__*/React.createElement("span", {
       style: {
@@ -14084,12 +14079,26 @@ function NexusPlanningSection({
       }
     }, LP_CATEGORY_LABELS[key])), /*#__PURE__*/React.createElement("div", {
       style: {
+        background: 'var(--card-bg, #fff)',
+        border: '1px dashed var(--accent)',
+        borderRadius: 6,
+        padding: 8,
+        marginBottom: 8
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: 'var(--accent)',
+        fontWeight: 700,
+        marginBottom: 4
+      }
+    }, "📍 この時期（年齢タイムラインに表示・2つとも入力）"), /*#__PURE__*/React.createElement("div", {
+      style: {
         display: 'flex',
         alignItems: 'center',
         gap: 6,
         flexWrap: 'wrap',
-        fontSize: 12,
-        marginBottom: 4
+        fontSize: 12
       }
     }, "開始年齢", /*#__PURE__*/React.createElement("input", {
       type: "number",
@@ -14102,7 +14111,24 @@ function NexusPlanningSection({
         startAge: e.target.value
       }),
       placeholder: "例：0"
-    }), "歳〜（年齢タイムラインの表示に使用）"), /*#__PURE__*/React.createElement("div", {
+    }), "歳 〜継続", /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      className: "form-input",
+      style: {
+        width: 64
+      },
+      value: cat.years || '',
+      onChange: e => updateLpCategory(key, {
+        years: e.target.value
+      }),
+      placeholder: "例：22"
+    }), "年間"), cat.startAge !== '' && cat.startAge !== undefined && !(parseFloat(cat.years) > 0) && /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: '#B45309',
+        marginTop: 4
+      }
+    }, "⚠️「継続」年数も入れないとタイムラインに表示されません")), /*#__PURE__*/React.createElement("div", {
       style: {
         display: 'flex',
         alignItems: 'center',
@@ -14120,17 +14146,7 @@ function NexusPlanningSection({
       onChange: e => updateLpCategory(key, {
         total: e.target.value
       })
-    }), "万円 ÷", /*#__PURE__*/React.createElement("input", {
-      type: "number",
-      className: "form-input",
-      style: {
-        width: 70
-      },
-      value: cat.years || '',
-      onChange: e => updateLpCategory(key, {
-        years: e.target.value
-      })
-    }), "年 ÷12ヶ月＝", /*#__PURE__*/React.createElement("b", {
+    }), "万円 ÷", cat.years || '　', "年÷12ヶ月＝", /*#__PURE__*/React.createElement("b", {
       style: {
         color: 'var(--accent)'
       }
@@ -14563,10 +14579,17 @@ function NexusPlanningSection({
       style: {
         display: 'flex',
         alignItems: 'center',
-        gap: 6,
+        gap: 10,
         flexWrap: 'wrap',
         fontSize: 12,
         marginBottom: 6
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        whiteSpace: 'nowrap'
       }
     }, "保有数量", /*#__PURE__*/React.createElement("input", {
       type: "number",
@@ -14578,7 +14601,14 @@ function NexusPlanningSection({
       onChange: e => updateStock(st.id, {
         quantity: e.target.value
       })
-    }), "株 取得単価", /*#__PURE__*/React.createElement("input", {
+    }), "株"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        whiteSpace: 'nowrap'
+      }
+    }, "取得単価", /*#__PURE__*/React.createElement("input", {
       type: "number",
       className: "form-input",
       style: {
@@ -14588,7 +14618,14 @@ function NexusPlanningSection({
       onChange: e => updateStock(st.id, {
         costPrice: e.target.value
       })
-    }), "円 現在価格", /*#__PURE__*/React.createElement("input", {
+    }), "円"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        whiteSpace: 'nowrap'
+      }
+    }, "現在価格", /*#__PURE__*/React.createElement("input", {
       type: "number",
       className: "form-input",
       style: {
@@ -14598,7 +14635,7 @@ function NexusPlanningSection({
       onChange: e => updateStock(st.id, {
         currentPrice: e.target.value
       })
-    }), "円"), ev.value > 0 && /*#__PURE__*/React.createElement("div", {
+    }), "円")), ev.value > 0 && /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 12
       }
@@ -14673,10 +14710,17 @@ function NexusPlanningSection({
       style: {
         display: 'flex',
         alignItems: 'center',
-        gap: 6,
+        gap: 10,
         flexWrap: 'wrap',
         fontSize: 12,
         marginBottom: 6
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        whiteSpace: 'nowrap'
       }
     }, "保有口数", /*#__PURE__*/React.createElement("input", {
       type: "number",
@@ -14688,14 +14732,21 @@ function NexusPlanningSection({
       onChange: e => updateFund(fd.id, {
         units: e.target.value
       })
-    }), "口"), /*#__PURE__*/React.createElement("div", {
+    }), "口")), /*#__PURE__*/React.createElement("div", {
       style: {
         display: 'flex',
         alignItems: 'center',
-        gap: 6,
+        gap: 10,
         flexWrap: 'wrap',
         fontSize: 12,
         marginBottom: 6
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        whiteSpace: 'nowrap'
       }
     }, "取得時基準価額", /*#__PURE__*/React.createElement("input", {
       type: "number",
@@ -14707,7 +14758,14 @@ function NexusPlanningSection({
       onChange: e => updateFund(fd.id, {
         costNav: e.target.value
       })
-    }), "現在基準価額", /*#__PURE__*/React.createElement("input", {
+    })), /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        whiteSpace: 'nowrap'
+      }
+    }, "現在基準価額", /*#__PURE__*/React.createElement("input", {
       type: "number",
       className: "form-input",
       style: {
@@ -14717,7 +14775,7 @@ function NexusPlanningSection({
       onChange: e => updateFund(fd.id, {
         currentNav: e.target.value
       })
-    }), /*#__PURE__*/React.createElement("span", {
+    })), /*#__PURE__*/React.createElement("span", {
       style: {
         color: 'var(--text-sub)'
       }
@@ -14725,10 +14783,17 @@ function NexusPlanningSection({
       style: {
         display: 'flex',
         alignItems: 'center',
-        gap: 6,
+        gap: 10,
         flexWrap: 'wrap',
         fontSize: 12,
         marginBottom: 6
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        whiteSpace: 'nowrap'
       }
     }, "毎月の積立額", /*#__PURE__*/React.createElement("input", {
       type: "number",
@@ -14740,7 +14805,14 @@ function NexusPlanningSection({
       onChange: e => updateFund(fd.id, {
         monthlyContribution: e.target.value
       })
-    }), "円 想定年間利回り", /*#__PURE__*/React.createElement("input", {
+    }), "円"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        whiteSpace: 'nowrap'
+      }
+    }, "想定年間利回り", /*#__PURE__*/React.createElement("input", {
       type: "number",
       className: "form-input",
       style: {
@@ -14750,7 +14822,7 @@ function NexusPlanningSection({
       onChange: e => updateFund(fd.id, {
         expectedReturn: e.target.value
       })
-    }), "%"), ev.value > 0 && /*#__PURE__*/React.createElement("div", {
+    }), "%")), ev.value > 0 && /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 12
       }
