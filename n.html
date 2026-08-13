@@ -11712,6 +11712,13 @@ const LP_CATEGORY_LABELS = {
   retirement: '老後費用',
   care: '介護費用'
 };
+// ライフプランブロック（年齢タイムライン）の各区分の色。Excel出力の色付きブロックと画面表示で共通利用。
+const LP_CATEGORY_COLORS = {
+  education: '60A5FA',
+  housing: '94A3B8',
+  retirement: 'F2A65A',
+  care: '7EB88E'
+};
 const FAMILY_INSURANCE_COLOR = {
   yes: '#3D7A5C',
   no: '#A63D40',
@@ -12000,17 +12007,43 @@ function nexusXlsxDataRows(ws, startRow, rows, numericCols) {
   });
   return startRow + rows.length;
 }
+
+// LP区分（教育・住宅・老後・介護）の開始年齢・年数からブロック（色付き帯）の配列を作る
+function nexusLpCategoryBlocks(categories) {
+  return Object.keys(LP_CATEGORY_LABELS).map(key => {
+    const cat = categories && categories[key] || {};
+    const startAge = cat.startAge !== '' && cat.startAge !== undefined && cat.startAge !== null ? parseFloat(cat.startAge) : null;
+    const years = parseFloat(cat.years) || 0;
+    return {
+      key,
+      label: LP_CATEGORY_LABELS[key],
+      color: LP_CATEGORY_COLORS[key],
+      startAge,
+      years
+    };
+  }).filter(b => b.startAge !== null && b.years > 0);
+}
+
+// GUTTER: 区分ラベル用の左余白。ここを基準に、目盛り・本人/配偶者マーカー・区分ブロックすべてで
+// 同じ0〜100%の年齢座標系を共有する（そうしないと目盛りとブロックの横位置がズレるため）。
+const NEXUS_TIMELINE_GUTTER = 60;
 function NexusPlanningTimeline({
   ageSelf,
-  ageSpouse
+  ageSpouse,
+  categories
 }) {
   const ticks = [];
   for (let age = 0; age <= 100; age += 10) ticks.push(age);
+  const blocks = nexusLpCategoryBlocks(categories);
   return /*#__PURE__*/React.createElement("div", {
     style: {
-      position: 'relative',
-      height: 66,
       margin: '18px 4px 6px'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: 'relative',
+      height: 56,
+      marginLeft: NEXUS_TIMELINE_GUTTER
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -12059,18 +12092,75 @@ function NexusPlanningTimeline({
       borderRadius: 10,
       whiteSpace: 'nowrap'
     }
-  }, "配偶者 ", ageSpouse, "歳"));
+  }, "配偶者 ", ageSpouse, "歳")), blocks.map(b => {
+    const left = Math.max(0, Math.min(100, b.startAge));
+    const width = Math.max(0, Math.min(100 - left, b.years));
+    return /*#__PURE__*/React.createElement("div", {
+      key: b.key,
+      style: {
+        position: 'relative',
+        height: 20,
+        marginLeft: NEXUS_TIMELINE_GUTTER,
+        marginTop: 2
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: 'absolute',
+        left: -NEXUS_TIMELINE_GUTTER,
+        top: 2,
+        width: NEXUS_TIMELINE_GUTTER - 6,
+        fontSize: 10,
+        color: 'var(--text-sub)',
+        textAlign: 'right'
+      }
+    }, b.label), /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        top: 2,
+        height: 16,
+        background: 'var(--bg)',
+        borderRadius: 3
+      }
+    }), /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: 'absolute',
+        left: left + '%',
+        width: width + '%',
+        top: 2,
+        height: 16,
+        background: '#' + b.color,
+        borderRadius: 3
+      }
+    }));
+  }));
 }
 
 // 印刷でも見えるよう、画像なしでCSSだけで組む簡易タイムライン
-function nexusTimelineHtmlForPrint(ageSelf, ageSpouse) {
-  const marker = (age, label, top, bg) => age === null || age < 0 || age > 100 ? '' : `<div style="position:absolute;top:${top}px;left:${age}%;transform:translateX(-50%);background:${bg};color:#fff;font-size:10px;padding:2px 6px;border-radius:8px;white-space:nowrap;">${label} ${age}歳</div>`;
-  const ticks = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100].map(age => `<div style="position:absolute;top:16px;left:${age}%;transform:translateX(-50%);font-size:9px;color:#666;">${age}</div>`).join('');
-  return `<div style="position:relative;height:56px;margin:10px 4px 20px;">
-    <div style="position:absolute;left:0;right:0;top:26px;height:2px;background:#ccc;"></div>
+// 目盛り・マーカー・区分ブロックすべて、左にG(px)の余白を空けた同じ0〜100%座標系で位置決めする。
+function nexusTimelineHtmlForPrint(ageSelf, ageSpouse, categories) {
+  const G = NEXUS_TIMELINE_GUTTER;
+  const ageLeft = age => `calc(${G}px + (100% - ${G}px) * ${age} / 100)`;
+  const marker = (age, label, top, bg) => age === null || age < 0 || age > 100 ? '' : `<div style="position:absolute;top:${top}px;left:${ageLeft(age)};transform:translateX(-50%);background:${bg};color:#fff;font-size:10px;padding:2px 6px;border-radius:8px;white-space:nowrap;">${label} ${age}歳</div>`;
+  const ticks = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100].map(age => `<div style="position:absolute;top:16px;left:${ageLeft(age)};transform:translateX(-50%);font-size:9px;color:#666;">${age}</div>`).join('');
+  const blocks = nexusLpCategoryBlocks(categories);
+  const blockRows = blocks.map((b, i) => {
+    const left = Math.max(0, Math.min(100, b.startAge));
+    const width = Math.max(0, Math.min(100 - left, b.years));
+    const top = 56 + i * 20;
+    return `
+    <div style="position:absolute;left:${G}px;right:0;top:${top}px;height:16px;background:#eee;border-radius:3px;">
+      <div style="position:absolute;left:${left}%;width:${width}%;top:0;height:16px;background:#${b.color};border-radius:3px;"></div>
+    </div>
+    <div style="position:absolute;left:0;width:${G - 6}px;top:${top}px;height:16px;font-size:9px;color:#666;text-align:right;">${escapeHtmlForPrint(b.label)}</div>`;
+  }).join('');
+  return `<div style="position:relative;height:${56 + blocks.length * 20}px;margin:10px 4px 20px;">
+    <div style="position:absolute;left:${G}px;right:0;top:26px;height:2px;background:#ccc;"></div>
     ${ticks}
     ${marker(ageSelf, '本人', 34, '#1c2b3a')}
     ${marker(ageSpouse, '配偶者', 48, '#b98a3d')}
+    ${blockRows}
   </div>`;
 }
 function NexusPlanningBarChart({
@@ -12844,7 +12934,7 @@ function NexusPlanningSection({
       <p style="font-size:11px;color:#666;">出力日：${new Date().toLocaleDateString('ja-JP')}${isCoupleScope ? '　／　夫婦合算版' : ''}</p>
       <div class="print-section">
         <h3>ライフプラン タイムライン</h3>
-        ${nexusTimelineHtmlForPrint(ageSelf, ageSpouse)}
+        ${nexusTimelineHtmlForPrint(ageSelf, ageSpouse, categories)}
       </div>
       <div class="print-section">
         <h3>LPシート要約</h3>
@@ -12916,9 +13006,256 @@ function NexusPlanningSection({
   //    罫線・見出し色・列幅を付けた「表らしい」見た目のブックを組み立てる ──
   // 印刷資料（PDF）と同じ並び順で、1枚のシートに縦につなげて出力する。
   // 「タブが分かれた分析用ワークブック」ではなく「1つの資料」として読めるようにするため。
+  // 元になったExcelの「ライフプランブロック」シートを再現：年齢0〜100の目盛りに沿って
+  // 教育・住宅・老後・介護の各区分を色付きブロックで表示する年齢タイムライン。
+  const buildLifePlanBlockSheet = wb => {
+    const AGE_MAX = 100;
+    const ws = wb.addWorksheet('ライフプランブロック');
+    const cols = [{
+      width: 16
+    }];
+    for (let age = 0; age <= AGE_MAX; age++) cols.push({
+      width: 2.3
+    });
+    ws.columns = cols;
+    const totalCols = AGE_MAX + 2;
+    let row = 1;
+    ws.mergeCells(row, 1, row, totalCols);
+    const titleCell = ws.getCell(row, 1);
+    titleCell.value = 'ライフプランブロック';
+    titleCell.font = {
+      bold: true,
+      size: 18,
+      color: {
+        argb: NEXUS_XLSX_NAVY
+      }
+    };
+    titleCell.alignment = {
+      horizontal: 'center'
+    };
+    row += 1;
+    ws.mergeCells(row, 1, row, totalCols);
+    const subCell = ws.getCell(row, 1);
+    subCell.value = `〜大切なお金と幸せな人生のために〜　（${customer.name} 様${isCoupleScope ? '・' + linkedSpouseCustomer.name + ' 様' : ''}）`;
+    subCell.font = {
+      size: 10,
+      color: {
+        argb: 'FF888888'
+      }
+    };
+    subCell.alignment = {
+      horizontal: 'center'
+    };
+    row += 2;
+
+    // 年齢の目盛り（10歳刻み）
+    {
+      const tickRow = ws.getRow(row);
+      for (let age = 0; age <= AGE_MAX; age += 10) {
+        const cell = tickRow.getCell(age + 2);
+        cell.value = age;
+        cell.font = {
+          size: 8,
+          color: {
+            argb: 'FF999999'
+          }
+        };
+      }
+      row += 1;
+    }
+
+    // 教育・住宅・老後・介護の色付きブロック行
+    const timelineCats = Object.keys(LP_CATEGORY_LABELS).map(key => ({
+      key,
+      label: LP_CATEGORY_LABELS[key],
+      color: LP_CATEGORY_COLORS[key],
+      startAge: categories[key] && categories[key].startAge !== '' && categories[key].startAge !== undefined ? parseFloat(categories[key].startAge) : null,
+      years: parseFloat(categories[key] && categories[key].years) || 0
+    }));
+    timelineCats.forEach(cat => {
+      const r = ws.getRow(row);
+      const labelCell = r.getCell(1);
+      labelCell.value = cat.label;
+      labelCell.font = {
+        bold: true,
+        size: 10
+      };
+      labelCell.alignment = {
+        vertical: 'middle'
+      };
+      labelCell.border = {
+        top: {
+          style: 'thin',
+          color: {
+            argb: NEXUS_XLSX_GRID
+          }
+        },
+        bottom: {
+          style: 'thin',
+          color: {
+            argb: NEXUS_XLSX_GRID
+          }
+        }
+      };
+      for (let age = 0; age <= AGE_MAX; age++) {
+        const cell = r.getCell(age + 2);
+        const active = cat.startAge !== null && cat.years > 0 && age >= cat.startAge && age < cat.startAge + cat.years;
+        cell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: {
+            argb: active ? 'FF' + cat.color : 'FFF2F2F2'
+          }
+        };
+        cell.border = {
+          top: {
+            style: 'thin',
+            color: {
+              argb: NEXUS_XLSX_GRID
+            }
+          },
+          left: {
+            style: 'thin',
+            color: {
+              argb: NEXUS_XLSX_GRID
+            }
+          },
+          bottom: {
+            style: 'thin',
+            color: {
+              argb: NEXUS_XLSX_GRID
+            }
+          },
+          right: {
+            style: 'thin',
+            color: {
+              argb: NEXUS_XLSX_GRID
+            }
+          }
+        };
+      }
+      row += 1;
+    });
+    row += 1;
+    if (timelineCats.every(c => c.startAge === null)) {
+      ws.mergeCells(row, 1, row, totalCols);
+      const noteCell = ws.getCell(row, 1);
+      noteCell.value = '※ 各区分の「開始年齢」を入力すると、年齢タイムラインに色付きブロックが表示されます（プランニング画面の「ライフイベント費用」から入力）';
+      noteCell.font = {
+        size: 10,
+        color: {
+          argb: 'FFB98A3D'
+        }
+      };
+      row += 2;
+    } else {
+      row += 1;
+    }
+
+    // 費用区分の内訳（合計・年数・開始年齢・月額換算）
+    const legendColStart = 2,
+      legendColSpan = 20; // 20本の年齢列を1つの表示幅として使う
+    const mergedRange = (colStart, span) => [colStart, colStart + span - 1];
+    const legendHeaderRow = ws.getRow(row);
+    [['区分', 1, 1], ['開始年齢', legendColStart, legendColSpan], ['合計', legendColStart + legendColSpan, legendColSpan], ['年数', legendColStart + legendColSpan * 2, legendColSpan], ['月額換算', legendColStart + legendColSpan * 3, legendColSpan]].forEach(([label, colStart, span]) => {
+      if (span > 1) ws.mergeCells(row, colStart, row, colStart + span - 1);
+      const cell = ws.getCell(row, colStart);
+      cell.value = label;
+      cell.font = {
+        bold: true,
+        color: {
+          argb: 'FFFFFFFF'
+        }
+      };
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: {
+          argb: NEXUS_XLSX_NAVY
+        }
+      };
+      cell.alignment = {
+        horizontal: 'center',
+        vertical: 'middle'
+      };
+      cell.border = {
+        top: {
+          style: 'thin'
+        },
+        left: {
+          style: 'thin'
+        },
+        bottom: {
+          style: 'thin'
+        },
+        right: {
+          style: 'thin'
+        }
+      };
+    });
+    row += 1;
+    timelineCats.forEach(cat => {
+      const cat0 = categories[cat.key] || {};
+      const vals = [[1, 1, cat.label], [legendColStart, legendColSpan, cat.startAge !== null ? cat.startAge + '歳' : ''], [legendColStart + legendColSpan, legendColSpan, cat0.total ? Number(cat0.total) + '万円' : ''], [legendColStart + legendColSpan * 2, legendColSpan, cat.years > 0 ? cat.years + '年' : ''], [legendColStart + legendColSpan * 3, legendColSpan, nexusLpCategoryMonthly(cat0).toLocaleString() + '円/月']];
+      vals.forEach(([colStart, span, val]) => {
+        if (span > 1) ws.mergeCells(row, colStart, row, colStart + span - 1);
+        const cell = ws.getCell(row, colStart);
+        cell.value = val;
+        cell.alignment = {
+          horizontal: colStart === 1 ? 'left' : 'center'
+        };
+        cell.border = {
+          top: {
+            style: 'thin',
+            color: {
+              argb: NEXUS_XLSX_GRID
+            }
+          },
+          left: {
+            style: 'thin',
+            color: {
+              argb: NEXUS_XLSX_GRID
+            }
+          },
+          bottom: {
+            style: 'thin',
+            color: {
+              argb: NEXUS_XLSX_GRID
+            }
+          },
+          right: {
+            style: 'thin',
+            color: {
+              argb: NEXUS_XLSX_GRID
+            }
+          }
+        };
+      });
+      row += 1;
+    });
+    ws.mergeCells(row, 1, row, legendColStart - 1 + legendColSpan * 3);
+    const totalLabelCell = ws.getCell(row, 1);
+    totalLabelCell.value = '理想月間貯蓄額（4区分合計）';
+    totalLabelCell.font = {
+      bold: true
+    };
+    ws.mergeCells(row, legendColStart + legendColSpan * 3, row, legendColStart - 1 + legendColSpan * 4);
+    const totalValCell = ws.getCell(row, legendColStart + legendColSpan * 3);
+    totalValCell.value = monthlyTarget.toLocaleString() + '円/月';
+    totalValCell.font = {
+      bold: true,
+      color: {
+        argb: NEXUS_XLSX_NAVY
+      }
+    };
+    totalValCell.alignment = {
+      horizontal: 'center'
+    };
+  };
   const buildStyledWorkbook = () => {
     const wb = new ExcelJS.Workbook();
     const scopeNote = isCoupleScope ? '（夫婦合算）' : '';
+    buildLifePlanBlockSheet(wb);
     const ws = wb.addWorksheet('プランニング資料');
     const COLS = 13;
     ws.columns = [20, 22, 16, 16, 16, 14, 14, 14, 16, 10, 16, 14, 12].map(w => ({
@@ -13097,7 +13434,8 @@ function NexusPlanningSection({
     }
   }, "※ 年齢・お子様は顧客登録フォームの生年月日・サスペクト登録から自動反映されます"), /*#__PURE__*/React.createElement(NexusPlanningTimeline, {
     ageSelf: ageSelf,
-    ageSpouse: ageSpouse
+    ageSpouse: ageSpouse,
+    categories: categories
   }), /*#__PURE__*/React.createElement("div", {
     className: "form-group"
   }, /*#__PURE__*/React.createElement("label", {
@@ -13545,12 +13883,46 @@ function NexusPlanningSection({
       }
     }, /*#__PURE__*/React.createElement("div", {
       style: {
-        fontWeight: 700,
-        fontSize: 12.5,
-        color: 'var(--text)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
         marginBottom: 6
       }
-    }, LP_CATEGORY_LABELS[key]), /*#__PURE__*/React.createElement("div", {
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        width: 10,
+        height: 10,
+        borderRadius: 3,
+        background: '#' + LP_CATEGORY_COLORS[key],
+        flexShrink: 0
+      }
+    }), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        fontSize: 12.5,
+        color: 'var(--text)'
+      }
+    }, LP_CATEGORY_LABELS[key])), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        flexWrap: 'wrap',
+        fontSize: 12,
+        marginBottom: 4
+      }
+    }, "開始年齢", /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      className: "form-input",
+      style: {
+        width: 64
+      },
+      value: cat.startAge || '',
+      onChange: e => updateLpCategory(key, {
+        startAge: e.target.value
+      }),
+      placeholder: "例：0"
+    }), "歳〜（年齢タイムラインの表示に使用）"), /*#__PURE__*/React.createElement("div", {
       style: {
         display: 'flex',
         alignItems: 'center',
