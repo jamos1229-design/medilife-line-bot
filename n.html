@@ -349,11 +349,18 @@
     .print-doc table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 10px; }
     .print-doc th, .print-doc td { border: 1px solid #999; padding: 4px 6px; text-align: center; }
     .print-doc th { background: #eee; }
+    .print-doc .print-section { break-inside: avoid; page-break-inside: avoid; }
+    .print-doc h2, .print-doc h3, .print-doc p { break-after: avoid; page-break-after: avoid; }
+    .print-doc table { break-inside: auto; }
+    .print-doc tr { break-inside: avoid; page-break-inside: avoid; }
+    .print-doc thead { display: table-header-group; }
     @media print {
       @page { size: landscape; margin: 12mm; }
       body.ml-printing > *:not(.ml-print-overlay) { display: none !important; }
       .ml-print-overlay .no-print { display: none !important; }
       .ml-print-overlay { position: static !important; }
+      .print-doc .print-section { break-inside: avoid; page-break-inside: avoid; }
+      .print-doc tr { break-inside: avoid; page-break-inside: avoid; }
     }
   </style>
 </head>
@@ -715,11 +722,23 @@ function ContractBlock({
     }
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "保険金額"), /*#__PURE__*/React.createElement(AmountInput, {
+  }, "保険金額（加入当初の契約金額）"), /*#__PURE__*/React.createElement(AmountInput, {
     prefix: "¥",
     value: contract.coverageAmount || '',
     onChange: s('coverageAmount'),
     placeholder: "例：10000000"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "現在の解約返戻金（貯蓄性契約で加入時の金額と異なる場合に入力）"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
+    value: contract.currentSurrenderValue || '',
+    onChange: s('currentSurrenderValue'),
+    placeholder: "例：9500000（未入力なら保険金額を使用）"
   })), /*#__PURE__*/React.createElement("div", {
     className: "form-group",
     style: {
@@ -3412,9 +3431,22 @@ function CustomerDetail({
         }
       }, /*#__PURE__*/React.createElement("div", {
         className: "info-label"
-      }, "保険金額"), /*#__PURE__*/React.createElement("div", {
+      }, "保険金額（加入当初）"), /*#__PURE__*/React.createElement("div", {
         className: "info-value"
-      }, "¥", Number(ct.coverageAmount).toLocaleString())), ct.memo && /*#__PURE__*/React.createElement("div", {
+      }, "¥", Number(ct.coverageAmount).toLocaleString())), ct.currentSurrenderValue && /*#__PURE__*/React.createElement("div", {
+        className: "info-item",
+        style: {
+          gridColumn: '1/-1'
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "info-label"
+      }, "現在の解約返戻金"), /*#__PURE__*/React.createElement("div", {
+        className: "info-value",
+        style: {
+          color: 'var(--accent)',
+          fontWeight: 700
+        }
+      }, "¥", Number(ct.currentSurrenderValue).toLocaleString())), ct.memo && /*#__PURE__*/React.createElement("div", {
         className: "info-item",
         style: {
           gridColumn: '1/-1'
@@ -11661,8 +11693,28 @@ const FAMILY_INSURANCE_LABEL = {
 };
 // 確定申告の所得区分に合わせた収入の種類
 const LP_INCOME_TYPES = ['給与所得', '事業所得', '不動産所得', '年金所得', '配当所得', '利子所得', '一時所得', '雑所得（その他）'];
-// 家計簿でよく使う支出の費目
-const LP_EXPENSE_CATEGORIES = ['住居費', '食費', '水道光熱費', '通信費（携帯等）', '保険料', '被服費', '教育費', '交際費', '娯楽費', '医療費', '車両費', 'その他'];
+// 家計簿の支出費目。固定費／変動費／貯蓄・資産運用の3グループに分類（プルダウンはoptgroupで表示）
+const LP_EXPENSE_GROUPS = [{
+  label: '固定費',
+  items: ['住居費（家賃・管理費等）', '保険料', '通信費（携帯等）', '税金・社会保険料']
+}, {
+  label: '変動費',
+  items: ['食費', '日用品費', '水道光熱費', '被服費', '交際費', '娯楽費', '医療費', '車両費', '教育費', '自己研鑽費（学会費・専門書等）', 'お小遣い（使途自由金）', 'その他']
+}, {
+  label: '貯蓄・資産運用',
+  items: ['貯蓄・資産運用（NISA・iDeCo・投資信託等）']
+}];
+const LP_EXPENSE_CATEGORIES = LP_EXPENSE_GROUPS.reduce((a, g) => a.concat(g.items), []);
+
+// ── ローン明細：区分・属性の選択肢 ──
+const LOAN_CATEGORIES = ['住宅', '自動車', '教育', '事業用（設備）', '事業用（運転資金）', 'その他'];
+const LOAN_RATE_TYPES = ['変動', '固定', '固定期間選択型'];
+const LOAN_REPAYMENT_METHODS = ['元利均等', '元金均等'];
+const LOAN_GUARANTEE_INSURANCE_OPTIONS = ['不明', 'なし', 'あり（一般団信）', 'あり（がん特約等付き）'];
+const LOAN_GUARANTOR_OPTIONS = ['不明', 'なし', 'あり'];
+function loanRemainingYears(l) {
+  return l.remainingYears !== undefined && l.remainingYears !== '' ? l.remainingYears : l.years || '';
+}
 function nexusLpCategoryMonthly(cat) {
   const total = parseFloat(cat && cat.total) || 0;
   const years = parseFloat(cat && cat.years) || 0;
@@ -12284,10 +12336,23 @@ function NexusPlanningSection({
   const addLoan = () => updateLp({
     loans: [...(customer.lp && customer.lp.loans || []), {
       id: uid(),
+      category: LOAN_CATEGORIES[0],
       name: '',
       balance: '',
       rate: '',
-      years: ''
+      rateType: '',
+      monthlyPayment: '',
+      hasBonusPayment: false,
+      bonusPaymentAmount: '',
+      repaymentMethod: '',
+      payoffMonth: '',
+      remainingYears: '',
+      lender: '',
+      originationDate: '',
+      originalAmount: '',
+      guaranteeInsurance: '',
+      collateral: '',
+      guarantor: ''
     }]
   });
   const updateLoan = (id, patch) => updateLp({
@@ -12299,6 +12364,11 @@ function NexusPlanningSection({
   const removeLoan = id => updateLp({
     loans: (customer.lp && customer.lp.loans || []).filter(l => l.id !== id)
   });
+  const [openLoanDetails, setOpenLoanDetails] = useState({});
+  const toggleLoanDetail = id => setOpenLoanDetails(prev => ({
+    ...prev,
+    [id]: !prev[id]
+  }));
   const addIncomeItem = () => updateLp({
     incomeItems: [...(customer.lp && customer.lp.incomeItems || []), {
       id: uid(),
@@ -12440,10 +12510,12 @@ function NexusPlanningSection({
   let insuranceSavingsJpy = 0,
     insuranceSavingsUnconvertible = 0;
   savingsContracts.forEach(ct => {
+    // 現在の解約返戻金が入力されていればそちらを優先（加入当初の保険金額とはズレるため）
+    const field = ct.currentSurrenderValue !== undefined && ct.currentSurrenderValue !== '' ? 'currentSurrenderValue' : 'coverageAmount';
     const {
       amount,
       convertible
-    } = nexusContractJpyAmount(ct, 'coverageAmount');
+    } = nexusContractJpyAmount(ct, field);
     if (convertible) insuranceSavingsJpy += amount;else insuranceSavingsUnconvertible++;
   });
   let currencyForeignJpy = 0,
@@ -12492,50 +12564,94 @@ function NexusPlanningSection({
       medicalTotal
     } = nexusPurposeSummary(list);
     const rows = CONTRACT_PURPOSES.filter(p => byPurpose[p] > 0).map(p => `<tr><td>${p}</td><td>${byPurpose[p].toLocaleString()}円</td></tr>`).join('');
-    return `<h3>${escapeHtmlForPrint(title)}</h3>
+    return `<div class="print-section">
+      <h3>${escapeHtmlForPrint(title)}</h3>
       <table><tr><th>目的</th><th>保険金額合計</th></tr>${rows || '<tr><td colspan="2">データなし</td></tr>'}</table>
-      <p style="font-size:12px;"><b>死亡保険金額合計：${deathTotal.toLocaleString()}円</b>　／　<b>医療保険金額合計：${medicalTotal.toLocaleString()}円</b></p>`;
+      <p style="font-size:12px;"><b>死亡保険金額合計：${deathTotal.toLocaleString()}円</b>　／　<b>医療保険金額合計：${medicalTotal.toLocaleString()}円</b></p>
+      </div>`;
   };
   const buildPrintHtml = () => {
     const rowsHtml = list => list.length ? list.map((r, i) => `
       <tr><td>${i + 1}</td><td>${escapeHtmlForPrint(r.purpose)}</td><td>${escapeHtmlForPrint(r.type)}</td><td>${escapeHtmlForPrint(r.company)}</td><td>${escapeHtmlForPrint(r.policyNum)}</td>
       <td>${escapeHtmlForPrint(r.date)}</td><td>${escapeHtmlForPrint(r.termNote || r.termEnd)}</td><td>${escapeHtmlForPrint(r.paymentTermNote || r.paymentTermEnd)}</td>
-      <td>${r.coverageAmount ? Number(r.coverageAmount).toLocaleString() + (r.currency || '円') : ''}</td><td>${escapeHtmlForPrint(r.premium)}${r.paymentCycle || ''}</td></tr>`).join('') : '<tr><td colspan="10">登録なし</td></tr>';
+      <td>${r.coverageAmount ? Number(r.coverageAmount).toLocaleString() + (r.currency || '円') : ''}</td>
+      <td>${r.currentSurrenderValue ? Number(r.currentSurrenderValue).toLocaleString() + (r.currency || '円') : ''}</td>
+      <td>${escapeHtmlForPrint(r.premium)}${r.paymentCycle || ''}</td></tr>`).join('') : '<tr><td colspan="11">登録なし</td></tr>';
     const famRows = (customer.suspects || []).length ? (customer.suspects || []).map(m => `
       <tr><td>${escapeHtmlForPrint(m.name)}</td><td>${escapeHtmlForPrint(m.relation)}</td><td>${m.birthdate ? calcAge(m.birthdate) : calcStoredAge(m.age, m.ageYear) ?? ''}</td>
       <td>${FAMILY_INSURANCE_LABEL[m.hasInsurance || 'unknown']}</td><td>${escapeHtmlForPrint(m.memo)}</td></tr>`).join('') : '<tr><td colspan="5">登録なし</td></tr>';
+    const loanBasicRows = loans.length ? loans.map(l => `
+      <tr><td>${escapeHtmlForPrint(LOAN_CATEGORIES.includes(l.category) ? l.category : '—')}</td><td>${escapeHtmlForPrint(l.name)}</td>
+      <td>${l.balance ? Number(l.balance).toLocaleString() + '円' : ''}</td><td>${escapeHtmlForPrint(l.rate)}${l.rate ? '%' : ''}</td><td>${escapeHtmlForPrint(l.rateType)}</td>
+      <td>${l.monthlyPayment ? Number(l.monthlyPayment).toLocaleString() + '円' : ''}</td>
+      <td>${l.hasBonusPayment ? 'あり（' + (l.bonusPaymentAmount ? Number(l.bonusPaymentAmount).toLocaleString() + '円/年' : '金額未記入') + '）' : 'なし'}</td>
+      <td>${escapeHtmlForPrint(l.repaymentMethod)}</td>
+      <td>${l.payoffMonth ? escapeHtmlForPrint(l.payoffMonth) : loanRemainingYears(l) ? loanRemainingYears(l) + '年' : ''}</td></tr>`).join('') : '<tr><td colspan="9">登録なし</td></tr>';
+    const loanDetailRows = loans.length ? loans.map(l => `
+      <tr><td>${escapeHtmlForPrint(l.name) || escapeHtmlForPrint(l.category)}</td><td>${escapeHtmlForPrint(l.lender)}</td>
+      <td>${escapeHtmlForPrint(l.originationDate)}</td><td>${l.originalAmount ? Number(l.originalAmount).toLocaleString() + '円' : ''}</td>
+      <td>${escapeHtmlForPrint(l.guaranteeInsurance || '不明')}</td><td>${escapeHtmlForPrint(l.collateral)}</td><td>${escapeHtmlForPrint(l.guarantor || '不明')}</td></tr>`).join('') : '<tr><td colspan="7">登録なし</td></tr>';
+    const assetClassRowsHtml = assetClassChart.length ? assetClassChart.map(i => `<tr><td>${escapeHtmlForPrint(i.label)}</td><td>${i.value.toLocaleString()}円</td><td>${portfolioTotal > 0 ? Math.round(i.value / portfolioTotal * 100) : 0}%</td></tr>`).join('') : '<tr><td colspan="3">データなし</td></tr>';
+    const currencyRowsHtml = currencyChart.length ? currencyChart.map(i => `<tr><td>${escapeHtmlForPrint(i.label)}</td><td>${i.value.toLocaleString()}円</td></tr>`).join('') : '<tr><td colspan="2">データなし</td></tr>';
     return `
       <h2>${escapeHtmlForPrint(customer.name)} 様　プランニング資料</h2>
       <p style="font-size:11px;color:#666;">出力日：${new Date().toLocaleDateString('ja-JP')}</p>
-      <h3>ライフプラン タイムライン</h3>
-      ${nexusTimelineHtmlForPrint(ageSelf, ageSpouse)}
-      <h3>LPシート要約</h3>
-      <table>
-        <tr><th>本人年齢</th><td>${ageSelf !== null ? ageSelf + '歳' : ''}</td><th>配偶者年齢</th><td>${ageSpouse !== null ? ageSpouse + '歳' : ''}</td></tr>
-        <tr><th>お子様</th><td colspan="3">${escapeHtmlForPrint(kidsSummary)}</td></tr>
-        <tr><th>理想月間貯蓄額</th><td colspan="3">${monthlyTarget.toLocaleString()}円／月</td></tr>
-      </table>
-      <h3>ローン明細</h3>
-      <table><tr><th>名称</th><th>残高</th><th>金利</th><th>返済期間</th></tr>${loans.length ? loans.map(l => `<tr><td>${escapeHtmlForPrint(l.name)}</td><td>${l.balance ? Number(l.balance).toLocaleString() + '円' : ''}</td><td>${escapeHtmlForPrint(l.rate)}${l.rate ? '%' : ''}</td><td>${escapeHtmlForPrint(l.years)}${l.years ? '年' : ''}</td></tr>`).join('') : '<tr><td colspan="4">登録なし</td></tr>'}</table>
-      <p style="font-size:12px;"><b>ローン残高合計：${totalLoanBalance.toLocaleString()}円</b></p>
-      <h3>家計収支</h3>
-      <table><tr><th>収入の種類</th><th>金額</th></tr>${incomeItems.length ? incomeItems.map(x => `<tr><td>${escapeHtmlForPrint(x.type)}</td><td>${x.amount ? Number(x.amount).toLocaleString() + '円' : ''}</td></tr>`).join('') : '<tr><td colspan="2">登録なし</td></tr>'}</table>
-      <table><tr><th>支出の費目</th><th>金額</th></tr>${expenseItems.length ? expenseItems.map(x => `<tr><td>${escapeHtmlForPrint(x.category)}</td><td>${x.amount ? Number(x.amount).toLocaleString() + '円' : ''}</td></tr>`).join('') : '<tr><td colspan="2">登録なし</td></tr>'}</table>
-      <table>
-        <tr><th>収入合計</th><td>${totalIncome.toLocaleString()}円</td><th>支出合計</th><td>${totalExpense.toLocaleString()}円</td></tr>
-        <tr><th>イベント収入</th><td>${eventIncome.toLocaleString()}円</td><th>イベント支出</th><td>${eventExpense.toLocaleString()}円</td></tr>
-        <tr><th>年間貯蓄（自動計算）</th><td colspan="3">${computedAnnualSavings.toLocaleString()}円</td></tr>
-      </table>
-      <h3>既契約一覧（本人）</h3>
-      <table><tr><th>No</th><th>目的</th><th>保険種類</th><th>保険会社</th><th>証券番号</th><th>契約日</th><th>保険期間</th><th>払込期間</th><th>保険金額</th><th>保険料</th></tr>${rowsHtml(contracts)}</table>
+      <div class="print-section">
+        <h3>ライフプラン タイムライン</h3>
+        ${nexusTimelineHtmlForPrint(ageSelf, ageSpouse)}
+      </div>
+      <div class="print-section">
+        <h3>LPシート要約</h3>
+        <table>
+          <tr><th>本人年齢</th><td>${ageSelf !== null ? ageSelf + '歳' : ''}</td><th>配偶者年齢</th><td>${ageSpouse !== null ? ageSpouse + '歳' : ''}</td></tr>
+          <tr><th>お子様</th><td colspan="3">${escapeHtmlForPrint(kidsSummary)}</td></tr>
+          <tr><th>理想月間貯蓄額</th><td colspan="3">${monthlyTarget.toLocaleString()}円／月</td></tr>
+        </table>
+      </div>
+      <div class="print-section">
+        <h3>ローン明細（基本項目）</h3>
+        <table><tr><th>区分</th><th>名称</th><th>残高</th><th>金利</th><th>金利タイプ</th><th>毎月返済額</th><th>ボーナス払い</th><th>返済方式</th><th>完済予定／残り年数</th></tr>${loanBasicRows}</table>
+        <p style="font-size:12px;"><b>ローン残高合計：${totalLoanBalance.toLocaleString()}円</b></p>
+      </div>
+      <div class="print-section">
+        <h3>ローン明細（詳細）</h3>
+        <table><tr><th>名称</th><th>借入先</th><th>借入年月日</th><th>借入当初の金額</th><th>団信</th><th>担保</th><th>連帯保証人等</th></tr>${loanDetailRows}</table>
+      </div>
+      <div class="print-section">
+        <h3>家計収支</h3>
+        <table><tr><th>収入の種類</th><th>金額</th></tr>${incomeItems.length ? incomeItems.map(x => `<tr><td>${escapeHtmlForPrint(x.type)}</td><td>${x.amount ? Number(x.amount).toLocaleString() + '円' : ''}</td></tr>`).join('') : '<tr><td colspan="2">登録なし</td></tr>'}</table>
+        <table><tr><th>支出の費目</th><th>金額</th></tr>${expenseItems.length ? expenseItems.map(x => `<tr><td>${escapeHtmlForPrint(x.category)}</td><td>${x.amount ? Number(x.amount).toLocaleString() + '円' : ''}</td></tr>`).join('') : '<tr><td colspan="2">登録なし</td></tr>'}</table>
+        <table>
+          <tr><th>収入合計</th><td>${totalIncome.toLocaleString()}円</td><th>支出合計</th><td>${totalExpense.toLocaleString()}円</td></tr>
+          <tr><th>イベント収入</th><td>${eventIncome.toLocaleString()}円</td><th>イベント支出</th><td>${eventExpense.toLocaleString()}円</td></tr>
+          <tr><th>年間貯蓄（自動計算）</th><td colspan="3">${computedAnnualSavings.toLocaleString()}円</td></tr>
+        </table>
+      </div>
+      <div class="print-section">
+        <h3>既契約一覧（本人）</h3>
+        <table><tr><th>No</th><th>目的</th><th>保険種類</th><th>保険会社</th><th>証券番号</th><th>契約日</th><th>保険期間</th><th>払込期間</th><th>保険金額（加入当初）</th><th>現在の解約返戻金</th><th>保険料</th></tr>${rowsHtml(contracts)}</table>
+      </div>
       ${buildPurposeRowsForPrint('保障集計（本人）', contracts)}
       ${linkedCorp ? `
+      <div class="print-section">
         <h3>既契約一覧（関連法人：${escapeHtmlForPrint(linkedCorp.corporateName)}）</h3>
-        <table><tr><th>No</th><th>目的</th><th>保険種類</th><th>保険会社</th><th>証券番号</th><th>契約日</th><th>保険期間</th><th>払込期間</th><th>保険金額</th><th>保険料</th></tr>${rowsHtml(corpContracts)}</table>
+        <table><tr><th>No</th><th>目的</th><th>保険種類</th><th>保険会社</th><th>証券番号</th><th>契約日</th><th>保険期間</th><th>払込期間</th><th>保険金額（加入当初）</th><th>現在の解約返戻金</th><th>保険料</th></tr>${rowsHtml(corpContracts)}</table>
+      </div>
         ${buildPurposeRowsForPrint('保障集計（法人）', corpContracts)}
       ` : ''}
-      <h3>家族構成</h3>
-      <table><tr><th>お名前</th><th>続柄</th><th>年齢</th><th>既契約</th><th>メモ</th></tr>${famRows}</table>
+      <div class="print-section">
+        <h3>ポートフォリオ（資産クラス別）</h3>
+        <table><tr><th>区分</th><th>金額</th><th>割合</th></tr>${assetClassRowsHtml}</table>
+      </div>
+      <div class="print-section">
+        <h3>ポートフォリオ（通貨別：円建て／外貨建て）</h3>
+        <table><tr><th>区分</th><th>金額</th></tr>${currencyRowsHtml}</table>
+        ${insuranceSavingsUnconvertible > 0 || currencyUnconvertible > 0 ? '<p style="font-size:11px;color:#b98a3d;">※ 外貨建て契約のうち適用レート未入力のものは円換算できず、上記には含まれていません</p>' : ''}
+      </div>
+      <div class="print-section">
+        <h3>家族構成</h3>
+        <table><tr><th>お名前</th><th>続柄</th><th>年齢</th><th>既契約</th><th>メモ</th></tr>${famRows}</table>
+      </div>
     `;
   };
   const handleOpenPrint = () => setShowPrint(true);
@@ -12637,14 +12753,14 @@ function NexusPlanningSection({
       display: 'flex',
       gap: 6,
       alignItems: 'center',
-      marginBottom: 6
+      marginBottom: 8
     }
   }, /*#__PURE__*/React.createElement("input", {
     className: "form-input",
     style: {
       flex: 1
     },
-    placeholder: "例：住宅ローン",
+    placeholder: "例：自宅ローン（任意のメモ）",
     value: l.name || '',
     onChange: e => updateLoan(l.id, {
       name: e.target.value
@@ -12661,12 +12777,31 @@ function NexusPlanningSection({
       flexShrink: 0
     }
   }, "×")), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group",
+    style: {
+      marginBottom: 8
+    }
+  }, LOAN_CATEGORIES.map(c => /*#__PURE__*/React.createElement("button", {
+    key: c,
+    type: "button",
+    className: `toggle-btn ${(l.category || '') === c ? 'sel' : ''}`,
+    style: {
+      minWidth: 'unset',
+      flex: 'none',
+      padding: '6px 9px',
+      fontSize: 11.5
+    },
+    onClick: () => updateLoan(l.id, {
+      category: c
+    })
+  }, c))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
       gap: 6,
       flexWrap: 'wrap',
-      fontSize: 12
+      fontSize: 12,
+      marginBottom: 6
     }
   }, "残高", /*#__PURE__*/React.createElement("input", {
     type: "number",
@@ -12688,17 +12823,291 @@ function NexusPlanningSection({
     onChange: e => updateLoan(l.id, {
       rate: e.target.value
     })
-  }), "% 返済期間", /*#__PURE__*/React.createElement("input", {
+  }), "% 毎月の返済額（実額）", /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    className: "form-input",
+    style: {
+      width: 90
+    },
+    value: l.monthlyPayment || '',
+    onChange: e => updateLoan(l.id, {
+      monthlyPayment: e.target.value
+    })
+  }), "円"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      flexWrap: 'wrap',
+      fontSize: 11.5,
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--text-sub)'
+    }
+  }, "金利タイプ"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, LOAN_RATE_TYPES.map(t => /*#__PURE__*/React.createElement("button", {
+    key: t,
+    type: "button",
+    className: `toggle-btn ${(l.rateType || '') === t ? 'sel' : ''}`,
+    style: {
+      minWidth: 'unset',
+      flex: 'none',
+      padding: '5px 8px',
+      fontSize: 11
+    },
+    onClick: () => updateLoan(l.id, {
+      rateType: t
+    })
+  }, t)))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      flexWrap: 'wrap',
+      fontSize: 11.5,
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--text-sub)'
+    }
+  }, "返済方式"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, LOAN_REPAYMENT_METHODS.map(t => /*#__PURE__*/React.createElement("button", {
+    key: t,
+    type: "button",
+    className: `toggle-btn ${(l.repaymentMethod || '') === t ? 'sel' : ''}`,
+    style: {
+      minWidth: 'unset',
+      flex: 'none',
+      padding: '5px 8px',
+      fontSize: 11
+    },
+    onClick: () => updateLoan(l.id, {
+      repaymentMethod: t
+    })
+  }, t)))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      flexWrap: 'wrap',
+      fontSize: 11.5,
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--text-sub)'
+    }
+  }, "ボーナス払い"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: `toggle-btn ${l.hasBonusPayment ? 'sel' : ''}`,
+    style: {
+      minWidth: 'unset',
+      flex: 'none',
+      padding: '5px 8px',
+      fontSize: 11
+    },
+    onClick: () => updateLoan(l.id, {
+      hasBonusPayment: true
+    })
+  }, "あり"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: `toggle-btn ${!l.hasBonusPayment ? 'sel' : ''}`,
+    style: {
+      minWidth: 'unset',
+      flex: 'none',
+      padding: '5px 8px',
+      fontSize: 11
+    },
+    onClick: () => updateLoan(l.id, {
+      hasBonusPayment: false
+    })
+  }, "なし")), l.hasBonusPayment && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    className: "form-input",
+    style: {
+      width: 90
+    },
+    placeholder: "年間合計額",
+    value: l.bonusPaymentAmount || '',
+    onChange: e => updateLoan(l.id, {
+      bonusPaymentAmount: e.target.value
+    })
+  }), "円")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      flexWrap: 'wrap',
+      fontSize: 11.5,
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--text-sub)'
+    }
+  }, "完済予定年月"), /*#__PURE__*/React.createElement("input", {
+    type: "month",
+    className: "form-input",
+    style: {
+      width: 130
+    },
+    value: l.payoffMonth || '',
+    onChange: e => updateLoan(l.id, {
+      payoffMonth: e.target.value
+    })
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--text-sub)'
+    }
+  }, "（分からない場合は残り年数）"), /*#__PURE__*/React.createElement("input", {
     type: "number",
     className: "form-input",
     style: {
       width: 64
     },
-    value: l.years || '',
+    value: loanRemainingYears(l),
     onChange: e => updateLoan(l.id, {
-      years: e.target.value
+      remainingYears: e.target.value
     })
-  }), "年"))), /*#__PURE__*/React.createElement("button", {
+  }), "年"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => toggleLoanDetail(l.id),
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--accent)',
+      fontSize: 11.5,
+      fontWeight: 700,
+      cursor: 'pointer',
+      padding: '4px 0'
+    }
+  }, openLoanDetails[l.id] ? '▲ 詳細を閉じる' : '▼ 詳細を開く（借入先・団信・担保・保証人など）'), openLoanDetails[l.id] && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8,
+      paddingTop: 8,
+      borderTop: '1px dashed var(--border)'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      flexWrap: 'wrap',
+      fontSize: 12,
+      marginBottom: 6
+    }
+  }, "借入先（金融機関名）", /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    style: {
+      width: 160
+    },
+    value: l.lender || '',
+    onChange: e => updateLoan(l.id, {
+      lender: e.target.value
+    })
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      flexWrap: 'wrap',
+      fontSize: 12,
+      marginBottom: 6
+    }
+  }, "借入年月日", /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    className: "form-input",
+    style: {
+      width: 150
+    },
+    value: l.originationDate || '',
+    onChange: e => updateLoan(l.id, {
+      originationDate: e.target.value
+    })
+  }), "借入当初の金額", /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    className: "form-input",
+    style: {
+      width: 110
+    },
+    value: l.originalAmount || '',
+    onChange: e => updateLoan(l.id, {
+      originalAmount: e.target.value
+    })
+  }), "円"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--text-sub)',
+      marginBottom: 4
+    }
+  }, "団体信用生命保険（団信）"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, LOAN_GUARANTEE_INSURANCE_OPTIONS.map(t => /*#__PURE__*/React.createElement("button", {
+    key: t,
+    type: "button",
+    className: `toggle-btn ${(l.guaranteeInsurance || '不明') === t ? 'sel' : ''}`,
+    style: {
+      minWidth: 'unset',
+      flex: 'none',
+      padding: '5px 8px',
+      fontSize: 11
+    },
+    onClick: () => updateLoan(l.id, {
+      guaranteeInsurance: t
+    })
+  }, t)))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      flexWrap: 'wrap',
+      fontSize: 12,
+      marginBottom: 6
+    }
+  }, "担保の有無・内容", /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    style: {
+      flex: 1,
+      minWidth: 140
+    },
+    placeholder: "例：自宅（土地・建物）／なし",
+    value: l.collateral || '',
+    onChange: e => updateLoan(l.id, {
+      collateral: e.target.value
+    })
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--text-sub)',
+      marginBottom: 4
+    }
+  }, "連帯保証人・連帯債務者"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, LOAN_GUARANTOR_OPTIONS.map(t => /*#__PURE__*/React.createElement("button", {
+    key: t,
+    type: "button",
+    className: `toggle-btn ${(l.guarantor || '不明') === t ? 'sel' : ''}`,
+    style: {
+      minWidth: 'unset',
+      flex: 'none',
+      padding: '5px 8px',
+      fontSize: 11
+    },
+    onClick: () => updateLoan(l.id, {
+      guarantor: t
+    })
+  }, t))))))), /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "btn btn-outline",
     style: {
@@ -12879,10 +13288,13 @@ function NexusPlanningSection({
     onChange: e => updateExpenseItem(x.id, {
       category: e.target.value
     })
-  }, LP_EXPENSE_CATEGORIES.map(c => /*#__PURE__*/React.createElement("option", {
+  }, LP_EXPENSE_GROUPS.map(g => /*#__PURE__*/React.createElement("optgroup", {
+    key: g.label,
+    label: g.label
+  }, g.items.map(c => /*#__PURE__*/React.createElement("option", {
     key: c,
     value: c
-  }, c))), /*#__PURE__*/React.createElement("input", {
+  }, c))))), /*#__PURE__*/React.createElement("input", {
     type: "number",
     className: "form-input",
     style: {
@@ -12980,7 +13392,7 @@ function NexusPlanningSection({
       borderCollapse: 'collapse',
       fontSize: 11.5
     }
-  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, ['目的', '保険種類', '保険会社', '証券番号', '契約日', '保険期間', '払込期間', '保険金額', '保険料'].map(h => /*#__PURE__*/React.createElement("th", {
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, ['目的', '保険種類', '保険会社', '証券番号', '契約日', '保険期間', '払込期間', '保険金額（加入当初）', '現在の解約返戻金', '保険料'].map(h => /*#__PURE__*/React.createElement("th", {
     key: h,
     style: {
       border: '1px solid var(--border)',
@@ -13041,6 +13453,14 @@ function NexusPlanningSection({
       textAlign: 'center'
     }
   }, r.coverageAmount ? Number(r.coverageAmount).toLocaleString() + (r.currency || '円') : '—'), /*#__PURE__*/React.createElement("td", {
+    style: {
+      border: '1px solid var(--border)',
+      padding: '5px 4px',
+      textAlign: 'center',
+      color: r.currentSurrenderValue ? 'var(--accent)' : 'inherit',
+      fontWeight: r.currentSurrenderValue ? 700 : 400
+    }
+  }, r.currentSurrenderValue ? Number(r.currentSurrenderValue).toLocaleString() + (r.currency || '円') : '—'), /*#__PURE__*/React.createElement("td", {
     style: {
       border: '1px solid var(--border)',
       padding: '5px 4px',
