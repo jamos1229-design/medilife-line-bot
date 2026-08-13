@@ -13038,9 +13038,15 @@ function NexusPlanningSection({
       <td>${r.coverageAmount ? Number(r.coverageAmount).toLocaleString() + (r.currency || '円') : ''}</td>
       <td>${r.currentSurrenderValue ? Number(r.currentSurrenderValue).toLocaleString() + (r.currency || '円') : ''}</td>
       <td>${escapeHtmlForPrint(r.premium)}${r.paymentCycle || ''}</td></tr>`).join('') : '<tr><td colspan="11">登録なし</td></tr>';
-    const famRows = (customer.suspects || []).length ? (customer.suspects || []).map(m => `
-      <tr><td>${escapeHtmlForPrint(m.name)}</td><td>${escapeHtmlForPrint(m.relation)}</td><td>${m.birthdate ? calcAge(m.birthdate) : calcStoredAge(m.age, m.ageYear) ?? ''}</td>
-      <td>${FAMILY_INSURANCE_LABEL[m.hasInsurance || 'unknown']}</td><td>${escapeHtmlForPrint(m.memo)}</td></tr>`).join('') : '<tr><td colspan="5">登録なし</td></tr>';
+    const famRows = (customer.suspects || []).length ? (customer.suspects || []).map(m => {
+      const linked = m.linkedCustomerId ? customers.find(x => x.id === m.linkedCustomerId) : null;
+      const fName = linked ? linked.name || linked.corporateName || '(名称未設定)' : m.name;
+      const fAge = linked ? linked.birthdate ? calcAge(linked.birthdate) : calcStoredAge(linked.age, linked.ageYear) : m.birthdate ? calcAge(m.birthdate) : calcStoredAge(m.age, m.ageYear);
+      const fHasInsurance = linked ? (linked.contracts || []).length > 0 ? 'yes' : 'unknown' : m.hasInsurance || 'unknown';
+      return `
+      <tr><td>${escapeHtmlForPrint(fName)}</td><td>${escapeHtmlForPrint(m.relation)}</td><td>${fAge ?? ''}</td>
+      <td>${FAMILY_INSURANCE_LABEL[fHasInsurance]}</td><td>${escapeHtmlForPrint(m.memo)}</td></tr>`;
+    }).join('') : '<tr><td colspan="5">登録なし</td></tr>';
     const loanBasicRows = loans.length ? loans.map(l => `
       <tr><td>${escapeHtmlForPrint(LOAN_CATEGORIES.includes(l.category) ? l.category : '—')}</td><td>${escapeHtmlForPrint(l.name)}</td>
       <td>${l.balance ? Number(l.balance).toLocaleString() + '円' : ''}</td><td>${escapeHtmlForPrint(l.rate)}${l.rate ? '%' : ''}</td><td>${escapeHtmlForPrint(l.rateType)}</td>
@@ -13546,7 +13552,13 @@ function NexusPlanningSection({
     // 家族構成
     row = nexusXlsxSubTitle(ws, row, '家族構成', 5);
     row = nexusXlsxHeaderRow(ws, row, ['お名前', '続柄', '年齢', '既契約', 'メモ']);
-    const famRows = (customer.suspects || []).map(m => [m.name || '', m.relation || '', m.birthdate ? calcAge(m.birthdate) : calcStoredAge(m.age, m.ageYear) ?? '', FAMILY_INSURANCE_LABEL[m.hasInsurance || 'unknown'], m.memo || '']);
+    const famRows = (customer.suspects || []).map(m => {
+      const linked = m.linkedCustomerId ? customers.find(x => x.id === m.linkedCustomerId) : null;
+      const fName = linked ? linked.name || linked.corporateName || '(名称未設定)' : m.name || '';
+      const fAge = linked ? linked.birthdate ? calcAge(linked.birthdate) : calcStoredAge(linked.age, linked.ageYear) : m.birthdate ? calcAge(m.birthdate) : calcStoredAge(m.age, m.ageYear);
+      const fHasInsurance = linked ? (linked.contracts || []).length > 0 ? 'yes' : 'unknown' : m.hasInsurance || 'unknown';
+      return [fName, m.relation || '', fAge ?? '', FAMILY_INSURANCE_LABEL[fHasInsurance], m.memo || ''];
+    });
     nexusXlsxDataRows(ws, row, famRows.length ? famRows : [['登録なし', '', '', '', '']], []);
     return wb;
   };
