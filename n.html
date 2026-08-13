@@ -11797,6 +11797,44 @@ function nexusLpCategoryMonthly(cat) {
   return years > 0 ? Math.round(total * 10000 / years / 12) : 0;
 }
 
+// 株式1銘柄の評価額・取得総額・評価損益・評価損益率
+function nexusStockEval(s) {
+  const qty = parseFloat(s.quantity) || 0;
+  const cost = parseFloat(s.costPrice) || 0;
+  const cur = parseFloat(s.currentPrice) || 0;
+  const value = qty * cur;
+  const costTotal = qty * cost;
+  return {
+    value,
+    costTotal,
+    gain: value - costTotal,
+    gainPct: costTotal > 0 ? (value - costTotal) / costTotal * 100 : null
+  };
+}
+// 投資信託1銘柄の評価額・取得総額・評価損益・評価損益率（基準価額は1万口あたり）
+function nexusFundEval(f) {
+  const units = parseFloat(f.units) || 0;
+  const costNav = parseFloat(f.costNav) || 0;
+  const curNav = parseFloat(f.currentNav) || 0;
+  const value = units / 10000 * curNav;
+  const costTotal = units / 10000 * costNav;
+  return {
+    value,
+    costTotal,
+    gain: value - costTotal,
+    gainPct: costTotal > 0 ? (value - costTotal) / costTotal * 100 : null
+  };
+}
+// 銘柄別に入力した株式・投資信託の評価額合計＋手入力の概算（その他）分を合算
+function nexusPortfolioFundsStocksTotal(portfolioObj) {
+  const stocks = portfolioObj && portfolioObj.stocks || [];
+  const funds = portfolioObj && portfolioObj.funds || [];
+  const stockTotal = stocks.reduce((s, r) => s + nexusStockEval(r).value, 0);
+  const fundTotal = funds.reduce((s, r) => s + nexusFundEval(r).value, 0);
+  const manual = parseFloat(portfolioObj && portfolioObj.fundsStocksJpy) || 0;
+  return stockTotal + fundTotal + manual;
+}
+
 // 契約1件のJPY換算額（外貨建てはレートがあれば換算、なければ換算不可として扱う）
 function nexusContractJpyAmount(ct, field) {
   const raw = parseFloat(ct[field]) || 0;
@@ -12743,6 +12781,44 @@ function NexusPlanningSection({
       }
     });
   };
+  const addStock = () => updateLpPortfolio({
+    stocks: [...(customer.lp && customer.lp.portfolio && customer.lp.portfolio.stocks || []), {
+      id: uid(),
+      name: '',
+      quantity: '',
+      costPrice: '',
+      currentPrice: ''
+    }]
+  });
+  const updateStock = (id, patch) => updateLpPortfolio({
+    stocks: (customer.lp && customer.lp.portfolio && customer.lp.portfolio.stocks || []).map(s => s.id === id ? {
+      ...s,
+      ...patch
+    } : s)
+  });
+  const removeStock = id => updateLpPortfolio({
+    stocks: (customer.lp && customer.lp.portfolio && customer.lp.portfolio.stocks || []).filter(s => s.id !== id)
+  });
+  const addFund = () => updateLpPortfolio({
+    funds: [...(customer.lp && customer.lp.portfolio && customer.lp.portfolio.funds || []), {
+      id: uid(),
+      name: '',
+      units: '',
+      costNav: '',
+      currentNav: '',
+      monthlyContribution: '',
+      expectedReturn: ''
+    }]
+  });
+  const updateFund = (id, patch) => updateLpPortfolio({
+    funds: (customer.lp && customer.lp.portfolio && customer.lp.portfolio.funds || []).map(f => f.id === id ? {
+      ...f,
+      ...patch
+    } : f)
+  });
+  const removeFund = id => updateLpPortfolio({
+    funds: (customer.lp && customer.lp.portfolio && customer.lp.portfolio.funds || []).filter(f => f.id !== id)
+  });
   const addLoan = () => updateLp({
     loans: [...(customer.lp && customer.lp.loans || []), {
       id: uid(),
@@ -12914,6 +12990,7 @@ function NexusPlanningSection({
   })();
 
   // ── ポートフォリオ（通貨別・資産クラス別）── 画面表示は常に本人（＋関連法人）ベース
+  // 「投資信託・株式等」は、銘柄別に入力した株式・投資信託の評価額合計＋その他概算（手入力）分
   const {
     assetClassChart,
     currencyChart,
@@ -12921,14 +12998,17 @@ function NexusPlanningSection({
     insuranceSavingsUnconvertible,
     currencyUnconvertible,
     unconvertibleSavingsContracts
-  } = nexusComputePortfolio(allContractsForCharts, portfolio);
+  } = nexusComputePortfolio(allContractsForCharts, {
+    fundsStocksJpy: nexusPortfolioFundsStocksTotal(portfolio),
+    realEstateOtherJpy: portfolio.realEstateOtherJpy
+  });
 
   // ── 夫婦合算（資料の対象で選べる）── 配偶者が顧客連携済みの場合のみ計算
   const spouseContracts = linkedSpouseCustomer ? linkedSpouseCustomer.contracts || [] : [];
   const spousePortfolioInputs = linkedSpouseCustomer && linkedSpouseCustomer.lp && linkedSpouseCustomer.lp.portfolio || {};
   const coupleContractsForCharts = [...allContractsForCharts, ...spouseContracts];
   const couplePortfolioInputs = {
-    fundsStocksJpy: (parseFloat(portfolio.fundsStocksJpy) || 0) + (parseFloat(spousePortfolioInputs.fundsStocksJpy) || 0),
+    fundsStocksJpy: nexusPortfolioFundsStocksTotal(portfolio) + nexusPortfolioFundsStocksTotal(spousePortfolioInputs),
     realEstateOtherJpy: (parseFloat(portfolio.realEstateOtherJpy) || 0) + (parseFloat(spousePortfolioInputs.realEstateOtherJpy) || 0)
   };
   const couplePortfolio = linkedSpouseCustomer ? nexusComputePortfolio(coupleContractsForCharts, couplePortfolioInputs) : null;
@@ -13039,6 +13119,28 @@ function NexusPlanningSection({
         ${buildPurposeRowsForPrint('保障集計（配偶者）', spouseContracts)}
         ${buildPurposeRowsForPrint('保障集計（世帯合算）', [...contracts, ...spouseContracts])}
       ` : ''}
+      ${(() => {
+      const stocksAll = isCoupleScope ? [...(portfolio.stocks || []), ...(spousePortfolioInputs.stocks || [])] : portfolio.stocks || [];
+      const fundsAll = isCoupleScope ? [...(portfolio.funds || []), ...(spousePortfolioInputs.funds || [])] : portfolio.funds || [];
+      if (stocksAll.length === 0 && fundsAll.length === 0) return '';
+      const stockRows = stocksAll.map(st => {
+        const ev = nexusStockEval(st);
+        return `<tr><td>${escapeHtmlForPrint(st.name)}</td><td>${st.quantity || ''}株</td><td>${st.costPrice ? Number(st.costPrice).toLocaleString() + '円' : ''}</td><td>${st.currentPrice ? Number(st.currentPrice).toLocaleString() + '円' : ''}</td><td>${Math.round(ev.value).toLocaleString()}円</td><td>${ev.gain >= 0 ? '+' : ''}${Math.round(ev.gain).toLocaleString()}円</td></tr>`;
+      }).join('');
+      const fundRows = fundsAll.map(fd => {
+        const ev = nexusFundEval(fd);
+        return `<tr><td>${escapeHtmlForPrint(fd.name)}</td><td>${fd.units ? Number(fd.units).toLocaleString() : ''}口</td><td>${fd.costNav || ''}</td><td>${fd.currentNav || ''}</td><td>${Math.round(ev.value).toLocaleString()}円</td><td>${ev.gain >= 0 ? '+' : ''}${Math.round(ev.gain).toLocaleString()}円</td></tr>`;
+      }).join('');
+      return `
+      <div class="print-section">
+        <h3>保有株式一覧${isCoupleScope ? '｜夫婦合算' : ''}</h3>
+        <table><tr><th>銘柄名</th><th>保有数量</th><th>取得単価</th><th>現在価格</th><th>評価額</th><th>評価損益</th></tr>${stockRows || '<tr><td colspan="6">登録なし</td></tr>'}</table>
+      </div>
+      <div class="print-section">
+        <h3>保有投資信託一覧${isCoupleScope ? '｜夫婦合算' : ''}</h3>
+        <table><tr><th>銘柄名</th><th>保有口数</th><th>取得時基準価額</th><th>現在基準価額</th><th>評価額</th><th>評価損益</th></tr>${fundRows || '<tr><td colspan="6">登録なし</td></tr>'}</table>
+      </div>`;
+    })()}
       <div class="print-section">
         <h3>ポートフォリオ（資産クラス別）${isCoupleScope ? '｜夫婦合算' : ''}</h3>
         <table><tr><th>区分</th><th>金額</th><th>割合</th></tr>${assetClassRowsHtml}</table>
@@ -13413,6 +13515,28 @@ function NexusPlanningSection({
     }
 
     // ポートフォリオ
+    {
+      const stocksAll = isCoupleScope ? [...(portfolio.stocks || []), ...(spousePortfolioInputs.stocks || [])] : portfolio.stocks || [];
+      const fundsAll = isCoupleScope ? [...(portfolio.funds || []), ...(spousePortfolioInputs.funds || [])] : portfolio.funds || [];
+      if (stocksAll.length > 0) {
+        row = nexusXlsxSubTitle(ws, row, `保有株式一覧${scopeNote}`, 6);
+        row = nexusXlsxHeaderRow(ws, row, ['銘柄名', '保有数量', '取得単価', '現在価格', '評価額', '評価損益']);
+        row = nexusXlsxDataRows(ws, row, stocksAll.map(st => {
+          const ev = nexusStockEval(st);
+          return [st.name || '', st.quantity ? Number(st.quantity) : '', st.costPrice ? Number(st.costPrice) : '', st.currentPrice ? Number(st.currentPrice) : '', Math.round(ev.value), Math.round(ev.gain)];
+        }), [2, 3, 4, 5, 6]);
+        row += 1;
+      }
+      if (fundsAll.length > 0) {
+        row = nexusXlsxSubTitle(ws, row, `保有投資信託一覧${scopeNote}`, 6);
+        row = nexusXlsxHeaderRow(ws, row, ['銘柄名', '保有口数', '取得時基準価額', '現在基準価額', '評価額', '評価損益']);
+        row = nexusXlsxDataRows(ws, row, fundsAll.map(fd => {
+          const ev = nexusFundEval(fd);
+          return [fd.name || '', fd.units ? Number(fd.units) : '', fd.costNav ? Number(fd.costNav) : '', fd.currentNav ? Number(fd.currentNav) : '', Math.round(ev.value), Math.round(ev.gain)];
+        }), [2, 3, 4, 5, 6]);
+        row += 1;
+      }
+    }
     row = nexusXlsxSubTitle(ws, row, `ポートフォリオ（資産クラス別）${scopeNote}`, 3);
     row = nexusXlsxHeaderRow(ws, row, ['区分', '金額', '割合']);
     row = nexusXlsxDataRows(ws, row, scopedPortfolio.assetClassChart.length ? scopedPortfolio.assetClassChart.map(i => [i.label, i.value, scopedPortfolio.portfolioTotal > 0 ? Math.round(i.value / scopedPortfolio.portfolioTotal * 100) + '%' : '']) : [['データなし', '', '']], [2]);
@@ -14386,10 +14510,272 @@ function NexusPlanningSection({
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       fontWeight: 700,
+      fontSize: 13,
+      color: 'var(--text)',
+      marginBottom: 10
+    }
+  }, "株式（銘柄別）"), (portfolio.stocks || []).length === 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text-sub)',
+      marginBottom: 8
+    }
+  }, "登録なし"), (portfolio.stocks || []).map(st => {
+    const ev = nexusStockEval(st);
+    return /*#__PURE__*/React.createElement("div", {
+      key: st.id,
+      style: {
+        border: '1px solid var(--border)',
+        borderRadius: 8,
+        padding: 10,
+        marginBottom: 8,
+        background: 'var(--bg)'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 6,
+        alignItems: 'center',
+        marginBottom: 6
+      }
+    }, /*#__PURE__*/React.createElement("input", {
+      className: "form-input",
+      style: {
+        flex: 1
+      },
+      placeholder: "銘柄名（例：トヨタ自動車）",
+      value: st.name || '',
+      onChange: e => updateStock(st.id, {
+        name: e.target.value
+      })
+    }), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => removeStock(st.id),
+      style: {
+        background: 'none',
+        border: 'none',
+        color: 'var(--danger)',
+        fontSize: 18,
+        cursor: 'pointer',
+        flexShrink: 0
+      }
+    }, "×")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        flexWrap: 'wrap',
+        fontSize: 12,
+        marginBottom: 6
+      }
+    }, "保有数量", /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      className: "form-input",
+      style: {
+        width: 84
+      },
+      value: st.quantity || '',
+      onChange: e => updateStock(st.id, {
+        quantity: e.target.value
+      })
+    }), "株 取得単価", /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      className: "form-input",
+      style: {
+        width: 90
+      },
+      value: st.costPrice || '',
+      onChange: e => updateStock(st.id, {
+        costPrice: e.target.value
+      })
+    }), "円 現在価格", /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      className: "form-input",
+      style: {
+        width: 90
+      },
+      value: st.currentPrice || '',
+      onChange: e => updateStock(st.id, {
+        currentPrice: e.target.value
+      })
+    }), "円"), ev.value > 0 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12
+      }
+    }, "評価額：", /*#__PURE__*/React.createElement("b", null, Math.round(ev.value).toLocaleString(), "円"), "評価損益：", /*#__PURE__*/React.createElement("b", {
+      style: {
+        color: ev.gain >= 0 ? 'var(--success)' : 'var(--danger)'
+      }
+    }, ev.gain >= 0 ? '+' : '', Math.round(ev.gain).toLocaleString(), "円", ev.gainPct !== null ? `（${ev.gain >= 0 ? '+' : ''}${ev.gainPct.toFixed(1)}%）` : '')));
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline",
+    style: {
+      fontSize: 12,
+      padding: '8px 12px'
+    },
+    onClick: addStock
+  }, "＋ 株式を追加")), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 13,
+      color: 'var(--text)',
+      marginBottom: 10
+    }
+  }, "投資信託（積立・銘柄別）"), (portfolio.funds || []).length === 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text-sub)',
+      marginBottom: 8
+    }
+  }, "登録なし"), (portfolio.funds || []).map(fd => {
+    const ev = nexusFundEval(fd);
+    return /*#__PURE__*/React.createElement("div", {
+      key: fd.id,
+      style: {
+        border: '1px solid var(--border)',
+        borderRadius: 8,
+        padding: 10,
+        marginBottom: 8,
+        background: 'var(--bg)'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 6,
+        alignItems: 'center',
+        marginBottom: 6
+      }
+    }, /*#__PURE__*/React.createElement("input", {
+      className: "form-input",
+      style: {
+        flex: 1
+      },
+      placeholder: "銘柄名（例：eMAXIS Slim 全世界株式）",
+      value: fd.name || '',
+      onChange: e => updateFund(fd.id, {
+        name: e.target.value
+      })
+    }), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => removeFund(fd.id),
+      style: {
+        background: 'none',
+        border: 'none',
+        color: 'var(--danger)',
+        fontSize: 18,
+        cursor: 'pointer',
+        flexShrink: 0
+      }
+    }, "×")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        flexWrap: 'wrap',
+        fontSize: 12,
+        marginBottom: 6
+      }
+    }, "保有口数", /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      className: "form-input",
+      style: {
+        width: 100
+      },
+      value: fd.units || '',
+      onChange: e => updateFund(fd.id, {
+        units: e.target.value
+      })
+    }), "口"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        flexWrap: 'wrap',
+        fontSize: 12,
+        marginBottom: 6
+      }
+    }, "取得時基準価額", /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      className: "form-input",
+      style: {
+        width: 90
+      },
+      value: fd.costNav || '',
+      onChange: e => updateFund(fd.id, {
+        costNav: e.target.value
+      })
+    }), "現在基準価額", /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      className: "form-input",
+      style: {
+        width: 90
+      },
+      value: fd.currentNav || '',
+      onChange: e => updateFund(fd.id, {
+        currentNav: e.target.value
+      })
+    }), /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: 'var(--text-sub)'
+      }
+    }, "（1万口あたり）")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        flexWrap: 'wrap',
+        fontSize: 12,
+        marginBottom: 6
+      }
+    }, "毎月の積立額", /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      className: "form-input",
+      style: {
+        width: 90
+      },
+      value: fd.monthlyContribution || '',
+      onChange: e => updateFund(fd.id, {
+        monthlyContribution: e.target.value
+      })
+    }), "円 想定年間利回り", /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      className: "form-input",
+      style: {
+        width: 64
+      },
+      value: fd.expectedReturn || '',
+      onChange: e => updateFund(fd.id, {
+        expectedReturn: e.target.value
+      })
+    }), "%"), ev.value > 0 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12
+      }
+    }, "評価額：", /*#__PURE__*/React.createElement("b", null, Math.round(ev.value).toLocaleString(), "円"), "評価損益：", /*#__PURE__*/React.createElement("b", {
+      style: {
+        color: ev.gain >= 0 ? 'var(--success)' : 'var(--danger)'
+      }
+    }, ev.gain >= 0 ? '+' : '', Math.round(ev.gain).toLocaleString(), "円", ev.gainPct !== null ? `（${ev.gain >= 0 ? '+' : ''}${ev.gainPct.toFixed(1)}%）` : '')));
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline",
+    style: {
+      fontSize: 12,
+      padding: '8px 12px'
+    },
+    onClick: addFund
+  }, "＋ 投資信託を追加")), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
       fontSize: 12.5,
       marginBottom: 8
     }
-  }, "投資信託・株式等（円換算残高）"), /*#__PURE__*/React.createElement(AmountInput, {
+  }, "その他の投資信託・株式（銘柄別に入力しない分の概算）"), /*#__PURE__*/React.createElement(AmountInput, {
     prefix: "¥",
     value: portfolio.fundsStocksJpy || '',
     onChange: e => updateLpPortfolio({
