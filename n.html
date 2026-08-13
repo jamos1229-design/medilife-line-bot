@@ -2699,7 +2699,8 @@ function CustomerDetail({
   onEdit,
   onDelete,
   onClose,
-  onRegisterSuspect
+  onRegisterSuspect,
+  onOpenCustomer
 }) {
   const [confirmDel, setConfirmDel] = useState(false);
   const c = customer;
@@ -3689,7 +3690,11 @@ function CustomerDetail({
     }));
   })(), c.suspects && c.suspects.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "section-header"
-  }, "👥 サスペクト（", c.suspects.length, "人）"), c.suspects.map(sp => /*#__PURE__*/React.createElement("div", {
+  }, "👥 サスペクト（", c.suspects.length, "人）"), c.suspects.map(sp => {
+  const linked = sp.linkedCustomerId ? customers.find(x => x.id === sp.linkedCustomerId) : null;
+  const displayName = linked ? linked.name || linked.corporateName || '(名称未設定)' : sp.name || '（名前未入力）';
+  const displayAge = linked ? linked.birthdate ? calcAge(linked.birthdate) : calcStoredAge(linked.age, linked.ageYear) : sp.birthdate ? calcAge(sp.birthdate) : calcStoredAge(sp.age, sp.ageYear);
+  return /*#__PURE__*/React.createElement("div", {
     key: sp.id,
     className: "card",
     style: {
@@ -3718,22 +3723,25 @@ function CustomerDetail({
       fontSize: 16,
       fontWeight: 700
     }
-  }, sp.name || '（名前未入力）', (() => {
-    const age = sp.birthdate ? calcAge(sp.birthdate) : calcStoredAge(sp.age, sp.ageYear);
-    return age !== null ? /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 13,
-        color: sp.birthdate ? 'var(--accent)' : 'var(--text-sub)',
-        marginLeft: 6,
-        fontWeight: 600
-      }
-    }, age, "歳") : null;
-  })()), sp.birthdate && /*#__PURE__*/React.createElement("div", {
+  }, displayName, displayAge !== null && displayAge !== undefined && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 13,
+      color: 'var(--accent)',
+      marginLeft: 6,
+      fontWeight: 600
+    }
+  }, displayAge, "歳")), linked ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--accent)',
+      fontWeight: 700
+    }
+  }, "🔗 顧客連携中") : sp.birthdate ? /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12,
       color: 'var(--text-sub)'
     }
-  }, "🎂 ", fmtDateFull(sp.birthdate)), sp.relation && /*#__PURE__*/React.createElement("span", {
+  }, "🎂 ", fmtDateFull(sp.birthdate)) : null, sp.relation && /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 12,
       fontWeight: 700,
@@ -3742,7 +3750,15 @@ function CustomerDetail({
       borderRadius: 6,
       padding: '1px 7px'
     }
-  }, sp.relation))), /*#__PURE__*/React.createElement("button", {
+  }, sp.relation))), linked ? /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-sm btn-outline",
+    style: {
+      fontSize: 12,
+      padding: '6px 10px',
+      whiteSpace: 'nowrap'
+    },
+    onClick: () => onOpenCustomer(linked.id)
+  }, "本人を見る →") : /*#__PURE__*/React.createElement("button", {
     className: "btn btn-sm btn-primary",
     style: {
       fontSize: 12,
@@ -3760,7 +3776,8 @@ function CustomerDetail({
       marginTop: 8,
       lineHeight: 1.5
     }
-  }, sp.memo)))), (referredByCustomer || c.referredByName || referredToCustomers.length > 0) && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  }, sp.memo));
+})), (referredByCustomer || c.referredByName || referredToCustomers.length > 0) && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "section-header"
   }, "紹介ネットワーク"), /*#__PURE__*/React.createElement("div", {
     className: "card"
@@ -14253,6 +14270,10 @@ function App() {
     onRegisterSuspect: sp => {
       setSelectedCustomer(null);
       registerSuspect(sp);
+    },
+    onOpenCustomer: id => {
+      const target = customers.find(x => x.id === id);
+      if (target) setSelectedCustomer(target);
     }
   }), showCustomerForm && /*#__PURE__*/React.createElement(CustomerForm, {
     editing: editingCustomer,
