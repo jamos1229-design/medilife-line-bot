@@ -12134,7 +12134,13 @@ function NexusPlanningTimeline({
         borderRadius: 3
       }
     }));
-  }));
+  }), blocks.length === 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--accent)',
+      marginTop: 6
+    }
+  }, "👇 下の「ライフイベント費用」で各区分の「開始年齢」を入力すると、ここに色付きブロックが表示されます"));
 }
 
 // 印刷でも見えるよう、画像なしでCSSだけで組む簡易タイムライン
