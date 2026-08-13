@@ -12273,6 +12273,8 @@ function nexusPurposeSummary(contracts) {
     byPurpose[p] = 0;
   });
   let unclassified = 0;
+  let deathTotal = 0,
+    medicalTotal = 0;
   contracts.forEach(ct => {
     const amt = parseFloat(ct.coverageAmount) || 0;
     if (!amt) return;
@@ -12286,9 +12288,13 @@ function nexusPurposeSummary(contracts) {
     } else {
       unclassified += amt;
     }
+    // 年金・貯蓄型の保険金額は「将来、一定の年齢になってから受け取る年金額」であり、
+    // 今すぐの死亡・医療保障額ではない。他の目的も併せて選択されていても、
+    // 死亡保険金額合計・医療保険金額合計には計上しない。
+    if (purposes.includes('年金・貯蓄型')) return;
+    if (purposes.some(p => CONTRACT_PURPOSE_DEATH_GROUP.includes(p))) deathTotal += amt;
+    if (purposes.some(p => CONTRACT_PURPOSE_MEDICAL_GROUP.includes(p))) medicalTotal += amt;
   });
-  const deathTotal = CONTRACT_PURPOSE_DEATH_GROUP.reduce((s, p) => s + (byPurpose[p] || 0), 0);
-  const medicalTotal = CONTRACT_PURPOSE_MEDICAL_GROUP.reduce((s, p) => s + (byPurpose[p] || 0), 0);
   return {
     byPurpose,
     deathTotal,
@@ -12390,7 +12396,13 @@ function NexusPurposeSummaryTable({
       fontWeight: 700,
       color: '#D97706'
     }
-  }, "医療保険金額合計："), medicalTotal.toLocaleString(), "円")));
+  }, "医療保険金額合計："), medicalTotal.toLocaleString(), "円")), byPurpose['年金・貯蓄型'] > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--text-sub)',
+      marginTop: 6
+    }
+  }, "※ 年金・貯蓄型（", byPurpose['年金・貯蓄型'].toLocaleString(), "円）は将来の年金受取額のため、死亡・医療保険金額合計には含めていません"));
 }
 
 // ── 家系図（本人・配偶者・親・兄弟姉妹・子ども。suspects から自動構成）──
@@ -14863,6 +14875,8 @@ function App() {
     setEditingCustomer({
       name: sp.name || '',
       age: sp.age || '',
+      ageYear: sp.ageYear || '',
+      birthdate: sp.birthdate || '',
       memo: sp.memo || '',
       status: '未接触',
       contactMethod: '電話',
