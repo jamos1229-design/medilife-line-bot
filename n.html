@@ -768,7 +768,27 @@ function ContractBlock({
     value: contract.currentSurrenderValue || '',
     onChange: s('currentSurrenderValue'),
     placeholder: "例：9500000（未入力なら保険金額を使用）"
-  })), /*#__PURE__*/React.createElement("div", {
+  })), nexusContractPurposes(contract).includes('年金・貯蓄型') && /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "運用区分（貯蓄性契約の資産クラス集計に使用）"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, ['一般勘定', '特別勘定'].map(a => /*#__PURE__*/React.createElement("button", {
+    key: a,
+    type: "button",
+    className: `toggle-btn ${(contract.accountType || '一般勘定') === a ? 'sel' : ''}`,
+    onClick: () => sv('accountType')(a)
+  }, a))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--text-sub)',
+      marginTop: 4
+    }
+  }, "一般勘定＝円建て終身・円建て個人年金など（保険会社が運用、日本国債中心で安定）。特別勘定＝変額保険・変額年金・ユニットリンク等（契約者が運用リスクを負い、実質的に投資信託と同じ値動き）→ポートフォリオ集計では「投資信託・株式等」に分類されます。")), /*#__PURE__*/React.createElement("div", {
     className: "form-group",
     style: {
       marginBottom: 8
@@ -11870,6 +11890,7 @@ function nexusContractJpyAmount(ct, field) {
 function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
   const savingsContracts = contractsForCharts.filter(ct => nexusContractPurposes(ct).includes('年金・貯蓄型'));
   let insuranceSavingsJpy = 0,
+    insuranceSavingsSeparateAccountJpy = 0,
     insuranceSavingsUnconvertible = 0;
   let currencyForeignJpy = 0,
     currencyJpyJpy = 0,
@@ -11889,18 +11910,21 @@ function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
       unconvertibleSavingsContracts.push(ct);
       return;
     }
-    insuranceSavingsJpy += amount;
+    // 特別勘定（変額保険・変額年金・ユニットリンク等）は保険会社ではなく契約者が運用リスクを負い、
+    // 実質的に投資信託と同じ値動きをするため、資産クラス別の集計では「投資信託・株式等」に含める。
+    // 一般勘定（円建て終身・円建て個人年金など、日本国債中心で運用）は従来通り「保険（貯蓄性）」に含める。
+    if (ct.accountType === '特別勘定') insuranceSavingsSeparateAccountJpy += amount;else insuranceSavingsJpy += amount;
     // 現在の解約返戻金を使った場合は常に円建てとして扱う（上のnexusContractJpyAmountと同じ理由）。
     if (field === 'currentSurrenderValue' || (ct.currency || '円') === '円') currencyJpyJpy += amount;else currencyForeignJpy += amount;
   });
-  const fundsStocksJpy = parseFloat(portfolioInputs.fundsStocksJpy) || 0;
+  const fundsStocksJpy = (parseFloat(portfolioInputs.fundsStocksJpy) || 0) + insuranceSavingsSeparateAccountJpy;
   const realEstateOtherJpy = parseFloat(portfolioInputs.realEstateOtherJpy) || 0;
   const assetClassChart = [{
     label: '投資信託・株式等',
-    value: fundsStocksJpy,
+    value: Math.round(fundsStocksJpy),
     color: '#2563EB'
   }, {
-    label: '保険（貯蓄性）',
+    label: '保険（貯蓄性・一般勘定）',
     value: Math.round(insuranceSavingsJpy),
     color: 'var(--accent)'
   }, {
@@ -11910,7 +11934,7 @@ function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
   }].filter(i => i.value > 0);
   const currencyChart = [{
     label: '円建て',
-    value: Math.round(currencyJpyJpy) + fundsStocksJpy + realEstateOtherJpy,
+    value: Math.round(currencyJpyJpy) + Math.round(fundsStocksJpy) + realEstateOtherJpy,
     color: 'var(--accent)'
   }, {
     label: '外貨建て',
@@ -11924,7 +11948,8 @@ function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
     portfolioTotal,
     insuranceSavingsUnconvertible,
     currencyUnconvertible,
-    unconvertibleSavingsContracts
+    unconvertibleSavingsContracts,
+    insuranceSavingsSeparateAccountJpy: Math.round(insuranceSavingsSeparateAccountJpy)
   };
 }
 
@@ -13001,7 +13026,8 @@ function NexusPlanningSection({
     portfolioTotal,
     insuranceSavingsUnconvertible,
     currencyUnconvertible,
-    unconvertibleSavingsContracts
+    unconvertibleSavingsContracts,
+    insuranceSavingsSeparateAccountJpy
   } = nexusComputePortfolio(allContractsForCharts, {
     fundsStocksJpy: nexusPortfolioFundsStocksTotal(portfolio),
     realEstateOtherJpy: portfolio.realEstateOtherJpy
@@ -13023,7 +13049,8 @@ function NexusPlanningSection({
     portfolioTotal,
     insuranceSavingsUnconvertible,
     currencyUnconvertible,
-    unconvertibleSavingsContracts
+    unconvertibleSavingsContracts,
+    insuranceSavingsSeparateAccountJpy
   };
   const buildPurposeRowsForPrint = (title, list) => {
     const {
@@ -14894,7 +14921,13 @@ function NexusPlanningSection({
       color: 'var(--text-sub)',
       marginTop: 8
     }
-  }, "※ 保険（貯蓄性）は、契約の「目的」で「年金・貯蓄型」を選んだ既契約から、円建てはそのまま・外貨建ては下の適用レートで円換算して自動集計されます"), unconvertibleSavingsContracts.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, "※ 保険（貯蓄性）は、契約の「目的」で「年金・貯蓄型」を選んだ既契約から、円建てはそのまま・外貨建ては下の適用レートで円換算して自動集計されます"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--text-sub)',
+      marginTop: 4
+    }
+  }, "※ そのうち契約編集で「特別勘定」を選んだもの（変額保険・変額年金・ユニットリンク等）は、実質的に投資信託と同じ値動きのため「保険（貯蓄性）」ではなく「投資信託・株式等」に集計されます", insuranceSavingsSeparateAccountJpy > 0 && `（現在：${insuranceSavingsSeparateAccountJpy.toLocaleString()}円分）`), unconvertibleSavingsContracts.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11.5,
       color: '#B45309',
