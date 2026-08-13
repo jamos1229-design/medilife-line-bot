@@ -763,7 +763,7 @@ function ContractBlock({
     }
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "現在の解約返戻金（貯蓄性契約で加入時の金額と異なる場合に入力）"), /*#__PURE__*/React.createElement(AmountInput, {
+  }, "現在の解約返戻金（円建てで入力／外貨建て契約でも解約時は円で払い戻されるため／貯蓄性契約で加入時の金額と異なる場合に入力）"), /*#__PURE__*/React.createElement(AmountInput, {
     prefix: "¥",
     value: contract.currentSurrenderValue || '',
     onChange: s('currentSurrenderValue'),
@@ -11836,10 +11836,16 @@ function nexusPortfolioFundsStocksTotal(portfolioObj) {
 }
 
 // 契約1件のJPY換算額（外貨建てはレートがあれば換算、なければ換算不可として扱う）
+// 「現在の解約返戻金」は入力フォーム上も常に円建てで入力する項目のため（外貨建て契約でも
+// 解約時は円で払い戻されるため）、契約の通貨（ドル建て等）にかかわらず換算せずそのまま円として扱う。
 function nexusContractJpyAmount(ct, field) {
   const raw = parseFloat(ct[field]) || 0;
   if (!raw) return {
     amount: 0,
+    convertible: true
+  };
+  if (field === 'currentSurrenderValue') return {
+    amount: raw,
     convertible: true
   };
   if ((ct.currency || '円') === '円') return {
@@ -11884,7 +11890,8 @@ function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
       return;
     }
     insuranceSavingsJpy += amount;
-    if ((ct.currency || '円') === '円') currencyJpyJpy += amount;else currencyForeignJpy += amount;
+    // 現在の解約返戻金を使った場合は常に円建てとして扱う（上のnexusContractJpyAmountと同じ理由）。
+    if (field === 'currentSurrenderValue' || (ct.currency || '円') === '円') currencyJpyJpy += amount;else currencyForeignJpy += amount;
   });
   const fundsStocksJpy = parseFloat(portfolioInputs.fundsStocksJpy) || 0;
   const realEstateOtherJpy = parseFloat(portfolioInputs.realEstateOtherJpy) || 0;
@@ -13036,7 +13043,7 @@ function NexusPlanningSection({
       <tr><td>${i + 1}</td><td>${escapeHtmlForPrint(nexusContractPurposes(r).join('、'))}</td><td>${escapeHtmlForPrint(r.type)}</td><td>${escapeHtmlForPrint(r.company)}</td><td>${escapeHtmlForPrint(r.policyNum)}</td>
       <td>${escapeHtmlForPrint(r.date)}</td><td>${escapeHtmlForPrint(r.termNote || r.termEnd)}</td><td>${escapeHtmlForPrint(r.paymentTermNote || r.paymentTermEnd)}</td>
       <td>${r.coverageAmount ? Number(r.coverageAmount).toLocaleString() + (r.currency || '円') : ''}</td>
-      <td>${r.currentSurrenderValue ? Number(r.currentSurrenderValue).toLocaleString() + (r.currency || '円') : ''}</td>
+      <td>${r.currentSurrenderValue ? Number(r.currentSurrenderValue).toLocaleString() + '円' : ''}</td>
       <td>${escapeHtmlForPrint(r.premium)}${r.paymentCycle || ''}</td></tr>`).join('') : '<tr><td colspan="11">登録なし</td></tr>';
     const famRows = (customer.suspects || []).length ? (customer.suspects || []).map(m => {
       const linked = m.linkedCustomerId ? customers.find(x => x.id === m.linkedCustomerId) : null;
@@ -14440,7 +14447,7 @@ function NexusPlanningSection({
       color: r.currentSurrenderValue ? 'var(--accent)' : 'inherit',
       fontWeight: r.currentSurrenderValue ? 700 : 400
     }
-  }, r.currentSurrenderValue ? Number(r.currentSurrenderValue).toLocaleString() + (r.currency || '円') : '—'), /*#__PURE__*/React.createElement("td", {
+  }, r.currentSurrenderValue ? Number(r.currentSurrenderValue).toLocaleString() + '円' : '—'), /*#__PURE__*/React.createElement("td", {
     style: {
       border: '1px solid var(--border)',
       padding: '5px 4px',
