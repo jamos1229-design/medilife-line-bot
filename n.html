@@ -11773,6 +11773,84 @@ function nexusContractJpyAmount(ct, field) {
     convertible: false
   };
 }
+
+// ── ポートフォリオ（通貨別・資産クラス別）集計 ──
+// 保険（貯蓄性＝目的「年金・貯蓄型」）は既存の契約データから自動算出。
+// 投資信託・株式や不動産等は保険契約に存在しないため、手入力分（portfolioInputs）を加算する。
+// 本人のみ／夫婦合算のどちらでも同じロジックで計算できるよう、対象契約リストを引数で受け取る。
+function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
+  const savingsContracts = contractsForCharts.filter(ct => nexusContractPurposes(ct).includes('年金・貯蓄型'));
+  let insuranceSavingsJpy = 0,
+    insuranceSavingsUnconvertible = 0;
+  let currencyForeignJpy = 0,
+    currencyJpyJpy = 0,
+    currencyUnconvertible = 0;
+  const unconvertibleSavingsContracts = [];
+  savingsContracts.forEach(ct => {
+    // 現在の解約返戻金が入力されていればそちらを優先（加入当初の保険金額とはズレるため）。
+    // 資産クラス別・通貨別の両方の集計で同じ金額を使い、数字がズレないようにする。
+    const field = ct.currentSurrenderValue !== undefined && ct.currentSurrenderValue !== '' ? 'currentSurrenderValue' : 'coverageAmount';
+    const {
+      amount,
+      convertible
+    } = nexusContractJpyAmount(ct, field);
+    if (!convertible) {
+      insuranceSavingsUnconvertible++;
+      currencyUnconvertible++;
+      unconvertibleSavingsContracts.push(ct);
+      return;
+    }
+    insuranceSavingsJpy += amount;
+    if ((ct.currency || '円') === '円') currencyJpyJpy += amount;else currencyForeignJpy += amount;
+  });
+  const fundsStocksJpy = parseFloat(portfolioInputs.fundsStocksJpy) || 0;
+  const realEstateOtherJpy = parseFloat(portfolioInputs.realEstateOtherJpy) || 0;
+  const assetClassChart = [{
+    label: '投資信託・株式等',
+    value: fundsStocksJpy,
+    color: '#2563EB'
+  }, {
+    label: '保険（貯蓄性）',
+    value: Math.round(insuranceSavingsJpy),
+    color: 'var(--accent)'
+  }, {
+    label: '不動産・退職金・相続等',
+    value: realEstateOtherJpy,
+    color: '#059669'
+  }].filter(i => i.value > 0);
+  const currencyChart = [{
+    label: '円建て',
+    value: Math.round(currencyJpyJpy) + fundsStocksJpy + realEstateOtherJpy,
+    color: 'var(--accent)'
+  }, {
+    label: '外貨建て',
+    value: Math.round(currencyForeignJpy),
+    color: '#D97706'
+  }].filter(i => i.value > 0);
+  const portfolioTotal = assetClassChart.reduce((s, i) => s + i.value, 0);
+  return {
+    assetClassChart,
+    currencyChart,
+    portfolioTotal,
+    insuranceSavingsUnconvertible,
+    currencyUnconvertible,
+    unconvertibleSavingsContracts
+  };
+}
+
+// ── Excel(.xlsx)出力ライブラリ（SheetJS）の遅延読み込み ──
+// 通常のアプリ動作には不要なので、実際に「Excel出力」が押されたときだけCDNから取得する。
+function nexusEnsureXlsxLib(callback) {
+  if (window.XLSX) {
+    callback();
+    return;
+  }
+  const script = document.createElement('script');
+  script.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+  script.onload = () => callback();
+  script.onerror = () => alert('Excel出力ライブラリの読み込みに失敗しました。インターネット接続をご確認のうえ、もう一度お試しください。');
+  document.head.appendChild(script);
+}
 function NexusPlanningTimeline({
   ageSelf,
   ageSpouse
@@ -12326,6 +12404,7 @@ function NexusPlanningSection({
   const individualCustomers = customers.filter(c => c.customerType !== '法人');
   const [selectedId, setSelectedId] = useState(individualCustomers[0] && individualCustomers[0].id || customers[0] && customers[0].id || null);
   const [showPrint, setShowPrint] = useState(false);
+  const [printScope, setPrintScope] = useState('self'); // 'self' | 'couple' — 資料（印刷・Excel出力）の対象範囲
   const customer = customers.find(c => c.id === selectedId) || null;
   const updateCustomer = patch => {
     setCustomers(customers.map(c => c.id === selectedId ? {
@@ -12539,58 +12618,34 @@ function NexusPlanningSection({
     }));
   })();
 
-  // ── ポートフォリオ（通貨別・資産クラス別）──
-  // 保険（貯蓄性＝目的「年金・貯蓄型」）は既存の契約データから自動算出。
-  // 投資信託・株式や不動産等は保険契約に存在しないため、ここで手入力する。
-  const savingsContracts = allContractsForCharts.filter(ct => nexusContractPurposes(ct).includes('年金・貯蓄型'));
-  let insuranceSavingsJpy = 0,
-    insuranceSavingsUnconvertible = 0;
-  let currencyForeignJpy = 0,
-    currencyJpyJpy = 0,
-    currencyUnconvertible = 0;
-  const unconvertibleSavingsContracts = [];
-  savingsContracts.forEach(ct => {
-    // 現在の解約返戻金が入力されていればそちらを優先（加入当初の保険金額とはズレるため）。
-    // 資産クラス別・通貨別の両方の集計で同じ金額を使い、数字がズレないようにする。
-    const field = ct.currentSurrenderValue !== undefined && ct.currentSurrenderValue !== '' ? 'currentSurrenderValue' : 'coverageAmount';
-    const {
-      amount,
-      convertible
-    } = nexusContractJpyAmount(ct, field);
-    if (!convertible) {
-      insuranceSavingsUnconvertible++;
-      currencyUnconvertible++;
-      unconvertibleSavingsContracts.push(ct);
-      return;
-    }
-    insuranceSavingsJpy += amount;
-    if ((ct.currency || '円') === '円') currencyJpyJpy += amount;else currencyForeignJpy += amount;
-  });
-  const fundsStocksJpy = parseFloat(portfolio.fundsStocksJpy) || 0;
-  const realEstateOtherJpy = parseFloat(portfolio.realEstateOtherJpy) || 0;
-  const assetClassChart = [{
-    label: '投資信託・株式等',
-    value: fundsStocksJpy,
-    color: '#2563EB'
-  }, {
-    label: '保険（貯蓄性）',
-    value: Math.round(insuranceSavingsJpy),
-    color: 'var(--accent)'
-  }, {
-    label: '不動産・退職金・相続等',
-    value: realEstateOtherJpy,
-    color: '#059669'
-  }].filter(i => i.value > 0);
-  const currencyChart = [{
-    label: '円建て',
-    value: Math.round(currencyJpyJpy) + fundsStocksJpy + realEstateOtherJpy,
-    color: 'var(--accent)'
-  }, {
-    label: '外貨建て',
-    value: Math.round(currencyForeignJpy),
-    color: '#D97706'
-  }].filter(i => i.value > 0);
-  const portfolioTotal = assetClassChart.reduce((s, i) => s + i.value, 0);
+  // ── ポートフォリオ（通貨別・資産クラス別）── 画面表示は常に本人（＋関連法人）ベース
+  const {
+    assetClassChart,
+    currencyChart,
+    portfolioTotal,
+    insuranceSavingsUnconvertible,
+    currencyUnconvertible,
+    unconvertibleSavingsContracts
+  } = nexusComputePortfolio(allContractsForCharts, portfolio);
+
+  // ── 夫婦合算（資料の対象で選べる）── 配偶者が顧客連携済みの場合のみ計算
+  const spouseContracts = linkedSpouseCustomer ? linkedSpouseCustomer.contracts || [] : [];
+  const spousePortfolioInputs = linkedSpouseCustomer && linkedSpouseCustomer.lp && linkedSpouseCustomer.lp.portfolio || {};
+  const coupleContractsForCharts = [...allContractsForCharts, ...spouseContracts];
+  const couplePortfolioInputs = {
+    fundsStocksJpy: (parseFloat(portfolio.fundsStocksJpy) || 0) + (parseFloat(spousePortfolioInputs.fundsStocksJpy) || 0),
+    realEstateOtherJpy: (parseFloat(portfolio.realEstateOtherJpy) || 0) + (parseFloat(spousePortfolioInputs.realEstateOtherJpy) || 0)
+  };
+  const couplePortfolio = linkedSpouseCustomer ? nexusComputePortfolio(coupleContractsForCharts, couplePortfolioInputs) : null;
+  const isCoupleScope = printScope === 'couple' && !!linkedSpouseCustomer;
+  const scopedPortfolio = isCoupleScope ? couplePortfolio : {
+    assetClassChart,
+    currencyChart,
+    portfolioTotal,
+    insuranceSavingsUnconvertible,
+    currencyUnconvertible,
+    unconvertibleSavingsContracts
+  };
   const buildPurposeRowsForPrint = (title, list) => {
     const {
       byPurpose,
@@ -12625,11 +12680,19 @@ function NexusPlanningSection({
       <tr><td>${escapeHtmlForPrint(l.name) || escapeHtmlForPrint(l.category)}</td><td>${escapeHtmlForPrint(l.lender)}</td>
       <td>${escapeHtmlForPrint(l.originationDate)}</td><td>${l.originalAmount ? Number(l.originalAmount).toLocaleString() + '円' : ''}</td>
       <td>${escapeHtmlForPrint(l.guaranteeInsurance || '不明')}</td><td>${escapeHtmlForPrint(l.collateral)}</td><td>${escapeHtmlForPrint(l.guarantor || '不明')}</td></tr>`).join('') : '<tr><td colspan="7">登録なし</td></tr>';
-    const assetClassRowsHtml = assetClassChart.length ? assetClassChart.map(i => `<tr><td>${escapeHtmlForPrint(i.label)}</td><td>${i.value.toLocaleString()}円</td><td>${portfolioTotal > 0 ? Math.round(i.value / portfolioTotal * 100) : 0}%</td></tr>`).join('') : '<tr><td colspan="3">データなし</td></tr>';
-    const currencyRowsHtml = currencyChart.length ? currencyChart.map(i => `<tr><td>${escapeHtmlForPrint(i.label)}</td><td>${i.value.toLocaleString()}円</td></tr>`).join('') : '<tr><td colspan="2">データなし</td></tr>';
+    const {
+      assetClassChart: pAssetClassChart,
+      currencyChart: pCurrencyChart,
+      portfolioTotal: pPortfolioTotal,
+      insuranceSavingsUnconvertible: pInsuranceSavingsUnconvertible,
+      currencyUnconvertible: pCurrencyUnconvertible
+    } = scopedPortfolio;
+    const assetClassRowsHtml = pAssetClassChart.length ? pAssetClassChart.map(i => `<tr><td>${escapeHtmlForPrint(i.label)}</td><td>${i.value.toLocaleString()}円</td><td>${pPortfolioTotal > 0 ? Math.round(i.value / pPortfolioTotal * 100) : 0}%</td></tr>`).join('') : '<tr><td colspan="3">データなし</td></tr>';
+    const currencyRowsHtml = pCurrencyChart.length ? pCurrencyChart.map(i => `<tr><td>${escapeHtmlForPrint(i.label)}</td><td>${i.value.toLocaleString()}円</td></tr>`).join('') : '<tr><td colspan="2">データなし</td></tr>';
+    const titleName = isCoupleScope ? `${escapeHtmlForPrint(customer.name)} 様・${escapeHtmlForPrint(linkedSpouseCustomer.name)} 様（ご夫婦）` : `${escapeHtmlForPrint(customer.name)} 様`;
     return `
-      <h2>${escapeHtmlForPrint(customer.name)} 様　プランニング資料</h2>
-      <p style="font-size:11px;color:#666;">出力日：${new Date().toLocaleDateString('ja-JP')}</p>
+      <h2>${titleName}　プランニング資料</h2>
+      <p style="font-size:11px;color:#666;">出力日：${new Date().toLocaleDateString('ja-JP')}${isCoupleScope ? '　／　夫婦合算版' : ''}</p>
       <div class="print-section">
         <h3>ライフプラン タイムライン</h3>
         ${nexusTimelineHtmlForPrint(ageSelf, ageSpouse)}
@@ -12673,14 +12736,22 @@ function NexusPlanningSection({
       </div>
         ${buildPurposeRowsForPrint('保障集計（法人）', corpContracts)}
       ` : ''}
+      ${isCoupleScope ? `
       <div class="print-section">
-        <h3>ポートフォリオ（資産クラス別）</h3>
+        <h3>既契約一覧（配偶者：${escapeHtmlForPrint(linkedSpouseCustomer.name)}）</h3>
+        <table><tr><th>No</th><th>目的</th><th>保険種類</th><th>保険会社</th><th>証券番号</th><th>契約日</th><th>保険期間</th><th>払込期間</th><th>保険金額（加入当初）</th><th>現在の解約返戻金</th><th>保険料</th></tr>${rowsHtml(spouseContracts)}</table>
+      </div>
+        ${buildPurposeRowsForPrint('保障集計（配偶者）', spouseContracts)}
+        ${buildPurposeRowsForPrint('保障集計（世帯合算）', [...contracts, ...spouseContracts])}
+      ` : ''}
+      <div class="print-section">
+        <h3>ポートフォリオ（資産クラス別）${isCoupleScope ? '｜夫婦合算' : ''}</h3>
         <table><tr><th>区分</th><th>金額</th><th>割合</th></tr>${assetClassRowsHtml}</table>
       </div>
       <div class="print-section">
-        <h3>ポートフォリオ（通貨別：円建て／外貨建て）</h3>
+        <h3>ポートフォリオ（通貨別：円建て／外貨建て）${isCoupleScope ? '｜夫婦合算' : ''}</h3>
         <table><tr><th>区分</th><th>金額</th></tr>${currencyRowsHtml}</table>
-        ${insuranceSavingsUnconvertible > 0 || currencyUnconvertible > 0 ? '<p style="font-size:11px;color:#b98a3d;">※ 外貨建て契約のうち適用レート未入力のものは円換算できず、上記には含まれていません</p>' : ''}
+        ${pInsuranceSavingsUnconvertible > 0 || pCurrencyUnconvertible > 0 ? '<p style="font-size:11px;color:#b98a3d;">※ 外貨建て契約のうち適用レート未入力のものは円換算できず、上記には含まれていません</p>' : ''}
       </div>
       <div class="print-section">
         <h3>家族構成</h3>
@@ -12691,6 +12762,71 @@ function NexusPlanningSection({
   const handleOpenPrint = () => setShowPrint(true);
   const handleClosePrint = () => setShowPrint(false);
   const handleDoPrint = () => window.print();
+
+  // ── Excel(.xlsx)出力：印刷資料と同じ「資料の対象（本人のみ／夫婦合算）」を使う ──
+  const buildExcelSheets = () => {
+    const sheets = [];
+    sheets.push({
+      name: 'LPシート',
+      aoa: [['項目', '内容'], ['対象', isCoupleScope ? `${customer.name} 様・${linkedSpouseCustomer.name} 様（夫婦合算）` : `${customer.name} 様`], ['出力日', new Date().toLocaleDateString('ja-JP')], ['本人年齢', ageSelf !== null ? ageSelf + '歳' : ''], ['配偶者年齢', ageSpouse !== null ? ageSpouse + '歳' : ''], ['お子様', kidsSummary], ['理想月間貯蓄額', monthlyTarget]]
+    });
+    sheets.push({
+      name: 'ローン明細',
+      aoa: [['区分', '名称', '残高', '金利(%)', '金利タイプ', '毎月返済額', 'ボーナス払い', 'ボーナス払い額/年', '返済方式', '完済予定年月', '残り年数', '借入先', '借入年月日', '借入当初の金額', '団信', '担保', '連帯保証人等'], ...loans.map(l => [LOAN_CATEGORIES.includes(l.category) ? l.category : '', l.name || '', l.balance || '', l.rate || '', l.rateType || '', l.monthlyPayment || '', l.hasBonusPayment ? 'あり' : 'なし', l.hasBonusPayment ? l.bonusPaymentAmount || '' : '', l.repaymentMethod || '', l.payoffMonth || '', loanRemainingYears(l), l.lender || '', l.originationDate || '', l.originalAmount || '', l.guaranteeInsurance || '不明', l.collateral || '', l.guarantor || '不明']), [], ['ローン残高合計', totalLoanBalance]]
+    });
+    sheets.push({
+      name: '家計収支',
+      aoa: [['収入の種類', '金額（年間）'], ...incomeItems.map(x => [x.type, x.amount || '']), [], ['支出の費目', '金額（年間）'], ...expenseItems.map(x => [x.category, x.amount || '']), [], ['収入合計', totalIncome], ['支出合計', totalExpense], ['イベント収入', eventIncome], ['イベント支出', eventExpense], ['年間貯蓄（自動計算）', computedAnnualSavings]]
+    });
+    const contractAoaHeader = ['No', '目的', '保険種類', '保険会社', '証券番号', '契約日', '保険期間', '払込期間', '保険金額(加入当初)', '通貨', '現在の解約返戻金', '保険料', '払込方法'];
+    const contractAoaRows = list => list.map((r, i) => [i + 1, nexusContractPurposes(r).join('、'), r.type || '', r.company || '', r.policyNum || '', r.date || '', r.termNote || r.termEnd || '', r.paymentTermNote || r.paymentTermEnd || '', r.coverageAmount || '', r.currency || '円', r.currentSurrenderValue || '', r.premium || '', r.paymentCycle || '']);
+    sheets.push({
+      name: '契約一覧(本人)',
+      aoa: [contractAoaHeader, ...contractAoaRows(contracts)]
+    });
+    if (linkedCorp) sheets.push({
+      name: `契約一覧(法人)`,
+      aoa: [contractAoaHeader, ...contractAoaRows(corpContracts)]
+    });
+    if (isCoupleScope) sheets.push({
+      name: '契約一覧(配偶者)',
+      aoa: [contractAoaHeader, ...contractAoaRows(spouseContracts)]
+    });
+    const purposeAoa = (title, list) => {
+      const {
+        byPurpose,
+        deathTotal,
+        medicalTotal
+      } = nexusPurposeSummary(list);
+      return [[title, ''], ...CONTRACT_PURPOSES.filter(p => byPurpose[p] > 0).map(p => [p, byPurpose[p]]), [], ['死亡保険金額合計', deathTotal], ['医療保険金額合計', medicalTotal], []];
+    };
+    let purposeAoaAll = [...purposeAoa('保障集計（本人）', contracts)];
+    if (linkedCorp) purposeAoaAll = purposeAoaAll.concat(purposeAoa('保障集計（法人）', corpContracts));
+    if (isCoupleScope) {
+      purposeAoaAll = purposeAoaAll.concat(purposeAoa('保障集計（配偶者）', spouseContracts));
+      purposeAoaAll = purposeAoaAll.concat(purposeAoa('保障集計（世帯合算）', [...contracts, ...spouseContracts]));
+    }
+    sheets.push({
+      name: '保障集計',
+      aoa: [['目的', '金額'], ...purposeAoaAll]
+    });
+    sheets.push({
+      name: 'ポートフォリオ',
+      aoa: [['資産クラス別' + (isCoupleScope ? '（夫婦合算）' : ''), '金額', '割合'], ...scopedPortfolio.assetClassChart.map(i => [i.label, i.value, scopedPortfolio.portfolioTotal > 0 ? Math.round(i.value / scopedPortfolio.portfolioTotal * 100) + '%' : '']), [], ['通貨別' + (isCoupleScope ? '（夫婦合算）' : ''), '金額'], ...scopedPortfolio.currencyChart.map(i => [i.label, i.value])]
+    });
+    return sheets;
+  };
+  const handleExportExcel = () => {
+    nexusEnsureXlsxLib(() => {
+      const wb = XLSX.utils.book_new();
+      buildExcelSheets().forEach(s => {
+        const ws = XLSX.utils.aoa_to_sheet(s.aoa);
+        XLSX.utils.book_append_sheet(wb, ws, s.name);
+      });
+      const scopeLabel = isCoupleScope ? '夫婦合算' : '本人';
+      XLSX.writeFile(wb, `プランニング資料_${customer.name}_${scopeLabel}_${todayStr()}.xlsx`);
+    });
+  };
   React.useEffect(() => {
     if (showPrint) {
       document.body.classList.add('ml-printing');
@@ -13801,11 +13937,35 @@ function NexusPlanningSection({
     }
   }, "不足：月間 ", Math.abs(diff).toLocaleString(), "円足りません")), /*#__PURE__*/React.createElement("div", {
     className: "card"
+  }, linkedSpouseCustomer && /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "資料の対象"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
   }, /*#__PURE__*/React.createElement("button", {
     type: "button",
+    className: `toggle-btn ${printScope === 'self' ? 'sel' : ''}`,
+    onClick: () => setPrintScope('self')
+  }, "本人のみ"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: `toggle-btn ${printScope === 'couple' ? 'sel' : ''}`,
+    onClick: () => setPrintScope('couple')
+  }, "夫婦合算（", linkedSpouseCustomer.name, " 様を含む）"))), /*#__PURE__*/React.createElement("button", {
+    type: "button",
     className: "btn btn-outline btn-full",
+    style: {
+      marginBottom: 8
+    },
     onClick: handleOpenPrint
-  }, "🖨️ プランニング資料を印刷／PDF保存")), showPrint && ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
+  }, "🖨️ プランニング資料を印刷／PDF保存"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    onClick: handleExportExcel
+  }, "📊 プランニング資料をExcel出力")), showPrint && ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
     className: "ml-print-overlay",
     style: {
       position: 'fixed',
