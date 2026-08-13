@@ -1798,7 +1798,8 @@ function CustomerForm({
     referredBy: '',
     referredByName: '',
     // 紹介元が顧客未登録の場合の名前直接入力（referredByと併用可）
-    referredTo: [] // 複数可・IDの配列
+    referredTo: [], // 複数可・IDの配列
+    linkedCorpId: '' // 役員・従業員として法人契約と合わせて見るための手動連携（代表者は自動連携されるため通常はそれ以外向け）
   };
   const [form, setForm] = useState({
     ...blank,
@@ -2281,7 +2282,22 @@ function CustomerForm({
     type: "button",
     className: `toggle-btn ${form.employmentType === et ? 'sel' : ''}`,
     onClick: () => s('employmentType')(form.employmentType === et ? '' : et)
-  }, et))))), /*#__PURE__*/React.createElement("div", {
+  }, et))))), form.customerType !== '法人' && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 14
+    }
+  }, /*#__PURE__*/React.createElement(CustomerSelect, {
+    label: "関連法人（役員・従業員などで法人契約と合わせて見る場合）",
+    value: form.linkedCorpId || '',
+    onChange: v => s('linkedCorpId')(v),
+    customers: otherCustomers.filter(x => x.customerType === '法人')
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--text-sub)',
+      marginTop: 4
+    }
+  }, "選択すると、プランニング画面でこの法人の契約もあわせて表示・集計されます（代表者は法人側の「代表者」欄で自動連携されるため、通常はそれ以外の役員・従業員が対象）")), /*#__PURE__*/React.createElement("div", {
     className: "form-row",
     style: {
       marginTop: 14
@@ -12967,8 +12983,10 @@ function NexusPlanningSection({
   const capacity = parseFloat(lp.savingsCapacity) || 0;
   const diff = capacity - monthlyTarget;
 
-  // 法人代表者リンク：本人の名前と一致する「代表者」を持つ法人顧客を自動関連付け
-  const linkedCorp = customer.customerType !== '法人' && customer.name ? customers.find(c => c.customerType === '法人' && (c.representative || '').trim() && (c.representative || '').trim() === customer.name.trim()) : null;
+  // 法人リンク：①手動で選んだ「関連法人」（役員・従業員向け）を優先し、
+  // ②未設定なら本人の名前と一致する「代表者」を持つ法人顧客を自動関連付け（代表者向け）
+  const linkedCorp = customer.customerType !== '法人' ? (customer.linkedCorpId ? customers.find(c => c.id === customer.linkedCorpId && c.customerType === '法人') : null) || (customer.name ? customers.find(c => c.customerType === '法人' && (c.representative || '').trim() && (c.representative || '').trim() === customer.name.trim()) : null) : null;
+  const linkedCorpIsAutoDetected = !!linkedCorp && !customer.linkedCorpId;
   const contracts = customer.contracts || [];
   const corpContracts = linkedCorp ? linkedCorp.contracts || [] : [];
   const allContractsForCharts = [...contracts, ...corpContracts];
@@ -13634,7 +13652,7 @@ function NexusPlanningSection({
       borderRadius: 8,
       padding: '8px 10px'
     }
-  }, "🏢 ", /*#__PURE__*/React.createElement("b", null, linkedCorp.corporateName), " の代表者として自動連携されています（法人契約もこのタブに反映されます）")), /*#__PURE__*/React.createElement("div", {
+  }, "🏢 ", /*#__PURE__*/React.createElement("b", null, linkedCorp.corporateName), " ", linkedCorpIsAutoDetected ? 'の代表者として自動連携されています' : 'と連携されています（顧客編集の「関連法人」で設定）', "（法人契約もこのタブに反映されます）")), /*#__PURE__*/React.createElement("div", {
     className: "section-header"
   }, "LPシート"), /*#__PURE__*/React.createElement("div", {
     className: "card"
