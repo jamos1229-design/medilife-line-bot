@@ -12118,7 +12118,7 @@ function NexusPlanningTimeline({
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       position: 'relative',
-      height: 56,
+      height: 82,
       marginLeft: NEXUS_TIMELINE_GUTTER
     }
   }, /*#__PURE__*/React.createElement("div", {
@@ -12145,7 +12145,7 @@ function NexusPlanningTimeline({
   }, age)), ageSelf !== null && ageSelf >= 0 && ageSelf <= 100 && /*#__PURE__*/React.createElement("div", {
     style: {
       position: 'absolute',
-      top: 38,
+      top: 36,
       left: ageSelf + '%',
       transform: 'translateX(-50%)',
       background: 'var(--accent)',
@@ -12158,7 +12158,7 @@ function NexusPlanningTimeline({
   }, "本人 ", ageSelf, "歳"), ageSpouse !== null && ageSpouse >= 0 && ageSpouse <= 100 && /*#__PURE__*/React.createElement("div", {
     style: {
       position: 'absolute',
-      top: 52,
+      top: 62,
       left: ageSpouse + '%',
       transform: 'translateX(-50%)',
       background: '#B98A3D',
@@ -12227,21 +12227,23 @@ function nexusTimelineHtmlForPrint(ageSelf, ageSpouse, categories) {
   const marker = (age, label, top, bg) => age === null || age < 0 || age > 100 ? '' : `<div style="position:absolute;top:${top}px;left:${ageLeft(age)};transform:translateX(-50%);background:${bg};color:#fff;font-size:10px;padding:2px 6px;border-radius:8px;white-space:nowrap;">${label} ${age}歳</div>`;
   const ticks = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100].map(age => `<div style="position:absolute;top:16px;left:${ageLeft(age)};transform:translateX(-50%);font-size:9px;color:#666;">${age}</div>`).join('');
   const blocks = nexusLpCategoryBlocks(categories);
+  // 本人・配偶者の年齢が近いとバッジが重なるため、縦方向に十分な間隔を空けて2段に分ける
+  const MARKER_AREA_HEIGHT = 82;
   const blockRows = blocks.map((b, i) => {
     const left = Math.max(0, Math.min(100, b.startAge));
     const width = Math.max(0, Math.min(100 - left, b.years));
-    const top = 56 + i * 20;
+    const top = MARKER_AREA_HEIGHT + i * 20;
     return `
     <div style="position:absolute;left:${G}px;right:0;top:${top}px;height:16px;background:#eee;border-radius:3px;">
       <div style="position:absolute;left:${left}%;width:${width}%;top:0;height:16px;background:#${b.color};border-radius:3px;"></div>
     </div>
     <div style="position:absolute;left:0;width:${G - 6}px;top:${top}px;height:16px;font-size:9px;color:#666;text-align:right;">${escapeHtmlForPrint(b.label)}</div>`;
   }).join('');
-  return `<div style="position:relative;height:${56 + blocks.length * 20}px;margin:10px 4px 20px;">
+  return `<div style="position:relative;height:${MARKER_AREA_HEIGHT + blocks.length * 20}px;margin:10px 4px 20px;">
     <div style="position:absolute;left:${G}px;right:0;top:26px;height:2px;background:#ccc;"></div>
     ${ticks}
     ${marker(ageSelf, '本人', 34, '#1c2b3a')}
-    ${marker(ageSpouse, '配偶者', 48, '#b98a3d')}
+    ${marker(ageSpouse, '配偶者', 60, '#b98a3d')}
     ${blockRows}
   </div>`;
 }
