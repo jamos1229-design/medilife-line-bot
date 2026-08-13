@@ -515,6 +515,12 @@ const CONTRACT_PURPOSES = ['死亡保障', '死亡時収入保障', '介護・�
 const CONTRACT_PURPOSE_DEATH_GROUP = ['死亡保障', '死亡時収入保障', '事業保障・退職金'];
 // 集計上「医療保険」として合算する目的
 const CONTRACT_PURPOSE_MEDICAL_GROUP = ['医療保障', '介護・就労不能保障', '特定疾病（ガン）'];
+// 契約の目的は複数選択可（例：変額保険が積立と死亡保障を兼ねる場合など）。
+// 旧データ（単一文字列のcontract.purpose）との互換のため、配列に正規化して返す。
+function nexusContractPurposes(ct) {
+  if (Array.isArray(ct.purposes)) return ct.purposes;
+  return ct.purpose ? [ct.purpose] : [];
+}
 const csStyle = st => ({
   有効: {
     border: '#16A34A',
@@ -690,20 +696,28 @@ function ContractBlock({
     }
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "目的（死亡・医療保険の集計に使用）"), /*#__PURE__*/React.createElement("div", {
+  }, "目的（複数選択可・死亡・医療保険の集計に使用）"), /*#__PURE__*/React.createElement("div", {
     className: "toggle-group"
-  }, CONTRACT_PURPOSES.map(p => /*#__PURE__*/React.createElement("button", {
-    key: p,
-    type: "button",
-    className: `toggle-btn ${(contract.purpose || '') === p ? 'sel' : ''}`,
-    style: {
-      minWidth: 'unset',
-      flex: 'none',
-      padding: '8px 10px',
-      fontSize: 12.5
-    },
-    onClick: () => sv('purpose')(contract.purpose === p ? '' : p)
-  }, p)))), /*#__PURE__*/React.createElement("div", {
+  }, CONTRACT_PURPOSES.map(p => {
+    const selectedPurposes = nexusContractPurposes(contract);
+    const isSel = selectedPurposes.includes(p);
+    return /*#__PURE__*/React.createElement("button", {
+      key: p,
+      type: "button",
+      className: `toggle-btn ${isSel ? 'sel' : ''}`,
+      style: {
+        minWidth: 'unset',
+        flex: 'none',
+        padding: '8px 10px',
+        fontSize: 12.5
+      },
+      onClick: () => onChange({
+        ...contract,
+        purposes: isSel ? selectedPurposes.filter(x => x !== p) : [...selectedPurposes, p],
+        purpose: undefined
+      })
+    }, p);
+  }))), /*#__PURE__*/React.createElement("div", {
     className: "form-group",
     style: {
       marginBottom: 8
@@ -3394,13 +3408,13 @@ function CustomerDetail({
         }
       }, ct.statusReason)), /*#__PURE__*/React.createElement("div", {
         className: "customer-info-row"
-      }, ct.purpose && /*#__PURE__*/React.createElement("div", {
+      }, nexusContractPurposes(ct).length > 0 && /*#__PURE__*/React.createElement("div", {
         className: "info-item"
       }, /*#__PURE__*/React.createElement("div", {
         className: "info-label"
       }, "目的"), /*#__PURE__*/React.createElement("div", {
         className: "info-value"
-      }, ct.purpose)), /*#__PURE__*/React.createElement("div", {
+      }, nexusContractPurposes(ct).join('、'))), /*#__PURE__*/React.createElement("div", {
         className: "info-item"
       }, /*#__PURE__*/React.createElement("div", {
         className: "info-label"
@@ -11901,8 +11915,13 @@ function nexusPurposeSummary(contracts) {
   contracts.forEach(ct => {
     const amt = parseFloat(ct.coverageAmount) || 0;
     if (!amt) return;
-    if (ct.purpose && byPurpose[ct.purpose] !== undefined) {
-      byPurpose[ct.purpose] += amt;
+    // 目的は複数選択可（例：変額保険が積立と死亡保障を兼ねる場合）。
+    // 該当する目的すべてに同額を計上する（death/medical等は別区分の集計のため、これで正しい）。
+    const purposes = nexusContractPurposes(ct).filter(p => byPurpose[p] !== undefined);
+    if (purposes.length > 0) {
+      purposes.forEach(p => {
+        byPurpose[p] += amt;
+      });
     } else {
       unclassified += amt;
     }
@@ -12523,7 +12542,7 @@ function NexusPlanningSection({
   // ── ポートフォリオ（通貨別・資産クラス別）──
   // 保険（貯蓄性＝目的「年金・貯蓄型」）は既存の契約データから自動算出。
   // 投資信託・株式や不動産等は保険契約に存在しないため、ここで手入力する。
-  const savingsContracts = allContractsForCharts.filter(ct => ct.purpose === '年金・貯蓄型');
+  const savingsContracts = allContractsForCharts.filter(ct => nexusContractPurposes(ct).includes('年金・貯蓄型'));
   let insuranceSavingsJpy = 0,
     insuranceSavingsUnconvertible = 0;
   let currencyForeignJpy = 0,
@@ -12587,7 +12606,7 @@ function NexusPlanningSection({
   };
   const buildPrintHtml = () => {
     const rowsHtml = list => list.length ? list.map((r, i) => `
-      <tr><td>${i + 1}</td><td>${escapeHtmlForPrint(r.purpose)}</td><td>${escapeHtmlForPrint(r.type)}</td><td>${escapeHtmlForPrint(r.company)}</td><td>${escapeHtmlForPrint(r.policyNum)}</td>
+      <tr><td>${i + 1}</td><td>${escapeHtmlForPrint(nexusContractPurposes(r).join('、'))}</td><td>${escapeHtmlForPrint(r.type)}</td><td>${escapeHtmlForPrint(r.company)}</td><td>${escapeHtmlForPrint(r.policyNum)}</td>
       <td>${escapeHtmlForPrint(r.date)}</td><td>${escapeHtmlForPrint(r.termNote || r.termEnd)}</td><td>${escapeHtmlForPrint(r.paymentTermNote || r.paymentTermEnd)}</td>
       <td>${r.coverageAmount ? Number(r.coverageAmount).toLocaleString() + (r.currency || '円') : ''}</td>
       <td>${r.currentSurrenderValue ? Number(r.currentSurrenderValue).toLocaleString() + (r.currency || '円') : ''}</td>
@@ -13425,7 +13444,7 @@ function NexusPlanningSection({
       padding: '5px 4px',
       textAlign: 'center'
     }
-  }, r.purpose || '—'), /*#__PURE__*/React.createElement("td", {
+  }, nexusContractPurposes(r).join('、') || '—'), /*#__PURE__*/React.createElement("td", {
     style: {
       border: '1px solid var(--border)',
       padding: '5px 4px',
@@ -13527,7 +13546,7 @@ function NexusPlanningSection({
       padding: '5px 4px',
       textAlign: 'center'
     }
-  }, r.purpose || '—'), /*#__PURE__*/React.createElement("td", {
+  }, nexusContractPurposes(r).join('、') || '—'), /*#__PURE__*/React.createElement("td", {
     style: {
       border: '1px solid var(--border)',
       padding: '5px 4px',
