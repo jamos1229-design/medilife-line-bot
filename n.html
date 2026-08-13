@@ -12526,27 +12526,25 @@ function NexusPlanningSection({
   const savingsContracts = allContractsForCharts.filter(ct => ct.purpose === '年金・貯蓄型');
   let insuranceSavingsJpy = 0,
     insuranceSavingsUnconvertible = 0;
+  let currencyForeignJpy = 0,
+    currencyJpyJpy = 0,
+    currencyUnconvertible = 0;
+  const unconvertibleSavingsContracts = [];
   savingsContracts.forEach(ct => {
-    // 現在の解約返戻金が入力されていればそちらを優先（加入当初の保険金額とはズレるため）
+    // 現在の解約返戻金が入力されていればそちらを優先（加入当初の保険金額とはズレるため）。
+    // 資産クラス別・通貨別の両方の集計で同じ金額を使い、数字がズレないようにする。
     const field = ct.currentSurrenderValue !== undefined && ct.currentSurrenderValue !== '' ? 'currentSurrenderValue' : 'coverageAmount';
     const {
       amount,
       convertible
     } = nexusContractJpyAmount(ct, field);
-    if (convertible) insuranceSavingsJpy += amount;else insuranceSavingsUnconvertible++;
-  });
-  let currencyForeignJpy = 0,
-    currencyJpyJpy = 0,
-    currencyUnconvertible = 0;
-  allContractsForCharts.forEach(ct => {
-    const {
-      amount,
-      convertible
-    } = nexusContractJpyAmount(ct, 'coverageAmount');
     if (!convertible) {
+      insuranceSavingsUnconvertible++;
       currencyUnconvertible++;
+      unconvertibleSavingsContracts.push(ct);
       return;
     }
+    insuranceSavingsJpy += amount;
     if ((ct.currency || '円') === '円') currencyJpyJpy += amount;else currencyForeignJpy += amount;
   });
   const fundsStocksJpy = parseFloat(portfolio.fundsStocksJpy) || 0;
@@ -13606,13 +13604,23 @@ function NexusPlanningSection({
       color: 'var(--text-sub)',
       marginTop: 8
     }
-  }, "※ 保険（貯蓄性）は、契約の「目的」で「年金・貯蓄型」を選んだ既契約から自動集計されます"), (insuranceSavingsUnconvertible > 0 || currencyUnconvertible > 0) && /*#__PURE__*/React.createElement("div", {
+  }, "※ 保険（貯蓄性）は、契約の「目的」で「年金・貯蓄型」を選んだ既契約から、円建てはそのまま・外貨建ては下の適用レートで円換算して自動集計されます"), unconvertibleSavingsContracts.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 10.5,
-      color: '#D97706',
-      marginTop: 4
+      fontSize: 11.5,
+      color: '#B45309',
+      background: '#FEF3C7',
+      borderRadius: 8,
+      padding: '8px 10px',
+      marginTop: 8
     }
-  }, "※ 外貨建て契約のうち「適用レート」未入力のものは円換算できず、下記の比率には含まれていません")), portfolioTotal > 0 && /*#__PURE__*/React.createElement("div", {
+  }, "⚠️ 以下の貯蓄性契約は「適用レート」が未入力のため、ポートフォリオに反映されていません：", /*#__PURE__*/React.createElement("ul", {
+    style: {
+      margin: '4px 0 0',
+      paddingLeft: 18
+    }
+  }, unconvertibleSavingsContracts.map((ct, i) => /*#__PURE__*/React.createElement("li", {
+    key: i
+  }, ct.company || '保険会社未記入', "／", ct.type || '種類未記入', "（", ct.currency || '外貨', "建て）"))), "契約編集の「適用レート（1$=）」を入力すると反映されます。")), portfolioTotal > 0 && /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     style: {
