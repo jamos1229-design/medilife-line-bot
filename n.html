@@ -834,7 +834,57 @@ function ContractBlock({
     type: "date",
     value: contract.insuredBirthdate || '',
     onChange: s('insuredBirthdate')
-  })))), cat === '損保' ?
+  })))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: 'var(--bg)',
+      borderRadius: 10,
+      padding: '10px 12px',
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      fontWeight: 700,
+      color: 'var(--text-sub)',
+      marginBottom: 8
+    }
+  }, "その他の関係者（必要な場合のみ入力）"), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "受取人"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    placeholder: "例：山田 花子（続柄：妻）",
+    value: contract.beneficiary || '',
+    onChange: s('beneficiary')
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "指定代理請求人"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    placeholder: "例：山田 一郎（続柄：長男）",
+    value: contract.proxyClaimant || '',
+    onChange: s('proxyClaimant')
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "契約者代理人"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    placeholder: "例：山田 花子（続柄：妻）",
+    value: contract.policyholderAgent || '',
+    onChange: s('policyholderAgent')
+  }))), cat === '損保' ?
   /*#__PURE__*/
   // ── 損保フィールド ──────────────────────────────
   React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
@@ -2788,6 +2838,7 @@ function CustomerDetail({
   onDelete,
   onClose,
   onRegisterSuspect,
+  onRegisterReferrer,
   onOpenCustomer
 }) {
   const [confirmDel, setConfirmDel] = useState(false);
@@ -3562,7 +3613,25 @@ function CustomerDetail({
         className: "info-label"
       }, "被保険者 生年月日"), /*#__PURE__*/React.createElement("div", {
         className: "info-value"
-      }, fmtDateFull(ct.insuredBirthdate))), !isSonpo && (ct.termNote || ct.termEnd) && /*#__PURE__*/React.createElement("div", {
+      }, fmtDateFull(ct.insuredBirthdate))), ct.beneficiary && /*#__PURE__*/React.createElement("div", {
+        className: "info-item"
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "info-label"
+      }, "受取人"), /*#__PURE__*/React.createElement("div", {
+        className: "info-value"
+      }, ct.beneficiary)), ct.proxyClaimant && /*#__PURE__*/React.createElement("div", {
+        className: "info-item"
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "info-label"
+      }, "指定代理請求人"), /*#__PURE__*/React.createElement("div", {
+        className: "info-value"
+      }, ct.proxyClaimant)), ct.policyholderAgent && /*#__PURE__*/React.createElement("div", {
+        className: "info-item"
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "info-label"
+      }, "契約者代理人"), /*#__PURE__*/React.createElement("div", {
+        className: "info-value"
+      }, ct.policyholderAgent)), !isSonpo && (ct.termNote || ct.termEnd) && /*#__PURE__*/React.createElement("div", {
         className: "info-item",
         style: {
           gridColumn: '1/-1'
@@ -3872,9 +3941,13 @@ function CustomerDetail({
     className: "card"
   }, (referredByCustomer || c.referredByName) && /*#__PURE__*/React.createElement("div", {
     style: {
-      marginBottom: referredToCustomers.length > 0 ? 12 : 0
+      marginBottom: referredToCustomers.length > 0 ? 12 : 0,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 8
     }
-  }, /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "info-label",
     style: {
       marginBottom: 6
@@ -3891,7 +3964,16 @@ function CustomerDetail({
       color: 'var(--text-sub)',
       marginLeft: 6
     }
-  }, "（未登録）"))), referredToCustomers.length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }, "（未登録）"))), !referredByCustomer && c.referredByName && /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-sm btn-primary",
+    style: {
+      fontSize: 12,
+      padding: '6px 10px',
+      whiteSpace: 'nowrap',
+      flexShrink: 0
+    },
+    onClick: () => onRegisterReferrer(c.referredByName)
+  }, "顧客登録 →")), referredToCustomers.length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "info-label",
     style: {
       marginBottom: 6
@@ -11896,6 +11978,34 @@ function nexusContractJpyAmount(ct, field) {
   };
 }
 
+// 契約1件の保険料のJPY換算額。外貨建て契約は「円換算保険料」欄が入力済みならそちらを優先し
+// （手入力の実額を尊重）、未入力なら適用レートで換算する。円建て契約はそのまま円。
+function nexusContractPremiumJpy(ct) {
+  const raw = parseFloat(ct.premium) || 0;
+  if (!raw) return {
+    amount: 0,
+    convertible: true
+  };
+  if ((ct.currency || '円') === '円') return {
+    amount: raw,
+    convertible: true
+  };
+  const manualJpy = parseFloat(ct.premiumJpy) || 0;
+  if (manualJpy > 0) return {
+    amount: manualJpy,
+    convertible: true
+  };
+  const rate = parseFloat(ct.exchangeRate) || 0;
+  if (rate > 0) return {
+    amount: raw * rate,
+    convertible: true
+  };
+  return {
+    amount: 0,
+    convertible: false
+  };
+}
+
 // ── ポートフォリオ（通貨別・資産クラス別）集計 ──
 // 保険（貯蓄性＝目的「年金・貯蓄型」）は既存の契約データから自動算出。
 // 投資信託・株式や不動産等は保険契約に存在しないため、手入力分（portfolioInputs）を加算する。
@@ -12992,14 +13102,21 @@ function NexusPlanningSection({
   const allContractsForCharts = [...contracts, ...corpContracts];
 
   // 一時払・前期前納・全期前納（まとまった一括払込）は月払保険料に混ぜず、別枠で集計する
+  // 外貨建て契約の保険料は円換算してから集計する（そうしないとドル建ての保険料が円建てと
+  // 同じ数字として合算されてしまい、実際の金額とかけ離れた集計になる）。
+  const unconvertiblePremiumContracts = allContractsForCharts.filter(r => (parseFloat(r.premium) || 0) > 0 && !nexusContractPremiumJpy(r).convertible);
   const companyChart = (() => {
     const byCompany = {};
     allContractsForCharts.forEach(r => {
       const cyc = r.paymentCycle || '月払';
       if (LUMP_LIKE_PAYMENT_CYCLES.includes(cyc)) return;
       const c = (r.company || '').trim() || '未記入';
-      const raw = parseFloat(r.premium) || 0;
-      const monthly = cyc === '年払' ? raw / 12 : raw;
+      const {
+        amount,
+        convertible
+      } = nexusContractPremiumJpy(r);
+      if (!convertible) return;
+      const monthly = cyc === '年払' ? amount / 12 : amount;
       if (monthly > 0) byCompany[c] = (byCompany[c] || 0) + Math.round(monthly);
     });
     return Object.entries(byCompany).map(([label, value]) => ({
@@ -13012,8 +13129,12 @@ function NexusPlanningSection({
     allContractsForCharts.forEach(r => {
       if (!LUMP_LIKE_PAYMENT_CYCLES.includes(r.paymentCycle || '月払')) return;
       const c = (r.company || '').trim() || '未記入';
-      const v = parseFloat(r.premium) || 0;
-      if (v > 0) byCompany[c] = (byCompany[c] || 0) + v;
+      const {
+        amount,
+        convertible
+      } = nexusContractPremiumJpy(r);
+      if (!convertible) return;
+      if (amount > 0) byCompany[c] = (byCompany[c] || 0) + amount;
     });
     return Object.entries(byCompany).map(([label, value]) => ({
       label,
@@ -13085,7 +13206,7 @@ function NexusPlanningSection({
       <td>${escapeHtmlForPrint(r.date)}</td><td>${escapeHtmlForPrint(r.termNote || r.termEnd)}</td><td>${escapeHtmlForPrint(r.paymentTermNote || r.paymentTermEnd)}</td>
       <td>${r.coverageAmount ? Number(r.coverageAmount).toLocaleString() + (r.currency || '円') : ''}</td>
       <td>${r.currentSurrenderValue ? Number(r.currentSurrenderValue).toLocaleString() + (r.currency || '円') : ''}</td>
-      <td>${escapeHtmlForPrint(r.premium)}${r.paymentCycle || ''}</td></tr>`).join('') : '<tr><td colspan="11">登録なし</td></tr>';
+      <td>${r.premium ? Number(r.premium).toLocaleString() + (r.currency || '円') : ''}${r.paymentCycle || ''}</td></tr>`).join('') : '<tr><td colspan="11">登録なし</td></tr>';
     const famRows = (customer.suspects || []).length ? (customer.suspects || []).map(m => {
       const linked = m.linkedCustomerId ? customers.find(x => x.id === m.linkedCustomerId) : null;
       const fName = linked ? linked.name || linked.corporateName || '(名称未設定)' : m.name;
@@ -14494,7 +14615,7 @@ function NexusPlanningSection({
       padding: '5px 4px',
       textAlign: 'center'
     }
-  }, r.premium ? Number(r.premium).toLocaleString() + '円' : '—', r.paymentCycle || ''))))), /*#__PURE__*/React.createElement("div", {
+  }, r.premium ? Number(r.premium).toLocaleString() + (r.currency || '円') : '—', r.paymentCycle || ''))))), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 10.5,
       color: 'var(--text-sub)',
@@ -14570,7 +14691,7 @@ function NexusPlanningSection({
       padding: '5px 4px',
       textAlign: 'center'
     }
-  }, r.premium ? Number(r.premium).toLocaleString() + '円' : '—', r.paymentCycle || '')))))), /*#__PURE__*/React.createElement(NexusPurposeSummaryTable, {
+  }, r.premium ? Number(r.premium).toLocaleString() + (r.currency || '円') : '—', r.paymentCycle || '')))))), /*#__PURE__*/React.createElement(NexusPurposeSummaryTable, {
     title: "保障集計（法人）",
     contracts: corpContracts
   }))), /*#__PURE__*/React.createElement("div", {
@@ -15009,7 +15130,23 @@ function NexusPlanningSection({
   }, "保険会社別 一時払・前納額（別枠）"), /*#__PURE__*/React.createElement(NexusPlanningBarChart, {
     items: lumpSumChart,
     unit: "円"
-  })), /*#__PURE__*/React.createElement("div", {
+  })), unconvertiblePremiumContracts.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: '#B45309',
+      background: '#FEF3C7',
+      borderRadius: 8,
+      padding: '8px 10px',
+      marginBottom: 12
+    }
+  }, "⚠️ 以下の外貨建て契約は保険料の円換算ができないため、上記の保険料集計に含まれていません：", /*#__PURE__*/React.createElement("ul", {
+    style: {
+      margin: '4px 0 0',
+      paddingLeft: 18
+    }
+  }, unconvertiblePremiumContracts.map((ct, i) => /*#__PURE__*/React.createElement("li", {
+    key: i
+  }, ct.company || '保険会社未記入', "／", ct.type || '種類未記入', "（", ct.currency || '外貨', "建て）"))), "契約編集の「円換算保険料」または「適用レート（1$=）」を入力すると反映されます。"), /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -15412,6 +15549,17 @@ function App() {
     setSelectedCustomer(null);
     setShowCustomerForm(true);
   };
+  const registerReferrer = name => {
+    setEditingCustomer({
+      name: name || '',
+      status: '未接触',
+      contactMethod: '電話',
+      contracts: [],
+      suspects: []
+    });
+    setSelectedCustomer(null);
+    setShowCustomerForm(true);
+  };
   const registerMemoAsCustomer = m => {
     setEditingCustomer({
       name: m.personName || '',
@@ -15641,6 +15789,10 @@ function App() {
     onRegisterSuspect: sp => {
       setSelectedCustomer(null);
       registerSuspect(sp);
+    },
+    onRegisterReferrer: name => {
+      setSelectedCustomer(null);
+      registerReferrer(name);
     },
     onOpenCustomer: id => {
       const target = customers.find(x => x.id === id);
