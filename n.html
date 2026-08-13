@@ -763,9 +763,8 @@ function ContractBlock({
     }
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "現在の解約返戻金（外貨建て契約は保険金額と同じ通貨で入力／貯蓄性契約で加入時の金額と異なる場合に入力）"), /*#__PURE__*/React.createElement(AmountInput, {
-    prefix: cur === 'ドル' ? '$' : '¥',
-    prefixColor: cur === 'ドル' ? '#059669' : undefined,
+  }, "現在の解約返戻金（円建てで入力／外貨建て契約でも解約時は円で払い戻されるため／貯蓄性契約で加入時の金額と異なる場合に入力）"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
     value: contract.currentSurrenderValue || '',
     onChange: s('currentSurrenderValue'),
     placeholder: "例：9500000（未入力なら保険金額を使用）"
@@ -2996,7 +2995,48 @@ function CustomerDetail({
     className: "info-label"
   }, "従業員数"), /*#__PURE__*/React.createElement("div", {
     className: "info-value"
-  }, c.employeeCount, "名"))), /*#__PURE__*/React.createElement("div", {
+  }, c.employeeCount, "名"))), c.customerType === '法人' && (() => {
+    const linkedIndividuals = (customers || []).filter(x => x.customerType !== '法人' && (x.linkedCorpId === c.id || (x.id !== c.id && (x.name || '').trim() && (x.name || '').trim() === (c.representative || '').trim())));
+    return linkedIndividuals.length > 0 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginBottom: 10
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "info-label",
+      style: {
+        marginBottom: 6
+      }
+    }, "関連する個人（", linkedIndividuals.length, "人）"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6
+      }
+    }, linkedIndividuals.map(x => /*#__PURE__*/React.createElement("button", {
+      key: x.id,
+      type: "button",
+      onClick: () => onOpenCustomer(x.id),
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        background: 'none',
+        border: 'none',
+        padding: 0,
+        cursor: 'pointer',
+        fontSize: 15,
+        fontWeight: 700,
+        color: 'var(--accent)',
+        textAlign: 'left'
+      }
+    }, "👤 ", x.name, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 12,
+        color: 'var(--text-sub)',
+        fontWeight: 400
+      }
+    }, (x.name || '').trim() === (c.representative || '').trim() ? '（代表者）' : '（関連法人設定）')))));
+  })(), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       flexDirection: 'column',
@@ -3589,7 +3629,7 @@ function CustomerDetail({
           color: 'var(--accent)',
           fontWeight: 700
         }
-      }, ct.currency === 'ドル' ? '$' : '¥', Number(ct.currentSurrenderValue).toLocaleString())), ct.memo && /*#__PURE__*/React.createElement("div", {
+      }, "¥", Number(ct.currentSurrenderValue).toLocaleString())), ct.memo && /*#__PURE__*/React.createElement("div", {
         className: "info-item",
         style: {
           gridColumn: '1/-1'
@@ -4896,7 +4936,7 @@ function CustomerListTab({
       const q = search.toLowerCase();
       // 契約情報（保険会社・保険種類）を結合して検索
       const contractText = (c.contracts || []).map(ct => [ct.company, ct.type].filter(Boolean).join(' ')).join(' ').toLowerCase();
-      return c.name.includes(search) || (c.phone || '').includes(q) || (c.memo || '').includes(search) || (c.email || '').toLowerCase().includes(q) || (c.address || '').includes(search) || (c.postalCode || '').includes(search) || contractText.includes(q);
+      return c.name.includes(search) || (c.corporateName || '').includes(search) || (c.phone || '').includes(q) || (c.memo || '').includes(search) || (c.email || '').toLowerCase().includes(q) || (c.address || '').includes(search) || (c.postalCode || '').includes(search) || contractText.includes(q);
     });
     const STATUS_ORDER = ['未接触', 'アポ済', '面談済', 'フォロー中'];
     list.sort((a, b) => {
@@ -11957,12 +11997,16 @@ function nexusPortfolioFundsStocksTotal(portfolioObj) {
 }
 
 // 契約1件のJPY換算額（外貨建てはレートがあれば換算、なければ換算不可として扱う）
-// 「現在の解約返戻金」も、契約が外貨建てであれば契約と同じ通貨（現地通貨）で入力する項目のため、
-// 保険金額（加入当初）と同じロジックで為替レート換算する（円建て契約ならそのまま円）。
+// 「現在の解約返戻金」は、外貨建て契約でも解約時は円で払い戻される実務に合わせて、
+// 契約の通貨にかかわらず常に円として入力・集計する（保険金額（加入当初）はドルのまま）。
 function nexusContractJpyAmount(ct, field) {
   const raw = parseFloat(ct[field]) || 0;
   if (!raw) return {
     amount: 0,
+    convertible: true
+  };
+  if (field === 'currentSurrenderValue') return {
+    amount: raw,
     convertible: true
   };
   if ((ct.currency || '円') === '円') return {
@@ -12053,7 +12097,8 @@ function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
     // 実質的に投資信託と同じ値動きをするため、資産クラス別の集計では「投資信託・株式等」に含める。
     // 一般勘定（円建て終身・円建て個人年金など、日本国債中心で運用）は従来通り「保険（貯蓄性）」に含める。
     if (ct.accountType === '特別勘定') insuranceSavingsSeparateAccountJpy += amount;else insuranceSavingsJpy += amount;
-    if ((ct.currency || '円') === '円') currencyJpyJpy += amount;else currencyForeignJpy += amount;
+    // 現在の解約返戻金を使った場合は常に円建てとして扱う（上のnexusContractJpyAmountと同じ理由）。
+    if (field === 'currentSurrenderValue' || (ct.currency || '円') === '円') currencyJpyJpy += amount;else currencyForeignJpy += amount;
   });
   const fundsStocksJpy = (parseFloat(portfolioInputs.fundsStocksJpy) || 0) + insuranceSavingsSeparateAccountJpy;
   const realEstateOtherJpy = parseFloat(portfolioInputs.realEstateOtherJpy) || 0;
@@ -12474,6 +12519,28 @@ function NexusPlanningBarChart({
       fontSize: 11.5
     }
   }, item.value.toLocaleString(), unit))));
+}
+
+// ── 契約一覧の表には収まらない「補償内容」「備考」を表の下に補足表示 ──
+function ContractNotesList({
+  list
+}) {
+  const withNotes = (list || []).filter(r => (r.coverage || '').trim() || (r.memo || '').trim());
+  if (withNotes.length === 0) return null;
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      marginTop: 6,
+      background: 'var(--bg)',
+      borderRadius: 8,
+      padding: '8px 10px'
+    }
+  }, withNotes.map((r, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      marginBottom: i < withNotes.length - 1 ? 6 : 0
+    }
+  }, /*#__PURE__*/React.createElement("b", null, r.company || r.type || '契約'), "：", [r.coverage, r.memo].filter(Boolean).join('／'))));
 }
 
 // ── 目的別 保障集計（死亡保険合計・医療保険合計を明確に分離）──
@@ -13221,8 +13288,16 @@ function NexusPlanningSection({
       <tr><td>${i + 1}</td><td>${escapeHtmlForPrint(nexusContractPurposes(r).join('、'))}</td><td>${escapeHtmlForPrint(r.type)}</td><td>${escapeHtmlForPrint(r.company)}</td><td>${escapeHtmlForPrint(r.policyNum)}</td>
       <td>${escapeHtmlForPrint(r.date)}</td><td>${escapeHtmlForPrint(r.termNote || r.termEnd)}</td><td>${escapeHtmlForPrint(r.paymentTermNote || r.paymentTermEnd)}</td>
       <td>${r.coverageAmount ? Number(r.coverageAmount).toLocaleString() + (r.currency || '円') : ''}</td>
-      <td>${r.currentSurrenderValue ? Number(r.currentSurrenderValue).toLocaleString() + (r.currency || '円') : ''}</td>
+      <td>${r.currentSurrenderValue ? Number(r.currentSurrenderValue).toLocaleString() + '円' : ''}</td>
       <td>${escapeHtmlForPrint(nexusContractPremiumText(r))}${r.paymentCycle || ''}</td></tr>`).join('') : '<tr><td colspan="11">登録なし</td></tr>';
+    // 契約一覧の表には収まらない「補償内容」「備考」を、表の下に契約ごとの注記として補足表示する
+    const notesHtml = list => {
+      const withNotes = list.filter(r => (r.coverage || '').trim() || (r.memo || '').trim());
+      if (withNotes.length === 0) return '';
+      return `<div style="font-size:11px;color:#444;margin-top:6px;">
+        ${withNotes.map(r => `<p style="margin:2px 0;"><b>${escapeHtmlForPrint(r.company || r.type || '契約')}</b>：${escapeHtmlForPrint([r.coverage, r.memo].filter(Boolean).join('／'))}</p>`).join('')}
+      </div>`;
+    };
     const famRows = (customer.suspects || []).length ? (customer.suspects || []).map(m => {
       const linked = m.linkedCustomerId ? customers.find(x => x.id === m.linkedCustomerId) : null;
       const fName = linked ? linked.name || linked.corporateName || '(名称未設定)' : m.name;
@@ -13290,12 +13365,14 @@ function NexusPlanningSection({
       <div class="print-section">
         <h3>既契約一覧（本人）</h3>
         <table><tr><th>No</th><th>目的</th><th>保険種類</th><th>保険会社</th><th>証券番号</th><th>契約日</th><th>保険期間</th><th>払込期間</th><th>保険金額（加入当初）</th><th>現在の解約返戻金</th><th>保険料</th></tr>${rowsHtml(contracts)}</table>
+        ${notesHtml(contracts)}
       </div>
       ${buildPurposeRowsForPrint('保障集計（本人）', contracts)}
       ${linkedCorp ? `
       <div class="print-section">
         <h3>既契約一覧（関連法人：${escapeHtmlForPrint(linkedCorp.corporateName)}）</h3>
         <table><tr><th>No</th><th>目的</th><th>保険種類</th><th>保険会社</th><th>証券番号</th><th>契約日</th><th>保険期間</th><th>払込期間</th><th>保険金額（加入当初）</th><th>現在の解約返戻金</th><th>保険料</th></tr>${rowsHtml(corpContracts)}</table>
+        ${notesHtml(corpContracts)}
       </div>
         ${buildPurposeRowsForPrint('保障集計（法人）', corpContracts)}
       ` : ''}
@@ -13303,6 +13380,7 @@ function NexusPlanningSection({
       <div class="print-section">
         <h3>既契約一覧（配偶者：${escapeHtmlForPrint(linkedSpouseCustomer.name)}）</h3>
         <table><tr><th>No</th><th>目的</th><th>保険種類</th><th>保険会社</th><th>証券番号</th><th>契約日</th><th>保険期間</th><th>払込期間</th><th>保険金額（加入当初）</th><th>現在の解約返戻金</th><th>保険料</th></tr>${rowsHtml(spouseContracts)}</table>
+        ${notesHtml(spouseContracts)}
       </div>
         ${buildPurposeRowsForPrint('保障集計（配偶者）', spouseContracts)}
         ${buildPurposeRowsForPrint('保障集計（世帯合算）', [...contracts, ...spouseContracts])}
@@ -14625,7 +14703,7 @@ function NexusPlanningSection({
       color: r.currentSurrenderValue ? 'var(--accent)' : 'inherit',
       fontWeight: r.currentSurrenderValue ? 700 : 400
     }
-  }, r.currentSurrenderValue ? Number(r.currentSurrenderValue).toLocaleString() + (r.currency || '円') : '—'), /*#__PURE__*/React.createElement("td", {
+  }, r.currentSurrenderValue ? Number(r.currentSurrenderValue).toLocaleString() + '円' : '—'), /*#__PURE__*/React.createElement("td", {
     style: {
       border: '1px solid var(--border)',
       padding: '5px 4px',
@@ -14637,7 +14715,9 @@ function NexusPlanningSection({
       color: 'var(--text-sub)',
       marginTop: 6
     }
-  }, "※ 編集は顧客詳細の契約編集から行ってください")), /*#__PURE__*/React.createElement(NexusPurposeSummaryTable, {
+  }, "※ 編集は顧客詳細の契約編集から行ってください"), /*#__PURE__*/React.createElement(ContractNotesList, {
+    list: contracts
+  })), /*#__PURE__*/React.createElement(NexusPurposeSummaryTable, {
     title: "保障集計（本人）",
     contracts: contracts
   })), linkedCorp && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
@@ -14707,7 +14787,9 @@ function NexusPlanningSection({
       padding: '5px 4px',
       textAlign: 'center'
     }
-  }, nexusContractPremiumText(r) || '—', r.paymentCycle || '')))))), /*#__PURE__*/React.createElement(NexusPurposeSummaryTable, {
+  }, nexusContractPremiumText(r) || '—', r.paymentCycle || ''))))), /*#__PURE__*/React.createElement(ContractNotesList, {
+    list: corpContracts
+  })), /*#__PURE__*/React.createElement(NexusPurposeSummaryTable, {
     title: "保障集計（法人）",
     contracts: corpContracts
   }))), /*#__PURE__*/React.createElement("div", {
