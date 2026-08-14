@@ -12019,8 +12019,12 @@ function nexusPortfolioFundsStocksTotal(portfolioObj) {
 // 契約1件のJPY換算額（外貨建てはレートがあれば換算、なければ換算不可として扱う）
 // 「現在の解約返戻金」は、外貨建て契約でも解約時は円で払い戻される実務に合わせて、
 // 契約の通貨にかかわらず常に円として入力・集計する（保険金額（加入当初）はドルのまま）。
-// 保険金額（加入当初）は、外貨建て契約で「円換算」欄（coverageAmountJpy）が入力済みなら
-// そちらを優先し（保険料の「円換算保険料」と同じ考え方）、未入力なら適用レートで換算する。
+// 保険金額（加入当初）は、外貨建て契約では「円換算」欄（coverageAmountJpy）が入力されている
+// 場合のみ円換算して集計する。適用レートでの自動換算は行わない
+// ——保険金額は経験上、円建ての金額をそのままドル建て欄に入力してしまう記入ミスが起きやすく、
+// レートを掛けて自動換算すると誤入力がそのまま桁違いの金額として保障集計に反映されてしまうため、
+// 必ず「円換算」欄を明示的に入力してもらう安全側の仕様にしている（保険料は円換算保険料が入力
+// されるのが前提のため、未入力時のみ適用レートでの自動換算にフォールバックする）。
 function nexusContractJpyAmount(ct, field) {
   const raw = parseFloat(ct[field]) || 0;
   if (!raw) return {
@@ -12038,11 +12042,6 @@ function nexusContractJpyAmount(ct, field) {
   const manualJpy = parseFloat(ct[field + 'Jpy']) || 0;
   if (manualJpy > 0) return {
     amount: manualJpy,
-    convertible: true
-  };
-  const rate = parseFloat(ct.exchangeRate) || 0;
-  if (rate > 0) return {
-    amount: raw * rate,
     convertible: true
   };
   return {
