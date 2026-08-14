@@ -12124,15 +12124,18 @@ function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
     // 一般勘定（円建て終身・円建て個人年金など、日本国債中心で運用）は従来通り「保険（貯蓄性）」に含める。
     if (ct.accountType === '特別勘定') {
       insuranceSavingsSeparateAccountJpy += amount;
-      // 特別勘定分はこの後fundsStocksJpyに合算され、通貨別チャートでは円建てとしてまとめて計上される
-      // ため、ここで通貨別バケット（currencyJpyJpy/currencyForeignJpy）にも加算すると二重計上になる。
     } else {
       insuranceSavingsJpy += amount;
-      // 現在の解約返戻金を使った場合は常に円建てとして扱う（上のnexusContractJpyAmountと同じ理由）。
-      if (field === 'currentSurrenderValue' || (ct.currency || '円') === '円') currencyJpyJpy += amount;else currencyForeignJpy += amount;
     }
+    // 通貨別（円建て／外貨建て）は、資産クラスの分類（一般勘定／特別勘定）とは別軸の判定であり、
+    // 契約の通貨（円建て契約か、ドル建てなど外貨建て契約か）で決まる。円入金・円換算の解約返戻金
+    // であっても、保険会社が外貨に変換して運用している商品（外貨建て契約）は為替リスクを負って
+    // いるため外貨建てとして扱う（現在の解約返戻金の「円換算」は実務上の払戻通貨の話であり、
+    // 保有資産としての通貨エクスポージャーとは別の話のため、ここでは使わない）。
+    if ((ct.currency || '円') === '円') currencyJpyJpy += amount;else currencyForeignJpy += amount;
   });
-  const fundsStocksJpy = (parseFloat(portfolioInputs.fundsStocksJpy) || 0) + insuranceSavingsSeparateAccountJpy;
+  const manualFundsStocksJpy = parseFloat(portfolioInputs.fundsStocksJpy) || 0;
+  const fundsStocksJpy = manualFundsStocksJpy + insuranceSavingsSeparateAccountJpy;
   const realEstateOtherJpy = parseFloat(portfolioInputs.realEstateOtherJpy) || 0;
   const assetClassChart = [{
     label: '投資信託・株式等',
@@ -12149,7 +12152,7 @@ function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
   }].filter(i => i.value > 0);
   const currencyChart = [{
     label: '円建て',
-    value: Math.round(currencyJpyJpy) + Math.round(fundsStocksJpy) + realEstateOtherJpy,
+    value: Math.round(currencyJpyJpy) + Math.round(manualFundsStocksJpy) + realEstateOtherJpy,
     color: 'var(--accent)'
   }, {
     label: '外貨建て',
