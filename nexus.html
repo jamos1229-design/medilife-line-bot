@@ -13171,9 +13171,17 @@ function NexusPlanningSection({
   const computedAnnualSavings = totalIncome - totalExpense + eventIncome - eventExpense;
   const ageSelf = customer.birthdate ? calcAge(customer.birthdate) : calcStoredAge(customer.age, customer.ageYear);
   const spouseSp = (customer.suspects || []).find(sp => sp.relation === '配偶者');
-  const linkedSpouseCustomer = spouseSp && spouseSp.linkedCustomerId ? customers.find(x => x.id === spouseSp.linkedCustomerId) : null;
+  const forwardLinkedSpouseCustomer = spouseSp && spouseSp.linkedCustomerId ? customers.find(x => x.id === spouseSp.linkedCustomerId) : null;
+  // 逆方向のリンク：自分のサスペクトには配偶者が登録されていなくても、
+  // 相手側の顧客レコードで自分が「配偶者」として顧客連携されていれば、その相手を配偶者とみなす
+  // （夫婦どちらか片方の顧客登録にしかサスペクトを入れていないケースに対応するため）。
+  const reverseSpouseCustomer = !forwardLinkedSpouseCustomer ? customers.find(x => x.id !== customer.id && (x.suspects || []).some(sp => sp.relation === '配偶者' && sp.linkedCustomerId === customer.id)) : null;
+  const linkedSpouseCustomer = forwardLinkedSpouseCustomer || reverseSpouseCustomer;
   const ageSpouse = linkedSpouseCustomer ? linkedSpouseCustomer.birthdate ? calcAge(linkedSpouseCustomer.birthdate) : calcStoredAge(linkedSpouseCustomer.age, linkedSpouseCustomer.ageYear) : spouseSp ? spouseSp.birthdate ? calcAge(spouseSp.birthdate) : calcStoredAge(spouseSp.age, spouseSp.ageYear) : null;
-  const kids = (customer.suspects || []).filter(sp => sp.relation === '子供');
+  // お子様も、配偶者側の顧客レコードにだけ登録されている場合があるため合算する（名前が同じ子は重複除外）。
+  const ownKids = (customer.suspects || []).filter(sp => sp.relation === '子供');
+  const spouseKids = linkedSpouseCustomer ? (linkedSpouseCustomer.suspects || []).filter(sp => sp.relation === '子供') : [];
+  const kids = [...ownKids, ...spouseKids.filter(sk => !ownKids.some(k => (k.name || '').trim() && (k.name || '').trim() === (sk.name || '').trim()))];
   const kidsSummary = kids.length ? kids.map(k => {
     const a = k.birthdate ? calcAge(k.birthdate) : calcStoredAge(k.age, k.ageYear);
     return `${k.name || '子'}${a !== null ? a + '歳' : ''}`;
