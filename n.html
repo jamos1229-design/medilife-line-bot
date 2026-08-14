@@ -12122,9 +12122,15 @@ function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
     // 特別勘定（変額保険・変額年金・ユニットリンク等）は保険会社ではなく契約者が運用リスクを負い、
     // 実質的に投資信託と同じ値動きをするため、資産クラス別の集計では「投資信託・株式等」に含める。
     // 一般勘定（円建て終身・円建て個人年金など、日本国債中心で運用）は従来通り「保険（貯蓄性）」に含める。
-    if (ct.accountType === '特別勘定') insuranceSavingsSeparateAccountJpy += amount;else insuranceSavingsJpy += amount;
-    // 現在の解約返戻金を使った場合は常に円建てとして扱う（上のnexusContractJpyAmountと同じ理由）。
-    if (field === 'currentSurrenderValue' || (ct.currency || '円') === '円') currencyJpyJpy += amount;else currencyForeignJpy += amount;
+    if (ct.accountType === '特別勘定') {
+      insuranceSavingsSeparateAccountJpy += amount;
+      // 特別勘定分はこの後fundsStocksJpyに合算され、通貨別チャートでは円建てとしてまとめて計上される
+      // ため、ここで通貨別バケット（currencyJpyJpy/currencyForeignJpy）にも加算すると二重計上になる。
+    } else {
+      insuranceSavingsJpy += amount;
+      // 現在の解約返戻金を使った場合は常に円建てとして扱う（上のnexusContractJpyAmountと同じ理由）。
+      if (field === 'currentSurrenderValue' || (ct.currency || '円') === '円') currencyJpyJpy += amount;else currencyForeignJpy += amount;
+    }
   });
   const fundsStocksJpy = (parseFloat(portfolioInputs.fundsStocksJpy) || 0) + insuranceSavingsSeparateAccountJpy;
   const realEstateOtherJpy = parseFloat(portfolioInputs.realEstateOtherJpy) || 0;
