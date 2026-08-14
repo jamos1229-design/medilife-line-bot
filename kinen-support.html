@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>禁煙サポート</title>
+<meta name="theme-color" content="#1B2430">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;600;700&family=Noto+Serif+JP:wght@600;700;900&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #1B2430;
+    --bg-deep: #151D27;
+    --panel: #212C3A;
+    --panel-alt: #26323F;
+    --border: rgba(232,238,245,0.08);
+    --border-strong: rgba(232,238,245,0.14);
+    --text: #EDEFF3;
+    --text-dim: #9AA7B5;
+    --text-faint: #6C7887;
+    --accent: #E8622C;
+    --accent-dim: #C9531F;
+    --accent-soft: rgba(232,98,44,0.14);
+    --accent-soft-strong: rgba(232,98,44,0.26);
+    --resisted: #E8622C;
+    --smoked: #6E7A8A;
+    --smoked-soft: rgba(110,122,138,0.35);
+    --shadow: 0 10px 30px rgba(0,0,0,0.35);
+  }
+
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; padding:0; }
+  body{
+    background:
+      radial-gradient(circle at 15% -10%, rgba(232,98,44,0.10), transparent 45%),
+      radial-gradient(circle at 100% 0%, rgba(60,90,130,0.14), transparent 40%),
+      var(--bg);
+    color: var(--text);
+    font-family: "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .app{ max-width: 640px; margin: 0 auto; padding-bottom: 48px; }
+
+  .topbar{
+    display:flex; align-items:center; justify-content:space-between;
+    padding: 18px 20px 8px;
+  }
+  .brand{
+    font-family:"Noto Serif JP", serif;
+    font-weight:700; font-size:18px; letter-spacing:.04em;
+    color: var(--text);
+  }
+  .brand::before{
+    content:"";
+  }
+  .icon-btn{
+    width:40px; height:40px; border-radius:12px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size:18px; line-height:1;
+    display:flex; align-items:center; justify-content:center;
+    cursor:pointer;
+    transition: background .15s ease, color .15s ease, border-color .15s ease;
+  }
+  .icon-btn:hover{ background: var(--panel-alt); color: var(--text); border-color: var(--border-strong); }
+
+  .container{ padding: 8px 20px 0; display:flex; flex-direction:column; gap:18px; }
+
+  /* Hero */
+  .hero{
+    background: linear-gradient(160deg, var(--panel) 0%, var(--bg-deep) 100%);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 30px 24px 26px;
+    text-align:center;
+    box-shadow: var(--shadow);
+    position: relative;
+    overflow: hidden;
+  }
+  .hero::after{
+    content:"";
+    position:absolute; inset:auto -30% -60% auto;
+    width:220px; height:220px;
+    background: radial-gradient(circle, var(--accent-soft), transparent 70%);
+    pointer-events:none;
+  }
+  .hero-label{
+    font-size:12px; letter-spacing:.18em; color: var(--accent);
+    font-weight:600; text-transform:uppercase;
+    margin-bottom: 14px;
+  }
+  .hero-counter{
+    display:flex; flex-direction:column; align-items:center; gap:6px;
+  }
+  .hero-days{
+    font-family:"Noto Serif JP", serif;
+    font-weight:900;
+    font-size: clamp(52px, 15vw, 76px);
+    line-height:1;
+    color: var(--text);
+    letter-spacing: -0.02em;
+  }
+  .hero-days-unit{
+    font-family:"Noto Serif JP", serif;
+    font-size: clamp(20px, 5vw, 26px);
+    font-weight:700;
+    color: var(--text-dim);
+    margin-left:4px;
+  }
+  .hero-time{
+    font-family:"Noto Serif JP", serif;
+    font-weight:600;
+    font-size: clamp(18px, 5vw, 22px);
+    color: var(--accent);
+    letter-spacing: .04em;
+    font-variant-numeric: tabular-nums;
+  }
+  .hero-sub{
+    margin-top: 14px;
+    font-size: 12.5px;
+    color: var(--text-faint);
+  }
+
+  /* Stats */
+  .stats-grid{
+    display:grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+  }
+  .stat-card{
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 16px 10px;
+    text-align:center;
+    display:flex; flex-direction:column; align-items:center; gap:6px;
+  }
+  .stat-icon{ font-size:18px; opacity:.9; }
+  .stat-value{
+    font-family:"Noto Serif JP", serif;
+    font-weight:700;
+    font-size: clamp(15px, 4.2vw, 19px);
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  .stat-label{
+    font-size: 10.5px;
+    color: var(--text-faint);
+    line-height:1.4;
+  }
+
+  @media (max-width: 420px){
+    .stats-grid{ grid-template-columns: 1fr 1fr 1fr; gap:8px; }
+    .stat-card{ padding:12px 6px; }
+  }
+
+  /* Panels */
+  .panel{
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 20px;
+  }
+  .panel-title{
+    font-size: 14.5px;
+    font-weight: 600;
+    color: var(--text);
+    margin: 0 0 14px;
+    display:flex; align-items:center; gap:8px;
+  }
+  .panel-title::before{
+    content:"";
+    width:4px; height:14px;
+    background: var(--accent);
+    border-radius:2px;
+    display:inline-block;
+  }
+
+  /* Trigger chips */
+  .trigger-select{
+    display:flex; flex-wrap:wrap; gap:8px;
+    margin-bottom: 14px;
+  }
+  .chip{
+    padding: 9px 14px;
+    border-radius: 999px;
+    background: var(--panel-alt);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 13px;
+    font-weight:500;
+    cursor:pointer;
+    transition: all .15s ease;
+  }
+  .chip:hover{ border-color: var(--border-strong); color: var(--text); }
+  .chip.active{
+    background: var(--accent-soft-strong);
+    border-color: var(--accent);
+    color: #FCEAE0;
+  }
+
+  textarea#memoInput{
+    width:100%;
+    resize: vertical;
+    min-height: 56px;
+    background: var(--bg-deep);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 13.5px;
+    padding: 12px 14px;
+    outline:none;
+  }
+  textarea#memoInput:focus{ border-color: var(--border-strong); }
+  textarea#memoInput::placeholder{ color: var(--text-faint); }
+
+  .log-actions{
+    display:flex; gap:10px; margin-top: 14px;
+  }
+  .btn{
+    flex:1;
+    border:none; border-radius: 12px;
+    padding: 14px 10px;
+    font-size: 14.5px;
+    font-weight:700;
+    font-family: inherit;
+    cursor:pointer;
+    min-height: 48px;
+    transition: transform .1s ease, filter .15s ease, background .15s ease;
+  }
+  .btn:active{ transform: scale(0.97); }
+  .btn-resist{
+    background: var(--accent);
+    color: #1B1006;
+  }
+  .btn-resist:hover{ filter: brightness(1.08); }
+  .btn-smoke{
+    background: transparent;
+    border: 1px solid var(--border-strong);
+    color: var(--text-dim);
+  }
+  .btn-smoke:hover{ background: var(--panel-alt); color: var(--text); }
+
+  /* Chart */
+  .chart{ display:flex; flex-direction:column; gap:12px; }
+  .chart-row{
+    display:grid;
+    grid-template-columns: 64px 1fr 30px;
+    align-items:center;
+    gap:10px;
+  }
+  .chart-label{
+    font-size:12.5px; color: var(--text-dim);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .chart-bar-track{
+    height: 10px;
+    background: var(--bg-deep);
+    border-radius: 999px;
+    overflow:hidden;
+  }
+  .chart-bar-fill{
+    height:100%;
+    display:flex;
+    border-radius: 999px;
+    overflow:hidden;
+    transition: width .3s ease;
+  }
+  .seg-resisted{ background: var(--resisted); }
+  .seg-smoked{ background: var(--smoked); }
+  .chart-count{
+    font-family:"Noto Serif JP", serif;
+    font-size:12.5px; color: var(--text-dim); text-align:right;
+    font-variant-numeric: tabular-nums;
+  }
+  .chart-legend{
+    display:flex; gap:16px; margin-top:4px; font-size:11px; color: var(--text-faint);
+  }
+  .chart-legend span{ display:inline-flex; align-items:center; gap:5px; }
+  .legend-dot{ width:8px; height:8px; border-radius:50%; display:inline-block; }
+
+  /* Log list */
+  .log-list{ display:flex; flex-direction:column; gap:10px; max-height: 420px; overflow-y:auto; }
+  .log-item{
+    background: var(--bg-deep);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px 14px;
+  }
+  .log-item-top{
+    display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+  }
+  .log-time{
+    font-family:"Noto Serif JP", serif;
+    font-size:12px; color: var(--text-faint);
+    font-variant-numeric: tabular-nums;
+    margin-right:2px;
+  }
+  .tag{
+    font-size: 11px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-weight:600;
+  }
+  .tag-resisted{ background: var(--accent-soft); color: var(--accent); }
+  .tag-smoked{ background: var(--smoked-soft); color: #C9D1DA; }
+  .tag-trigger{ background: var(--panel-alt); color: var(--text-dim); }
+  .log-delete{
+    margin-left:auto;
+    background:none; border:none; color: var(--text-faint);
+    font-size:16px; line-height:1; cursor:pointer; padding:2px 6px;
+  }
+  .log-delete:hover{ color: var(--text); }
+  .log-memo{
+    margin-top:8px; font-size:13px; color: var(--text-dim); line-height:1.5;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .empty{
+    color: var(--text-faint); font-size:13px; text-align:center; padding: 18px 0;
+  }
+
+  /* Modal */
+  .modal-overlay{
+    position: fixed; inset:0;
+    background: rgba(10,14,20,0.72);
+    backdrop-filter: blur(3px);
+    display:none;
+    align-items:flex-end;
+    justify-content:center;
+    z-index: 100;
+    padding: 0;
+  }
+  .modal-overlay.open{ display:flex; }
+  .modal{
+    background: var(--panel);
+    border: 1px solid var(--border-strong);
+    border-radius: 22px 22px 0 0;
+    width: 100%;
+    max-width: 480px;
+    padding: 26px 22px 28px;
+    box-shadow: var(--shadow);
+  }
+  @media (min-width: 560px){
+    .modal-overlay{ align-items:center; }
+    .modal{ border-radius: 20px; }
+  }
+  .modal h2{
+    font-family:"Noto Serif JP", serif;
+    font-size: 19px; margin: 0 0 6px;
+  }
+  .modal-desc{
+    font-size: 13px; color: var(--text-dim); margin: 0 0 20px;
+  }
+  .modal label{
+    display:block; font-size: 12.5px; color: var(--text-dim);
+    margin-bottom: 16px;
+  }
+  .modal label span{ display:block; margin-bottom:6px; }
+  .modal input{
+    width:100%;
+    background: var(--bg-deep);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 15px;
+    padding: 11px 12px;
+    outline:none;
+  }
+  .modal input:focus{ border-color: var(--border-strong); }
+  .modal-actions{
+    display:flex; flex-direction:column; gap:10px; margin-top: 6px;
+  }
+  .btn-primary{
+    background: var(--accent); color:#1B1006;
+  }
+  .btn-primary:hover{ filter: brightness(1.08); }
+  .btn-reset{
+    background: transparent; border: 1px solid var(--border-strong);
+    color: var(--text-faint); font-weight:500; font-size:13px;
+  }
+  .btn-reset:hover{ color:#C9635B; border-color:#C9635B; }
+  .btn-close-modal{
+    background: transparent; color: var(--text-faint);
+    font-weight:500; font-size:13px; border:none;
+  }
+
+  /* Toast */
+  .toast{
+    position: fixed; left:50%; bottom: 24px; transform: translate(-50%, 20px);
+    background: var(--panel-alt);
+    border: 1px solid var(--border-strong);
+    color: var(--text);
+    font-size: 13px;
+    padding: 12px 20px;
+    border-radius: 999px;
+    box-shadow: var(--shadow);
+    opacity:0; pointer-events:none;
+    transition: opacity .25s ease, transform .25s ease;
+    z-index: 200;
+    max-width: 88%;
+    text-align:center;
+  }
+  .toast.show{ opacity:1; transform: translate(-50%, 0); }
+
+  ::-webkit-scrollbar{ width:6px; }
+  ::-webkit-scrollbar-thumb{ background: var(--border-strong); border-radius:3px; }
+</style>
+</head>
+<body>
+
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">禁煙サポート</div>
+      <button class="icon-btn" id="settingsBtn" aria-label="設定">&#9881;</button>
+    </header>
+
+    <main class="container">
+
+      <section class="hero">
+        <div class="hero-label">Smoke Free</div>
+        <div class="hero-counter">
+          <div><span class="hero-days" id="heroDays">0</span><span class="hero-days-unit">日</span></div>
+          <div class="hero-time" id="heroTime">00:00:00</div>
+        </div>
+        <div class="hero-sub" id="heroStart">開始日: --</div>
+      </section>
+
+      <section class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-icon">&#128176;</div>
+          <div class="stat-value" id="statMoney">&yen;0</div>
+          <div class="stat-label">節約金額</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">&#128684;</div>
+          <div class="stat-value" id="statCigs">0本</div>
+          <div class="stat-label">吸わなかった<br>推定本数</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">&#9203;</div>
+          <div class="stat-value" id="statTime">0分</div>
+          <div class="stat-label">取り戻した時間</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2 class="panel-title">渇望を記録する</h2>
+        <div class="trigger-select" id="triggerSelect"></div>
+        <textarea id="memoInput" placeholder="メモ（任意）例: 会議終わりでイライラしていた" rows="2"></textarea>
+        <div class="log-actions">
+          <button class="btn btn-resist" id="btnResist">耐えた</button>
+          <button class="btn btn-smoke" id="btnSmoke">吸ってしまった</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2 class="panel-title">トリガーの頻度</h2>
+        <div class="chart" id="chart"><p class="empty">まだ記録がありません</p></div>
+        <div class="chart-legend">
+          <span><i class="legend-dot" style="background:var(--resisted)"></i>耐えた</span>
+          <span><i class="legend-dot" style="background:var(--smoked)"></i>吸ってしまった</span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2 class="panel-title">最近の記録</h2>
+        <div class="log-list" id="logList"><p class="empty">まだ記録がありません</p></div>
+      </section>
+
+    </main>
+  </div>
+
+  <div class="modal-overlay" id="setupOverlay">
+    <div class="modal">
+      <h2 id="modalTitle">禁煙サポートをはじめましょう</h2>
+      <p class="modal-desc" id="modalDesc">まずは基本情報を入力してください。あとから設定画面でいつでも変更できます。</p>
+      <label><span>禁煙開始日</span><input type="date" id="inputStartDate"></label>
+      <label><span>1日の喫煙本数</span><input type="number" id="inputDailyCigs" min="1" step="1" placeholder="例: 20"></label>
+      <label><span>1箱(20本)の価格（円）</span><input type="number" id="inputPrice" min="1" step="1" placeholder="例: 600"></label>
+      <div class="modal-actions">
+        <button class="btn btn-primary" id="btnSave">はじめる</button>
+        <button class="btn btn-reset" id="btnResetData" style="display:none">データを削除して最初からやり直す</button>
+        <button class="btn-close-modal" id="btnCloseModal" style="display:none">閉じる</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+(function(){
+  "use strict";
+
+  var STORAGE_SETUP = "kinenSupport.setup";
+  var STORAGE_LOGS = "kinenSupport.logs";
+  var TRIGGERS = ["食後","会議前","コーヒー","運転中","飲酒時","ストレス","休憩","その他"];
+
+  var setup = null;
+  var logs = [];
+  var startDateTime = null;
+  var selectedTrigger = null;
+
+  function $(id){ return document.getElementById(id); }
+
+  var heroDays = $("heroDays"), heroTime = $("heroTime"), heroStart = $("heroStart");
+  var statMoney = $("statMoney"), statCigs = $("statCigs"), statTime = $("statTime");
+  var triggerSelect = $("triggerSelect"), memoInput = $("memoInput");
+  var btnResist = $("btnResist"), btnSmoke = $("btnSmoke");
+  var chartEl = $("chart"), logListEl = $("logList");
+  var setupOverlay = $("setupOverlay"), modalTitle = $("modalTitle"), modalDesc = $("modalDesc");
+  var inputStartDate = $("inputStartDate"), inputDailyCigs = $("inputDailyCigs"), inputPrice = $("inputPrice");
+  var btnSave = $("btnSave"), btnResetData = $("btnResetData"), btnCloseModal = $("btnCloseModal");
+  var settingsBtn = $("settingsBtn"), toastEl = $("toast");
+
+  function loadSetup(){
+    try{ return JSON.parse(localStorage.getItem(STORAGE_SETUP)); }catch(e){ return null; }
+  }
+  function saveSetup(s){ localStorage.setItem(STORAGE_SETUP, JSON.stringify(s)); }
+  function loadLogs(){
+    try{ var v = JSON.parse(localStorage.getItem(STORAGE_LOGS)); return Array.isArray(v) ? v : []; }catch(e){ return []; }
+  }
+  function saveLogs(){ localStorage.setItem(STORAGE_LOGS, JSON.stringify(logs)); }
+
+  function escapeHtml(str){
+    return String(str).replace(/[&<>"']/g, function(c){
+      return { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c];
+    });
+  }
+
+  function formatMoney(n){ return "¥" + Math.max(0, Math.floor(n)).toLocaleString("ja-JP"); }
+  function formatCigs(n){ return Math.max(0, Math.floor(n)).toLocaleString("ja-JP") + "本"; }
+  function formatMinutes(totalMinutes){
+    totalMinutes = Math.max(0, Math.floor(totalMinutes));
+    var days = Math.floor(totalMinutes / 1440);
+    var hours = Math.floor((totalMinutes % 1440) / 60);
+    var mins = totalMinutes % 60;
+    var s = "";
+    if(days > 0) s += days + "日";
+    if(days > 0 || hours > 0) s += hours + "時間";
+    s += mins + "分";
+    return s;
+  }
+  function formatDateJp(d){
+    return d.getFullYear() + "年" + (d.getMonth()+1) + "月" + d.getDate() + "日";
+  }
+
+  var toastTimer;
+  function showToast(msg){
+    toastEl.textContent = msg;
+    toastEl.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function(){ toastEl.classList.remove("show"); }, 2400);
+  }
+
+  // ---- Trigger chips ----
+  TRIGGERS.forEach(function(t){
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "chip";
+    btn.textContent = t;
+    btn.dataset.trigger = t;
+    btn.addEventListener("click", function(){
+      selectedTrigger = t;
+      Array.prototype.forEach.call(triggerSelect.querySelectorAll(".chip"), function(c){ c.classList.remove("active"); });
+      btn.classList.add("active");
+    });
+    triggerSelect.appendChild(btn);
+  });
+
+  function clearTriggerSelection(){
+    selectedTrigger = null;
+    Array.prototype.forEach.call(triggerSelect.querySelectorAll(".chip"), function(c){ c.classList.remove("active"); });
+  }
+
+  function addLog(outcome){
+    if(!selectedTrigger){
+      showToast("トリガーを選択してください");
+      return;
+    }
+    logs.push({
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+      timestamp: new Date().toISOString(),
+      trigger: selectedTrigger,
+      memo: memoInput.value.trim(),
+      outcome: outcome
+    });
+    saveLogs();
+    memoInput.value = "";
+    clearTriggerSelection();
+    renderChart();
+    renderLogList();
+    tick();
+    showToast(outcome === "resisted" ? "よく耐えました。記録しました。" : "記録しました。次は乗り越えられます。");
+  }
+  btnResist.addEventListener("click", function(){ addLog("resisted"); });
+  btnSmoke.addEventListener("click", function(){ addLog("smoked"); });
+
+  // ---- Chart ----
+  function renderChart(){
+    var counts = {};
+    TRIGGERS.forEach(function(t){ counts[t] = { resisted: 0, smoked: 0 }; });
+    logs.forEach(function(l){
+      if(!counts[l.trigger]) counts[l.trigger] = { resisted: 0, smoked: 0 };
+      counts[l.trigger][l.outcome === "smoked" ? "smoked" : "resisted"]++;
+    });
+    var rows = Object.keys(counts).map(function(t){
+      var c = counts[t];
+      return { trigger: t, resisted: c.resisted, smoked: c.smoked, total: c.resisted + c.smoked };
+    }).filter(function(r){ return r.total > 0; }).sort(function(a,b){ return b.total - a.total; });
+
+    if(rows.length === 0){
+      chartEl.innerHTML = '<p class="empty">まだ記録がありません</p>';
+      return;
+    }
+    var max = Math.max.apply(null, rows.map(function(r){ return r.total; }));
+    chartEl.innerHTML = rows.map(function(r){
+      var pct = (r.total / max * 100).toFixed(1);
+      return '<div class="chart-row">' +
+        '<div class="chart-label">' + escapeHtml(r.trigger) + '</div>' +
+        '<div class="chart-bar-track"><div class="chart-bar-fill" style="width:' + pct + '%">' +
+          '<div class="seg-resisted" style="flex:' + r.resisted + '"></div>' +
+          '<div class="seg-smoked" style="flex:' + r.smoked + '"></div>' +
+        '</div></div>' +
+        '<div class="chart-count">' + r.total + '</div>' +
+      '</div>';
+    }).join("");
+  }
+
+  // ---- Log list ----
+  function renderLogList(){
+    if(logs.length === 0){
+      logListEl.innerHTML = '<p class="empty">まだ記録がありません</p>';
+      return;
+    }
+    var sorted = logs.slice().sort(function(a,b){ return new Date(b.timestamp) - new Date(a.timestamp); }).slice(0, 30);
+    logListEl.innerHTML = sorted.map(function(l){
+      var d = new Date(l.timestamp);
+      var dateStr = (d.getMonth()+1) + "/" + d.getDate() + " " +
+        String(d.getHours()).padStart(2,"0") + ":" + String(d.getMinutes()).padStart(2,"0");
+      var outcomeLabel = l.outcome === "resisted" ? "耐えた" : "吸ってしまった";
+      var outcomeClass = l.outcome === "resisted" ? "tag-resisted" : "tag-smoked";
+      var memoHtml = l.memo ? '<div class="log-memo">' + escapeHtml(l.memo) + '</div>' : "";
+      return '<div class="log-item">' +
+        '<div class="log-item-top">' +
+          '<span class="log-time">' + dateStr + '</span>' +
+          '<span class="tag ' + outcomeClass + '">' + outcomeLabel + '</span>' +
+          '<span class="tag tag-trigger">' + escapeHtml(l.trigger) + '</span>' +
+          '<button class="log-delete" data-id="' + l.id + '" aria-label="削除">&times;</button>' +
+        '</div>' + memoHtml +
+      '</div>';
+    }).join("");
+  }
+  logListEl.addEventListener("click", function(e){
+    var btn = e.target.closest ? e.target.closest(".log-delete") : null;
+    if(!btn) return;
+    var id = btn.getAttribute("data-id");
+    logs = logs.filter(function(l){ return l.id !== id; });
+    saveLogs();
+    renderChart();
+    renderLogList();
+    tick();
+  });
+
+  // ---- Hero + stats ----
+  function tick(){
+    if(!setup || !startDateTime) return;
+    var now = new Date();
+    var elapsedMs = Math.max(0, now - startDateTime);
+    var totalSeconds = Math.floor(elapsedMs / 1000);
+    var days = Math.floor(totalSeconds / 86400);
+    var hours = Math.floor((totalSeconds % 86400) / 3600);
+    var minutes = Math.floor((totalSeconds % 3600) / 60);
+    var seconds = totalSeconds % 60;
+
+    heroDays.textContent = days.toLocaleString("ja-JP");
+    heroTime.textContent = [hours, minutes, seconds].map(function(v){ return String(v).padStart(2,"0"); }).join(":");
+
+    var elapsedDays = elapsedMs / 86400000;
+    var expected = elapsedDays * setup.dailyCigs;
+    var smokedCount = logs.filter(function(l){ return l.outcome === "smoked"; }).length;
+    var avoided = Math.max(0, expected - smokedCount);
+    var pricePerCig = setup.pricePerPack / 20;
+
+    statMoney.textContent = formatMoney(avoided * pricePerCig);
+    statCigs.textContent = formatCigs(avoided);
+    statTime.textContent = formatMinutes(avoided * 11);
+  }
+
+  // ---- Setup modal ----
+  function openSetupModal(editing){
+    if(editing && setup){
+      modalTitle.textContent = "設定を編集";
+      modalDesc.textContent = "禁煙開始日や本数・価格を変更できます。";
+      inputStartDate.value = setup.startDate;
+      inputDailyCigs.value = setup.dailyCigs;
+      inputPrice.value = setup.pricePerPack;
+      btnSave.textContent = "更新する";
+      btnResetData.style.display = "block";
+      btnCloseModal.style.display = "block";
+    } else {
+      modalTitle.textContent = "禁煙サポートをはじめましょう";
+      modalDesc.textContent = "まずは基本情報を入力してください。あとから設定画面でいつでも変更できます。";
+      inputStartDate.value = new Date().toISOString().slice(0,10);
+      inputDailyCigs.value = "";
+      inputPrice.value = "";
+      btnSave.textContent = "はじめる";
+      btnResetData.style.display = "none";
+      btnCloseModal.style.display = "none";
+    }
+    setupOverlay.classList.add("open");
+  }
+  function closeSetupModal(){ setupOverlay.classList.remove("open"); }
+
+  btnSave.addEventListener("click", function(){
+    var startDate = inputStartDate.value;
+    var dailyCigs = parseFloat(inputDailyCigs.value);
+    var pricePerPack = parseFloat(inputPrice.value);
+    if(!startDate || !dailyCigs || dailyCigs <= 0 || !pricePerPack || pricePerPack <= 0){
+      showToast("すべての項目を正しく入力してください");
+      return;
+    }
+    var wasEditing = !!setup;
+    setup = { startDate: startDate, dailyCigs: dailyCigs, pricePerPack: pricePerPack };
+    saveSetup(setup);
+    startDateTime = new Date(startDate + "T00:00:00");
+    heroStart.textContent = "開始日: " + formatDateJp(startDateTime);
+    closeSetupModal();
+    tick();
+    showToast(wasEditing ? "設定を更新しました" : "禁煙の記録を開始しました");
+  });
+
+  btnResetData.addEventListener("click", function(){
+    if(confirm("すべてのデータを削除して最初からやり直しますか？この操作は取り消せません。")){
+      localStorage.removeItem(STORAGE_SETUP);
+      localStorage.removeItem(STORAGE_LOGS);
+      setup = null;
+      logs = [];
+      startDateTime = null;
+      renderChart();
+      renderLogList();
+      closeSetupModal();
+      openSetupModal(false);
+    }
+  });
+
+  settingsBtn.addEventListener("click", function(){ openSetupModal(true); });
+  btnCloseModal.addEventListener("click", closeSetupModal);
+
+  // ---- Init ----
+  setup = loadSetup();
+  logs = loadLogs();
+  if(setup){
+    startDateTime = new Date(setup.startDate + "T00:00:00");
+    heroStart.textContent = "開始日: " + formatDateJp(startDateTime);
+  } else {
+    openSetupModal(false);
+  }
+  renderChart();
+  renderLogList();
+  tick();
+  setInterval(tick, 1000);
+
+})();
+</script>
+</body>
+</html>
