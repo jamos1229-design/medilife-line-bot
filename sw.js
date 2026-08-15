@@ -2,7 +2,7 @@
 // HTMLは常にネットワークから取得（最新版を保証）
 // CDN等は初回キャッシュして高速化
 
-const CACHE = 'medilife-v1';
+const CACHE = 'medilife-v2';
 
 self.addEventListener('install', () => {
   self.skipWaiting(); // 即座に新しいSWを有効化
@@ -20,8 +20,8 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
 
-  // app.html は常にネットワーク優先（最新版を取得）
-  if (url.pathname.includes('app.html')) {
+  // HTMLファイルは常にネットワーク優先（最新版を取得）
+  if (e.request.mode === 'navigate' || url.pathname.endsWith('.html')) {
     e.respondWith(
       fetch(e.request)
         .then(res => {
