@@ -549,6 +549,13 @@ function nexusOwnCoverageContracts(list, ownerName) {
     return !insured || insured === name;
   });
 }
+// 特別勘定の割合（0〜100）。一般勘定・特別勘定を割合で持てる商品（例：外貨建て混合型）に対応。
+// 未入力の場合は旧仕様のaccountType（'特別勘定'なら100、それ以外は0）にフォールバックする。
+function nexusSeparateAccountRatio(ct) {
+  const raw = parseFloat(ct.separateAccountRatio);
+  if (!isNaN(raw)) return Math.max(0, Math.min(100, raw));
+  return ct.accountType === '特別勘定' ? 100 : 0;
+}
 const csStyle = st => ({
   有効: {
     border: '#16A34A',
@@ -1044,20 +1051,21 @@ function ContractBlock({
     }
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "運用区分（貯蓄性契約の資産クラス集計に使用）"), /*#__PURE__*/React.createElement("div", {
-    className: "toggle-group"
-  }, ['一般勘定', '特別勘定'].map(a => /*#__PURE__*/React.createElement("button", {
-    key: a,
-    type: "button",
-    className: `toggle-btn ${(contract.accountType || '一般勘定') === a ? 'sel' : ''}`,
-    onClick: () => sv('accountType')(a)
-  }, a))), /*#__PURE__*/React.createElement("div", {
+  }, "運用区分（貯蓄性契約の資産クラス集計に使用）"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    min: 0,
+    max: 100,
+    className: "form-input",
+    placeholder: "特別勘定の割合（％）例：一般勘定70%・特別勘定30%の混合型なら30",
+    value: contract.separateAccountRatio || '',
+    onChange: s('separateAccountRatio')
+  }), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 10.5,
       color: 'var(--text-sub)',
       marginTop: 4
     }
-  }, "一般勘定＝円建て終身・円建て個人年金など（保険会社が運用、日本国債中心で安定）。特別勘定＝変額保険・変額年金・ユニットリンク等（契約者が運用リスクを負い、実質的に投資信託と同じ値動き）→ポートフォリオ集計では「投資信託・株式等」に分類されます。")), /*#__PURE__*/React.createElement("div", {
+  }, "一般勘定＝保険会社が運用、日本国債中心で安定。特別勘定＝契約者が運用リスクを負い、実質的に投資信託と同じ値動き。全て一般勘定なら0（未入力可）、全て特別勘定なら100、混合型（アクサ アップサイドプラス等）は割合を入力。ポートフォリオ集計では、株式・投資信託とは別に「保険（貯蓄性・一般勘定）」「保険（特別勘定）」として分けて集計されます。")), /*#__PURE__*/React.createElement("div", {
     className: "form-group",
     style: {
       marginBottom: 8
@@ -12353,6 +12361,46 @@ function nexusContractPremiumJpy(ct) {
   };
 }
 
+// 保険料合計（月払換算＋一時払等、別枠）。特約の保険料（常に円）も主契約と同じ払込サイクルで合算する。
+// 「この契約者はこの保険をいくらで買っているか」を明確にするため、契約者（＝そのcontracts配列を
+// 持つ本人・法人・配偶者）ごとに個別に計算できるよう、対象契約リストを引数で受け取る。
+function nexusPremiumTotals(list) {
+  let monthly = 0,
+    lump = 0,
+    unconvertibleCount = 0;
+  (list || []).forEach(r => {
+    const cyc = r.paymentCycle || '月払';
+    const raw = parseFloat(r.premium) || 0;
+    if (raw) {
+      const {
+        amount,
+        convertible
+      } = nexusContractPremiumJpy(r);
+      if (!convertible) {
+        unconvertibleCount++;
+      } else if (LUMP_LIKE_PAYMENT_CYCLES.includes(cyc)) {
+        lump += amount;
+      } else {
+        monthly += cyc === '年払' ? amount / 12 : amount;
+      }
+    }
+    (r.riders || []).forEach(rd => {
+      const ramt = parseFloat(rd.premium) || 0;
+      if (!ramt) return;
+      if (LUMP_LIKE_PAYMENT_CYCLES.includes(cyc)) {
+        lump += ramt;
+      } else {
+        monthly += cyc === '年払' ? ramt / 12 : ramt;
+      }
+    });
+  });
+  return {
+    monthly: Math.round(monthly),
+    lump: Math.round(lump),
+    unconvertibleCount
+  };
+}
+
 // 一覧・印刷用の保険料表示テキスト。外貨建てはドルの生数字だけだと分かりづらいため、
 // 円換算額をメインに、元のドル額を括弧で添える（例：5,000,000円（$31,306.74））。
 function nexusContractPremiumText(ct) {
@@ -12394,14 +12442,13 @@ function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
       unconvertibleSavingsContracts.push(ct);
       return;
     }
-    // 特別勘定（変額保険・変額年金・ユニットリンク等）は保険会社ではなく契約者が運用リスクを負い、
-    // 実質的に投資信託と同じ値動きをするため、資産クラス別の集計では「投資信託・株式等」に含める。
-    // 一般勘定（円建て終身・円建て個人年金など、日本国債中心で運用）は従来通り「保険（貯蓄性）」に含める。
-    if (ct.accountType === '特別勘定') {
-      insuranceSavingsSeparateAccountJpy += amount;
-    } else {
-      insuranceSavingsJpy += amount;
-    }
+    // 一般勘定（保険会社が運用、日本国債中心で安定）と特別勘定（契約者が運用リスクを負う）の
+    // 割合で按分する。保険はどちらであっても株式・投資信託そのものではないため、資産クラス別の
+    // 集計では「投資信託・株式等」には含めず、「保険（貯蓄性・一般勘定）」「保険（特別勘定）」に
+    // それぞれ分けて計上する（アクサ アップサイドプラス等、一般勘定・特別勘定を割合で持つ商品にも対応）。
+    const separateRatio = nexusSeparateAccountRatio(ct) / 100;
+    insuranceSavingsSeparateAccountJpy += amount * separateRatio;
+    insuranceSavingsJpy += amount * (1 - separateRatio);
     // 通貨別（円建て／外貨建て）は、資産クラスの分類（一般勘定／特別勘定）とは別軸の判定であり、
     // 契約の通貨（円建て契約か、ドル建てなど外貨建て契約か）で決まる。円入金・円換算の解約返戻金
     // であっても、保険会社が外貨に変換して運用している商品（外貨建て契約）は為替リスクを負って
@@ -12410,16 +12457,19 @@ function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
     if ((ct.currency || '円') === '円') currencyJpyJpy += amount;else currencyForeignJpy += amount;
   });
   const manualFundsStocksJpy = parseFloat(portfolioInputs.fundsStocksJpy) || 0;
-  const fundsStocksJpy = manualFundsStocksJpy + insuranceSavingsSeparateAccountJpy;
   const realEstateOtherJpy = parseFloat(portfolioInputs.realEstateOtherJpy) || 0;
   const assetClassChart = [{
     label: '投資信託・株式等',
-    value: Math.round(fundsStocksJpy),
+    value: Math.round(manualFundsStocksJpy),
     color: '#2563EB'
   }, {
     label: '保険（貯蓄性・一般勘定）',
     value: Math.round(insuranceSavingsJpy),
     color: 'var(--accent)'
+  }, {
+    label: '保険（特別勘定）',
+    value: Math.round(insuranceSavingsSeparateAccountJpy),
+    color: '#7C3AED'
   }, {
     label: '不動産・退職金・相続等',
     value: realEstateOtherJpy,
@@ -13632,6 +13682,18 @@ function NexusPlanningSection({
   };
   const couplePortfolio = linkedSpouseCustomer ? nexusComputePortfolio(coupleContractsForCharts, couplePortfolioInputs) : null;
   const isCoupleScope = printScope === 'couple' && !!linkedSpouseCustomer;
+  // 契約者（そのcontracts配列を持つ本人・法人・配偶者）ごとの保険料合計。
+  // 被保険者が別人でも、保険料を払っているのは契約者本人なのでここでは除外しない。
+  const premiumByContractor = [{
+    label: customer.name,
+    ...nexusPremiumTotals(contracts)
+  }, linkedCorp && {
+    label: linkedCorp.corporateName,
+    ...nexusPremiumTotals(corpContracts)
+  }, linkedSpouseCustomer && {
+    label: linkedSpouseCustomer.name,
+    ...nexusPremiumTotals(spouseContracts)
+  }].filter(Boolean);
   const scopedPortfolio = isCoupleScope ? couplePortfolio : {
     assetClassChart,
     currencyChart,
@@ -15533,7 +15595,7 @@ function NexusPlanningSection({
       color: 'var(--text-sub)',
       marginTop: 4
     }
-  }, "※ そのうち契約編集で「特別勘定」を選んだもの（変額保険・変額年金・ユニットリンク等）は、実質的に投資信託と同じ値動きのため「保険（貯蓄性）」ではなく「投資信託・株式等」に集計されます", insuranceSavingsSeparateAccountJpy > 0 && `（現在：${insuranceSavingsSeparateAccountJpy.toLocaleString()}円分）`), unconvertibleSavingsContracts.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, "※ 契約編集で「特別勘定の割合」を入力した分は、株式・投資信託とは別に「保険（特別勘定）」として分けて集計されます", insuranceSavingsSeparateAccountJpy > 0 && `（現在：${insuranceSavingsSeparateAccountJpy.toLocaleString()}円分）`), unconvertibleSavingsContracts.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11.5,
       color: '#B45309',
@@ -15574,6 +15636,44 @@ function NexusPlanningSection({
   })), /*#__PURE__*/React.createElement("div", {
     className: "section-header"
   }, "分析"), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 12.5,
+      marginBottom: 4
+    }
+  }, "契約者別 保険料合計"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--text-sub)',
+      marginBottom: 8
+    }
+  }, "※ 被保険者が別人の契約でも、保険料を払っているのは契約者本人のためここでは除外していません"), premiumByContractor.map((p, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      padding: '8px 0',
+      borderBottom: i < premiumByContractor.length - 1 ? '1px solid var(--border)' : 'none'
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 600
+    }
+  }, p.label), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12.5
+    }
+  }, "月払 ", p.monthly.toLocaleString(), "円", p.lump > 0 && ` ／ 一時払等 ${p.lump.toLocaleString()}円`, p.unconvertibleCount > 0 && /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: '#D97706',
+      fontSize: 10.5,
+      marginLeft: 4
+    }
+  }, "（円換算未設定", p.unconvertibleCount, "件を除く）"))))), /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     style: {
