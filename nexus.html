@@ -581,6 +581,27 @@ function ContractBlock({
   const cur = contract.currency || '円';
   const cst = contract.contractStatus || '有効';
   const isInactive = cst !== '有効';
+  const riders = contract.riders || [];
+  const addRider = () => onChange({
+    ...contract,
+    riders: [...riders, {
+      id: uid(),
+      purpose: '',
+      name: '',
+      amount: ''
+    }]
+  });
+  const updateRider = (id, data) => onChange({
+    ...contract,
+    riders: riders.map(r => r.id === id ? {
+      ...r,
+      ...data
+    } : r)
+  });
+  const removeRider = id => onChange({
+    ...contract,
+    riders: riders.filter(r => r.id !== id)
+  });
   return /*#__PURE__*/React.createElement("div", {
     className: `contract-block${isInactive ? ' inactive' : ''}`,
     style: {
@@ -770,6 +791,89 @@ function ContractBlock({
     onChange: s('coverageAmountJpy'),
     placeholder: "例：5000000"
   })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "特約（医療特約など、主契約と保険金額が別の場合はここに追加）"), riders.map((r, ri) => /*#__PURE__*/React.createElement("div", {
+    key: r.id,
+    style: {
+      border: '1px solid var(--border)',
+      borderRadius: 8,
+      padding: 8,
+      marginBottom: 8,
+      background: 'var(--bg)'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: 'var(--text-sub)'
+    }
+  }, "特約 ", ri + 1), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => removeRider(r.id),
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--danger)',
+      cursor: 'pointer',
+      fontSize: 16,
+      lineHeight: 1
+    }
+  }, "×")), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    placeholder: "例：医療特約",
+    value: r.name || '',
+    onChange: e => updateRider(r.id, {
+      name: e.target.value
+    }),
+    style: {
+      marginBottom: 6
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group",
+    style: {
+      marginBottom: 6
+    }
+  }, CONTRACT_PURPOSES.map(p => /*#__PURE__*/React.createElement("button", {
+    key: p,
+    type: "button",
+    className: `toggle-btn ${r.purpose === p ? 'sel' : ''}`,
+    style: {
+      minWidth: 'unset',
+      flex: 'none',
+      padding: '5px 8px',
+      fontSize: 11
+    },
+    onClick: () => updateRider(r.id, {
+      purpose: p
+    })
+  }, p))), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
+    value: r.amount || '',
+    onChange: e => updateRider(r.id, {
+      amount: e.target.value
+    }),
+    placeholder: "例：3000000（入院日額なら日額でもOK・備考に単位をメモ）"
+  }))), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline",
+    style: {
+      fontSize: 12,
+      padding: '8px 12px'
+    },
+    onClick: addRider
+  }, "＋ 特約を追加")), /*#__PURE__*/React.createElement("div", {
     className: "form-group",
     style: {
       marginBottom: 8
@@ -12556,11 +12660,11 @@ function NexusPlanningBarChart({
   }, item.value.toLocaleString(), unit))));
 }
 
-// ── 契約一覧の表には収まらない「補償内容」「備考」を表の下に補足表示 ──
+// ── 契約一覧の表には収まらない「補償内容」「備考」「特約」を表の下に補足表示 ──
 function ContractNotesList({
   list
 }) {
-  const withNotes = (list || []).filter(r => (r.coverage || '').trim() || (r.memo || '').trim());
+  const withNotes = (list || []).filter(r => (r.coverage || '').trim() || (r.memo || '').trim() || (r.riders || []).some(rd => (parseFloat(rd.amount) || 0) > 0));
   if (withNotes.length === 0) return null;
   return /*#__PURE__*/React.createElement("div", {
     style: {
@@ -12575,12 +12679,20 @@ function ContractNotesList({
     style: {
       marginBottom: i < withNotes.length - 1 ? 6 : 0
     }
-  }, /*#__PURE__*/React.createElement("b", null, r.company || r.type || '契約'), "：", [r.coverage, r.memo].filter(Boolean).join('／'))));
+  }, /*#__PURE__*/React.createElement("b", null, r.company || r.type || '契約'), "：", [r.coverage, r.memo].filter(Boolean).join('／'), (r.riders || []).filter(rd => (parseFloat(rd.amount) || 0) > 0).map(rd => /*#__PURE__*/React.createElement("div", {
+    key: rd.id,
+    style: {
+      marginTop: 2,
+      paddingLeft: 10
+    }
+  }, "・特約：", rd.name || rd.purpose || '特約', rd.purpose ? `（${rd.purpose}）` : '', " ", Number(rd.amount).toLocaleString(), "円")))));
 }
 
 // ── 目的別 保障集計（死亡保険合計・医療保険合計を明確に分離）──
 // 外貨建て契約は「円換算」欄／適用レートで円換算してから集計する（そうしないと
 // ドル建ての保険金額がそのまま円として合算され、実際の金額と大きくかけ離れるため）。
+// 主契約の保険金額とは別に、契約ごとに登録された「特約」（医療特約など、主契約と
+// 保険金額が異なるもの）も、特約自身の目的・金額でそれぞれ独立して集計する。
 function nexusPurposeSummary(contracts) {
   const byPurpose = {};
   CONTRACT_PURPOSES.forEach(p => {
@@ -12590,21 +12702,14 @@ function nexusPurposeSummary(contracts) {
   let deathTotal = 0;
   let medicalTotal = 0;
   const unconvertibleContracts = [];
-  contracts.forEach(ct => {
-    const raw = parseFloat(ct.coverageAmount) || 0;
-    if (!raw) return;
-    const {
-      amount: amt,
-      convertible
-    } = nexusContractJpyAmount(ct, 'coverageAmount');
-    if (!convertible) {
-      unconvertibleContracts.push(ct);
-      return;
-    }
-    // 目的は複数選択可（例：変額保険が積立と死亡保障を兼ねる場合、終身保険が死亡保障と貯蓄性を兼ねる場合など）。
-    // どの目的が「実際の保障額」を表すかは商品次第でアプリ側からは判断できないため、
-    // タグ付けされた目的をそのまま信用して計上する（自動で除外しない）。
-    const purposes = nexusContractPurposes(ct).filter(p => byPurpose[p] !== undefined);
+  // 目的は複数選択可（例：変額保険が積立と死亡保障を兼ねる場合、終身保険が死亡保障と貯蓄性を兼ねる場合など）。
+  // どの目的が「実際の保障額」を表すかは商品次第でアプリ側からは判断できないため、
+  // タグ付けされた目的をそのまま信用して計上する（自動で除外しない）。
+  // 死亡保険金額合計・医療保険金額合計は「1件（主契約または特約1件）につき1回」だけ計上する。
+  // 例えば法人保険で「死亡保障」と「事業保障・退職金」を同時にタグ付けした場合、byPurposeの合計を
+  // そのまま足すと同じ保険金額が2回計上されてしまうため、グループに該当するかを判定してから
+  // 1回だけ加算する。
+  const addItem = (purposes, amt) => {
     if (purposes.length > 0) {
       purposes.forEach(p => {
         byPurpose[p] += amt;
@@ -12612,12 +12717,29 @@ function nexusPurposeSummary(contracts) {
     } else {
       unclassified += amt;
     }
-    // 死亡保険金額合計・医療保険金額合計は「契約1件につき1回」だけ計上する。
-    // 例えば法人保険で「死亡保障」と「事業保障・退職金」を同時にタグ付けした場合、
-    // byPurposeの合計をそのまま足すと同じ保険金額が2回計上されてしまうため、
-    // 契約単位でグループに該当するかどうかを判定してから1回だけ加算する。
     if (purposes.some(p => CONTRACT_PURPOSE_DEATH_GROUP.includes(p))) deathTotal += amt;
     if (purposes.some(p => CONTRACT_PURPOSE_MEDICAL_GROUP.includes(p))) medicalTotal += amt;
+  };
+  contracts.forEach(ct => {
+    const raw = parseFloat(ct.coverageAmount) || 0;
+    if (raw) {
+      const {
+        amount: amt,
+        convertible
+      } = nexusContractJpyAmount(ct, 'coverageAmount');
+      if (!convertible) {
+        unconvertibleContracts.push(ct);
+      } else {
+        const purposes = nexusContractPurposes(ct).filter(p => byPurpose[p] !== undefined);
+        addItem(purposes, amt);
+      }
+    }
+    (ct.riders || []).forEach(r => {
+      const ramt = parseFloat(r.amount) || 0;
+      if (!ramt) return;
+      const rPurposes = r.purpose && byPurpose[r.purpose] !== undefined ? [r.purpose] : [];
+      addItem(rPurposes, ramt);
+    });
   });
   return {
     byPurpose,
@@ -13368,12 +13490,14 @@ function NexusPlanningSection({
       <td>${r.coverageAmount ? Number(r.coverageAmount).toLocaleString() + (r.currency || '円') : ''}</td>
       <td>${r.currentSurrenderValue ? Number(r.currentSurrenderValue).toLocaleString() + '円' : ''}</td>
       <td>${escapeHtmlForPrint(nexusContractPremiumText(r))}${r.paymentCycle || ''}</td></tr>`).join('') : '<tr><td colspan="11">登録なし</td></tr>';
-    // 契約一覧の表には収まらない「補償内容」「備考」を、表の下に契約ごとの注記として補足表示する
+    // 契約一覧の表には収まらない「補償内容」「備考」「特約」を、表の下に契約ごとの注記として補足表示する
     const notesHtml = list => {
-      const withNotes = list.filter(r => (r.coverage || '').trim() || (r.memo || '').trim());
+      const withNotes = list.filter(r => (r.coverage || '').trim() || (r.memo || '').trim() || (r.riders || []).some(rd => (parseFloat(rd.amount) || 0) > 0));
       if (withNotes.length === 0) return '';
       return `<div style="font-size:11px;color:#444;margin-top:6px;">
-        ${withNotes.map(r => `<p style="margin:2px 0;"><b>${escapeHtmlForPrint(r.company || r.type || '契約')}</b>：${escapeHtmlForPrint([r.coverage, r.memo].filter(Boolean).join('／'))}</p>`).join('')}
+        ${withNotes.map(r => `<p style="margin:2px 0;"><b>${escapeHtmlForPrint(r.company || r.type || '契約')}</b>：${escapeHtmlForPrint([r.coverage, r.memo].filter(Boolean).join('／'))}
+          ${(r.riders || []).filter(rd => (parseFloat(rd.amount) || 0) > 0).map(rd => `<br>・特約：${escapeHtmlForPrint(rd.name || rd.purpose || '特約')}${rd.purpose ? '（' + escapeHtmlForPrint(rd.purpose) + '）' : ''} ${Number(rd.amount).toLocaleString()}円`).join('')}
+        </p>`).join('')}
       </div>`;
     };
     const famRows = (customer.suspects || []).length ? (customer.suspects || []).map(m => {
