@@ -540,6 +540,15 @@ function nexusRiderPurposes(r) {
   if (Array.isArray(r.purposes)) return r.purposes;
   return r.purpose ? [r.purpose] : [];
 }
+// 契約者本人が「被保険者」でない契約（例：契約者は本人だが被保険者は家族など）は、
+// 保障が本人にかかっているわけではないため、本人自身の保障集計からは除外する。
+function nexusOwnCoverageContracts(list, ownerName) {
+  const name = (ownerName || '').trim();
+  return (list || []).filter(ct => {
+    const insured = (ct.insuredName || '').trim();
+    return !insured || insured === name;
+  });
+}
 const csStyle = st => ({
   有効: {
     border: '#16A34A',
@@ -12826,7 +12835,7 @@ function NexusPlanningBarChart({
 function ContractNotesList({
   list
 }) {
-  const withNotes = (list || []).filter(r => (r.coverage || '').trim() || (r.memo || '').trim() || (r.riders || []).some(rd => (parseFloat(rd.amount) || 0) > 0));
+  const withNotes = (list || []).filter(r => (r.coverage || '').trim() || (r.memo || '').trim() || (r.insuredName || '').trim() || (r.riders || []).some(rd => (parseFloat(rd.amount) || 0) > 0));
   if (withNotes.length === 0) return null;
   return /*#__PURE__*/React.createElement("div", {
     style: {
@@ -12841,7 +12850,7 @@ function ContractNotesList({
     style: {
       marginBottom: i < withNotes.length - 1 ? 6 : 0
     }
-  }, /*#__PURE__*/React.createElement("b", null, r.company || r.type || '契約'), "：", [r.coverage, r.memo].filter(Boolean).join('／'), (r.riders || []).filter(rd => (parseFloat(rd.amount) || 0) > 0).map(rd => /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("b", null, r.company || r.type || '契約'), "：", [(r.insuredName || '').trim() ? `被保険者：${r.insuredName}` : '', r.coverage, r.memo].filter(Boolean).join('／'), (r.riders || []).filter(rd => (parseFloat(rd.amount) || 0) > 0).map(rd => /*#__PURE__*/React.createElement("div", {
     key: rd.id,
     style: {
       marginTop: 2,
@@ -13632,12 +13641,12 @@ function NexusPlanningSection({
     unconvertibleSavingsContracts,
     insuranceSavingsSeparateAccountJpy
   };
-  const buildPurposeRowsForPrint = (title, list) => {
+  const buildPurposeRowsForPrint = (title, list, ownerName) => {
     const {
       byPurpose,
       deathTotal,
       medicalTotal
-    } = nexusPurposeSummary(list);
+    } = nexusPurposeSummary(ownerName ? nexusOwnCoverageContracts(list, ownerName) : list);
     const rows = CONTRACT_PURPOSES.filter(p => byPurpose[p] > 0).map(p => `<tr><td>${p}</td><td>${byPurpose[p].toLocaleString()}円</td></tr>`).join('');
     return `<div class="print-section">
       <h3>${escapeHtmlForPrint(title)}</h3>
@@ -13654,10 +13663,10 @@ function NexusPlanningSection({
       <td>${escapeHtmlForPrint(nexusContractPremiumText(r))}${r.paymentCycle || ''}</td></tr>`).join('') : '<tr><td colspan="11">登録なし</td></tr>';
     // 契約一覧の表には収まらない「補償内容」「備考」「特約」を、表の下に契約ごとの注記として補足表示する
     const notesHtml = list => {
-      const withNotes = list.filter(r => (r.coverage || '').trim() || (r.memo || '').trim() || (r.riders || []).some(rd => (parseFloat(rd.amount) || 0) > 0));
+      const withNotes = list.filter(r => (r.coverage || '').trim() || (r.memo || '').trim() || (r.insuredName || '').trim() || (r.riders || []).some(rd => (parseFloat(rd.amount) || 0) > 0));
       if (withNotes.length === 0) return '';
       return `<div style="font-size:11px;color:#444;margin-top:6px;">
-        ${withNotes.map(r => `<p style="margin:2px 0;"><b>${escapeHtmlForPrint(r.company || r.type || '契約')}</b>：${escapeHtmlForPrint([r.coverage, r.memo].filter(Boolean).join('／'))}
+        ${withNotes.map(r => `<p style="margin:2px 0;"><b>${escapeHtmlForPrint(r.company || r.type || '契約')}</b>：${escapeHtmlForPrint([(r.insuredName || '').trim() ? `被保険者：${r.insuredName}` : '', r.coverage, r.memo].filter(Boolean).join('／'))}
           ${(r.riders || []).filter(rd => (parseFloat(rd.amount) || 0) > 0).map(rd => `<br>・特約：${escapeHtmlForPrint(rd.name || nexusRiderPurposes(rd).join('・') || '特約')}${nexusRiderPurposes(rd).length ? '（' + escapeHtmlForPrint(nexusRiderPurposes(rd).join('・')) + '）' : ''} ${Number(rd.amount).toLocaleString()}円`).join('')}
         </p>`).join('')}
       </div>`;
@@ -13731,7 +13740,7 @@ function NexusPlanningSection({
         <table><tr><th>No</th><th>目的</th><th>保険種類</th><th>保険会社</th><th>証券番号</th><th>契約日</th><th>保険期間</th><th>払込期間</th><th>保険金額（加入当初）</th><th>現在の解約返戻金</th><th>保険料</th></tr>${rowsHtml(contracts)}</table>
         ${notesHtml(contracts)}
       </div>
-      ${buildPurposeRowsForPrint('保障集計（本人）', contracts)}
+      ${buildPurposeRowsForPrint('保障集計（本人）', contracts, customer.name)}
       ${linkedCorp ? `
       <div class="print-section">
         <h3>既契約一覧（関連法人：${escapeHtmlForPrint(linkedCorp.corporateName)}）</h3>
@@ -13746,8 +13755,8 @@ function NexusPlanningSection({
         <table><tr><th>No</th><th>目的</th><th>保険種類</th><th>保険会社</th><th>証券番号</th><th>契約日</th><th>保険期間</th><th>払込期間</th><th>保険金額（加入当初）</th><th>現在の解約返戻金</th><th>保険料</th></tr>${rowsHtml(spouseContracts)}</table>
         ${notesHtml(spouseContracts)}
       </div>
-        ${buildPurposeRowsForPrint('保障集計（配偶者）', spouseContracts)}
-        ${buildPurposeRowsForPrint('保障集計（世帯合算）', [...contracts, ...spouseContracts])}
+        ${buildPurposeRowsForPrint('保障集計（配偶者）', spouseContracts, linkedSpouseCustomer.name)}
+        ${buildPurposeRowsForPrint('保障集計（世帯合算）', [...nexusOwnCoverageContracts(contracts, customer.name), ...nexusOwnCoverageContracts(spouseContracts, linkedSpouseCustomer.name)])}
       ` : ''}
       ${(() => {
       const stocksAll = isCoupleScope ? [...(portfolio.stocks || []), ...(spousePortfolioInputs.stocks || [])] : portfolio.stocks || [];
@@ -14127,20 +14136,20 @@ function NexusPlanningSection({
       row = nexusXlsxDataRows(ws, row, purposeRows.length ? purposeRows : [['データなし', '']], [2]);
       row = nexusXlsxDataRows(ws, row, [['死亡保険金額合計', deathTotal], ['医療保険金額合計', medicalTotal]], [2]);
     };
-    const addContractBlock = (title, list) => {
+    const addContractBlock = (title, list, ownerName) => {
       row = nexusXlsxSubTitle(ws, row, title, contractHeaders.length);
       row = nexusXlsxHeaderRow(ws, row, contractHeaders);
       row = nexusXlsxDataRows(ws, row, list.length ? contractRows(list) : [['登録なし']], [9, 11, 12]);
       row += 1;
-      addPurposeSummary(list);
+      addPurposeSummary(ownerName ? nexusOwnCoverageContracts(list, ownerName) : list);
       row += 2;
     };
-    addContractBlock(`既契約一覧・保障集計（本人：${customer.name}）`, contracts);
+    addContractBlock(`既契約一覧・保障集計（本人：${customer.name}）`, contracts, customer.name);
     if (linkedCorp) addContractBlock(`既契約一覧・保障集計（関連法人：${linkedCorp.corporateName}）`, corpContracts);
     if (isCoupleScope) {
-      addContractBlock(`既契約一覧・保障集計（配偶者：${linkedSpouseCustomer.name}）`, spouseContracts);
+      addContractBlock(`既契約一覧・保障集計（配偶者：${linkedSpouseCustomer.name}）`, spouseContracts, linkedSpouseCustomer.name);
       row = nexusXlsxSubTitle(ws, row, '保障集計（世帯合算）', 2);
-      addPurposeSummary([...contracts, ...spouseContracts]);
+      addPurposeSummary([...nexusOwnCoverageContracts(contracts, customer.name), ...nexusOwnCoverageContracts(spouseContracts, linkedSpouseCustomer.name)]);
       row += 2;
     }
 
@@ -15083,7 +15092,7 @@ function NexusPlanningSection({
     list: contracts
   })), /*#__PURE__*/React.createElement(NexusPurposeSummaryTable, {
     title: "保障集計（本人）",
-    contracts: contracts
+    contracts: nexusOwnCoverageContracts(contracts, customer.name)
   })), linkedCorp && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "section-header"
   }, "既契約一覧（法人：", linkedCorp.corporateName, "）"), /*#__PURE__*/React.createElement("div", {
