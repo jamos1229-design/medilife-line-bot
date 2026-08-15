@@ -594,6 +594,8 @@ function ContractBlock({
       name: '',
       amount: '',
       premium: '',
+      termNote: '',
+      paymentTermNote: '',
       nextRenewalTerm: '',
       renewalLimit: ''
     }]
@@ -952,7 +954,40 @@ function ContractBlock({
       color: 'var(--text-sub)',
       marginBottom: 4
     }
-  }, "次の更新までの保険期間"), /*#__PURE__*/React.createElement("input", {
+  }, "保険期間"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    placeholder: "例：終身・60歳まで",
+    value: r.termNote || '',
+    onChange: e => updateRider(r.id, {
+      termNote: e.target.value
+    })
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: 'var(--text-sub)',
+      marginBottom: 4
+    }
+  }, "払込期間"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    placeholder: "例：60歳払込・10年払済",
+    value: r.paymentTermNote || '',
+    onChange: e => updateRider(r.id, {
+      paymentTermNote: e.target.value
+    })
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "form-row",
+    style: {
+      marginTop: 6
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: 'var(--text-sub)',
+      marginBottom: 4
+    }
+  }, "次の更新までの保険期間（終身型など更新がない場合は空欄でOK）"), /*#__PURE__*/React.createElement("input", {
     className: "form-input",
     placeholder: "例：10年更新",
     value: r.nextRenewalTerm || '',
