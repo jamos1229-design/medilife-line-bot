@@ -523,6 +523,76 @@ function AmountInput({
     onChange: onChange
   }));
 }
+// 預貯金・債券・FX・不動産など「名称＋残高／評価額」だけのシンプルな銘柄別リストの
+// 追加・表示・削除UIを共通化したもの（株式・投資信託と違い数量×単価の評価損益計算は不要）。
+function NexusSimpleAssetList({
+  title,
+  list,
+  ops,
+  namePlaceholder,
+  valuePlaceholder
+}) {
+  const items = list || [];
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 13,
+      color: 'var(--text)',
+      marginTop: 16,
+      marginBottom: 10
+    }
+  }, title), items.length === 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text-sub)',
+      marginBottom: 8
+    }
+  }, "登録なし"), items.map(item => /*#__PURE__*/React.createElement("div", {
+    key: item.id,
+    style: {
+      display: 'flex',
+      gap: 6,
+      alignItems: 'center',
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    style: {
+      flex: 1.4
+    },
+    placeholder: namePlaceholder,
+    value: item.name || '',
+    onChange: e => ops.update(item.id, {
+      name: e.target.value
+    })
+  }), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
+    value: item.value || '',
+    placeholder: valuePlaceholder,
+    onChange: e => ops.update(item.id, {
+      value: e.target.value
+    })
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => ops.remove(item.id),
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--danger)',
+      fontSize: 18,
+      cursor: 'pointer',
+      flexShrink: 0
+    }
+  }, "×"))), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline",
+    style: {
+      fontSize: 12,
+      padding: '8px 12px'
+    },
+    onClick: ops.add
+  }, "＋ ", title, "を追加"));
+}
 const CONTRACT_STATUSES = ['有効', '解約', '失効', '減額'];
 // 契約の目的（生保管理表の集計区分に合わせる。死亡保障系と医療保障系を明確に分離して集計するために使用）
 const CONTRACT_PURPOSES = ['死亡保障', '死亡時収入保障', '介護・就労不能保障', '医療保障', '特定疾病（ガン）', '年金・貯蓄型', '事業保障・退職金', '相続対策', 'その他'];
@@ -12555,6 +12625,11 @@ function nexusPortfolioFundsStocksTotal(portfolioObj) {
   const manual = parseFloat(portfolioObj && portfolioObj.fundsStocksJpy) || 0;
   return stockTotal + fundTotal + manual;
 }
+// 預貯金・債券・FX・不動産（銘柄別入力リスト）の評価額合計。株式・投資信託と違い、
+// 数量×単価の評価損益計算は不要（残高・評価額をそのまま入力してもらう）ため単純合計する。
+function nexusPortfolioListTotal(list) {
+  return (list || []).reduce((s, r) => s + (parseFloat(r.value) || 0), 0);
+}
 
 // 契約1件のJPY換算額（外貨建てはレートがあれば換算、なければ換算不可として扱う）
 // 「現在の解約返戻金」は、外貨建て契約でも解約時は円で払い戻される実務に合わせて、
@@ -12736,11 +12811,32 @@ function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
     if ((ct.currency || '円') === '円') currencyJpyJpy += amount;else currencyForeignJpy += amount;
   });
   const manualFundsStocksJpy = parseFloat(portfolioInputs.fundsStocksJpy) || 0;
-  const realEstateOtherJpy = parseFloat(portfolioInputs.realEstateOtherJpy) || 0;
+  const depositsJpy = parseFloat(portfolioInputs.depositsJpy) || 0;
+  const bondsJpy = parseFloat(portfolioInputs.bondsJpy) || 0;
+  const fxJpy = parseFloat(portfolioInputs.fxJpy) || 0;
+  const realEstateJpy = parseFloat(portfolioInputs.realEstateJpy) || 0;
+  const retirementJpy = parseFloat(portfolioInputs.retirementJpy) || 0;
+  const inheritanceJpy = parseFloat(portfolioInputs.inheritanceJpy) || 0;
+  const corpOtherJpy = parseFloat(portfolioInputs.realEstateOtherJpy) || 0;
+  // 預貯金・債券・FX・不動産・退職金・相続・法人その他は、円建てはそのままの金額として扱う
+  // （不動産等は評価額を円で入力する運用のため、外貨建てという概念を想定していない）。
+  const manualJpyAssetsTotal = depositsJpy + bondsJpy + fxJpy + realEstateJpy + retirementJpy + inheritanceJpy + corpOtherJpy;
   const assetClassChart = [{
+    label: '現金・預貯金',
+    value: Math.round(depositsJpy),
+    color: '#0EA5E9'
+  }, {
     label: '投資信託・株式等',
     value: Math.round(manualFundsStocksJpy),
     color: '#2563EB'
+  }, {
+    label: '債券',
+    value: Math.round(bondsJpy),
+    color: '#8B5CF6'
+  }, {
+    label: 'FX',
+    value: Math.round(fxJpy),
+    color: '#F59E0B'
   }, {
     label: '保険（貯蓄性・一般勘定）',
     value: Math.round(insuranceSavingsJpy),
@@ -12750,13 +12846,25 @@ function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
     value: Math.round(insuranceSavingsSeparateAccountJpy),
     color: '#DB2777'
   }, {
-    label: '不動産・退職金・相続等',
-    value: realEstateOtherJpy,
+    label: '不動産',
+    value: Math.round(realEstateJpy),
     color: '#059669'
+  }, {
+    label: '退職金',
+    value: Math.round(retirementJpy),
+    color: '#65A30D'
+  }, {
+    label: '相続',
+    value: Math.round(inheritanceJpy),
+    color: '#CA8A04'
+  }, {
+    label: '法人その他',
+    value: Math.round(corpOtherJpy),
+    color: '#71717A'
   }].filter(i => i.value > 0);
   const currencyChart = [{
     label: '円建て',
-    value: Math.round(currencyJpyJpy) + Math.round(manualFundsStocksJpy) + realEstateOtherJpy,
+    value: Math.round(currencyJpyJpy) + Math.round(manualFundsStocksJpy) + Math.round(manualJpyAssetsTotal),
     color: 'var(--accent)'
   }, {
     label: '外貨建て',
@@ -13810,6 +13918,30 @@ function NexusPlanningSection({
   const removeFund = id => updateLpPortfolio({
     funds: (customer.lp && customer.lp.portfolio && customer.lp.portfolio.funds || []).filter(f => f.id !== id)
   });
+  // 預貯金・債券・FX・不動産は、株式・投資信託と違って数量×単価の評価損益計算が不要な
+  // 「名称＋残高／評価額」だけのシンプルな銘柄別リストのため、共通の追加・更新・削除処理にまとめる。
+  const makePortfolioListOps = key => ({
+    add: () => updateLpPortfolio({
+      [key]: [...(customer.lp && customer.lp.portfolio && customer.lp.portfolio[key] || []), {
+        id: uid(),
+        name: '',
+        value: ''
+      }]
+    }),
+    update: (id, patch) => updateLpPortfolio({
+      [key]: (customer.lp && customer.lp.portfolio && customer.lp.portfolio[key] || []).map(r => r.id === id ? {
+        ...r,
+        ...patch
+      } : r)
+    }),
+    remove: id => updateLpPortfolio({
+      [key]: (customer.lp && customer.lp.portfolio && customer.lp.portfolio[key] || []).filter(r => r.id !== id)
+    })
+  });
+  const depositOps = makePortfolioListOps('deposits');
+  const bondOps = makePortfolioListOps('bonds');
+  const fxOps = makePortfolioListOps('fx');
+  const realEstateOps = makePortfolioListOps('realEstate');
   const addLoan = () => updateLp({
     loans: [...(customer.lp && customer.lp.loans || []), {
       id: uid(),
@@ -14003,6 +14135,22 @@ function NexusPlanningSection({
 
   // ── ポートフォリオ（通貨別・資産クラス別）── 画面表示は常に本人（＋関連法人）ベース
   // 「投資信託・株式等」は、銘柄別に入力した株式・投資信託の評価額合計＋その他概算（手入力）分
+  // 資産クラス別集計に渡す入力値一式（銘柄別リストは合計してから渡す）。夫婦合算では
+  // 本人・配偶者それぞれの値をこの単位で合算するため、共通のキー一覧をループで合算する。
+  const portfolioInputsFor = p => ({
+    fundsStocksJpy: nexusPortfolioFundsStocksTotal(p),
+    depositsJpy: nexusPortfolioListTotal(p.deposits),
+    bondsJpy: nexusPortfolioListTotal(p.bonds),
+    fxJpy: nexusPortfolioListTotal(p.fx),
+    realEstateJpy: nexusPortfolioListTotal(p.realEstate),
+    retirementJpy: p.retirementJpy,
+    inheritanceJpy: p.inheritanceJpy,
+    realEstateOtherJpy: p.realEstateOtherJpy
+  });
+  const sumPortfolioInputs = (a, b) => Object.keys(a).reduce((acc, k) => {
+    acc[k] = (parseFloat(a[k]) || 0) + (parseFloat(b[k]) || 0);
+    return acc;
+  }, {});
   const {
     assetClassChart,
     currencyChart,
@@ -14011,19 +14159,13 @@ function NexusPlanningSection({
     currencyUnconvertible,
     unconvertibleSavingsContracts,
     insuranceSavingsSeparateAccountJpy
-  } = nexusComputePortfolio(allContractsForCharts, {
-    fundsStocksJpy: nexusPortfolioFundsStocksTotal(portfolio),
-    realEstateOtherJpy: portfolio.realEstateOtherJpy
-  });
+  } = nexusComputePortfolio(allContractsForCharts, portfolioInputsFor(portfolio));
 
   // ── 夫婦合算（資料の対象で選べる）── 配偶者が顧客連携済みの場合のみ計算
   const spouseContracts = linkedSpouseCustomer ? linkedSpouseCustomer.contracts || [] : [];
   const spousePortfolioInputs = linkedSpouseCustomer && linkedSpouseCustomer.lp && linkedSpouseCustomer.lp.portfolio || {};
   const coupleContractsForCharts = [...allContractsForCharts, ...spouseContracts];
-  const couplePortfolioInputs = {
-    fundsStocksJpy: nexusPortfolioFundsStocksTotal(portfolio) + nexusPortfolioFundsStocksTotal(spousePortfolioInputs),
-    realEstateOtherJpy: (parseFloat(portfolio.realEstateOtherJpy) || 0) + (parseFloat(spousePortfolioInputs.realEstateOtherJpy) || 0)
-  };
+  const couplePortfolioInputs = sumPortfolioInputs(portfolioInputsFor(portfolio), portfolioInputsFor(spousePortfolioInputs));
   const couplePortfolio = linkedSpouseCustomer ? nexusComputePortfolio(coupleContractsForCharts, couplePortfolioInputs) : null;
   const isCoupleScope = printScope === 'couple' && !!linkedSpouseCustomer;
   // 契約者（そのcontracts配列を持つ本人・法人・配偶者）ごとの保険料合計。
@@ -15635,11 +15777,18 @@ function NexusPlanningSection({
     className: "section-header"
   }, "ポートフォリオ"), /*#__PURE__*/React.createElement("div", {
     className: "card"
-  }, /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement(NexusSimpleAssetList, {
+    title: "預貯金",
+    list: portfolio.deposits,
+    ops: depositOps,
+    namePlaceholder: "例：〇〇銀行 普通",
+    valuePlaceholder: "例：3000000"
+  }), /*#__PURE__*/React.createElement("div", {
     style: {
       fontWeight: 700,
       fontSize: 13,
       color: 'var(--text)',
+      marginTop: 16,
       marginBottom: 10
     }
   }, "株式（銘柄別）"), (portfolio.stocks || []).length === 0 && /*#__PURE__*/React.createElement("div", {
@@ -15953,6 +16102,26 @@ function NexusPlanningSection({
     onClick: addFund
   }, "＋ 投資信託を追加")), /*#__PURE__*/React.createElement("div", {
     className: "card"
+  }, /*#__PURE__*/React.createElement(NexusSimpleAssetList, {
+    title: "債券",
+    list: portfolio.bonds,
+    ops: bondOps,
+    namePlaceholder: "例：個人向け国債",
+    valuePlaceholder: "例：1000000"
+  }), /*#__PURE__*/React.createElement(NexusSimpleAssetList, {
+    title: "FX",
+    list: portfolio.fx,
+    ops: fxOps,
+    namePlaceholder: "例：〇〇証券 米ドル",
+    valuePlaceholder: "例：500000"
+  }), /*#__PURE__*/React.createElement(NexusSimpleAssetList, {
+    title: "不動産",
+    list: portfolio.realEstate,
+    ops: realEstateOps,
+    namePlaceholder: "例：自宅マンション",
+    valuePlaceholder: "例：20000000"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       fontWeight: 700,
@@ -15972,7 +16141,33 @@ function NexusPlanningSection({
       fontSize: 12.5,
       margin: '14px 0 8px'
     }
-  }, "不動産・退職金・相続・法人その他（円換算残高）"), /*#__PURE__*/React.createElement(AmountInput, {
+  }, "退職金（概算）"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
+    value: portfolio.retirementJpy || '',
+    onChange: e => updateLpPortfolio({
+      retirementJpy: e.target.value
+    }),
+    placeholder: "概算でOK"
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 12.5,
+      margin: '14px 0 8px'
+    }
+  }, "相続（概算）"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
+    value: portfolio.inheritanceJpy || '',
+    onChange: e => updateLpPortfolio({
+      inheritanceJpy: e.target.value
+    }),
+    placeholder: "概算でOK"
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 12.5,
+      margin: '14px 0 8px'
+    }
+  }, "法人その他（概算）"), /*#__PURE__*/React.createElement(AmountInput, {
     prefix: "¥",
     value: portfolio.realEstateOtherJpy || '',
     onChange: e => updateLpPortfolio({
