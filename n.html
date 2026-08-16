@@ -587,6 +587,15 @@ function nexusSeparateAccountRatio(ct) {
 // 特別勘定は運用実績で変動するため、入金時割合からの概算より実際の内訳の方が正確。
 // 内訳が未入力の場合のみ、入金時割合で現在の解約返戻金を按分した概算値を使う。
 function nexusAccountSplit(ct, totalAmount) {
+  const rate = parseFloat(ct.exchangeRate) || 0;
+  const genForeign = parseFloat(ct.generalAccountValueForeign);
+  const sepForeign = parseFloat(ct.separateAccountValueForeign);
+  if (rate > 0 && (!isNaN(genForeign) || !isNaN(sepForeign))) {
+    return {
+      general: (isNaN(genForeign) ? 0 : genForeign) * rate,
+      separate: (isNaN(sepForeign) ? 0 : sepForeign) * rate
+    };
+  }
   const gen = parseFloat(ct.generalAccountValueJpy);
   const sep = parseFloat(ct.separateAccountValueJpy);
   if (!isNaN(gen) || !isNaN(sep)) {
@@ -1146,7 +1155,34 @@ function ContractBlock({
     }
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "運用区分（貯蓄性契約の資産クラス集計に使用）"), /*#__PURE__*/React.createElement("div", {
+  }, "運用区分（貯蓄性契約の資産クラス集計に使用）"), cur === 'ドル' && /*#__PURE__*/React.createElement("div", {
+    className: "form-row",
+    style: {
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label",
+    style: {
+      fontSize: 11
+    }
+  }, "現在の一般勘定残高（外貨・分かる場合）"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "$",
+    prefixColor: "#059669",
+    value: contract.generalAccountValueForeign || '',
+    onChange: s('generalAccountValueForeign'),
+    placeholder: "運用報告書等の金額（適用レートで円換算）"
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label",
+    style: {
+      fontSize: 11
+    }
+  }, "現在の特別勘定残高（外貨・分かる場合）"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "$",
+    prefixColor: "#059669",
+    value: contract.separateAccountValueForeign || '',
+    onChange: s('separateAccountValueForeign'),
+    placeholder: "運用報告書等の金額（適用レートで円換算）"
+  }))), /*#__PURE__*/React.createElement("div", {
     className: "form-row",
     style: {
       marginBottom: 6
@@ -1160,7 +1196,7 @@ function ContractBlock({
     prefix: "¥",
     value: contract.generalAccountValueJpy || '',
     onChange: s('generalAccountValueJpy'),
-    placeholder: "証券会社の運用報告書等の金額"
+    placeholder: cur === 'ドル' ? "上の外貨欄が未入力の場合のみ使用" : "証券会社の運用報告書等の金額"
   })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     className: "form-label",
     style: {
@@ -1170,14 +1206,14 @@ function ContractBlock({
     prefix: "¥",
     value: contract.separateAccountValueJpy || '',
     onChange: s('separateAccountValueJpy'),
-    placeholder: "運用報告書等の金額"
+    placeholder: cur === 'ドル' ? "上の外貨欄が未入力の場合のみ使用" : "運用報告書等の金額"
   }))), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 10.5,
       color: 'var(--text-sub)',
       marginBottom: 6
     }
-  }, "特別勘定は運用実績で変動するため、上の2つの実際の残高が分かる場合はそちらを優先して集計します（分からなければ空欄でOK）。"), /*#__PURE__*/React.createElement("input", {
+  }, "特別勘定は運用実績で変動するため、上の実際の残高が分かる場合はそちらを優先して集計します（分からなければ空欄でOK）。"), /*#__PURE__*/React.createElement("input", {
     type: "number",
     min: 0,
     max: 100,
@@ -1191,7 +1227,31 @@ function ContractBlock({
       color: 'var(--text-sub)',
       marginTop: 4
     }
-  }, "一般勘定＝保険会社が運用、日本国債中心で安定。特別勘定＝契約者が運用リスクを負い、実質的に投資信託と同じ値動き。上の実際の残高が未入力の場合のみ、この割合で現在の解約返戻金を按分した概算値を使います（あくまで入金時の配分割合であり、特別勘定は運用実績で変動するため現在の内訳と一致するとは限りません）。ポートフォリオ集計では、株式・投資信託とは別に「保険（貯蓄性・一般勘定）」「保険（特別勘定）」として分けて集計されます。")), /*#__PURE__*/React.createElement("div", {
+  }, "一般勘定＝保険会社が運用、日本国債中心で安定。特別勘定＝契約者が運用リスクを負い、実質的に投資信託と同じ値動き。上の実際の残高が未入力の場合のみ、この割合で現在の解約返戻金を按分した概算値を使います（あくまで入金時の配分割合であり、特別勘定は運用実績で変動するため現在の内訳と一致するとは限りません）。ポートフォリオ集計では、株式・投資信託とは別に「保険（貯蓄性・一般勘定）」「保険（特別勘定）」として分けて集計されます。"), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginTop: 8,
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label",
+    style: {
+      fontSize: 11
+    }
+  }, "初期手数料（％・分かる場合）"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: "0.01",
+    className: "form-input",
+    placeholder: "例：3（入金額のうち初期費用として差し引かれる割合）",
+    value: contract.initialFeeRate || '',
+    onChange: s('initialFeeRate')
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--text-sub)',
+      marginTop: 4
+    }
+  }, "記録用の参考項目です（集計計算には使用しません）。実際の運用残高は上の「現在の一般勘定／特別勘定残高」に入力してください。"))), /*#__PURE__*/React.createElement("div", {
     className: "form-group",
     style: {
       marginBottom: 8
