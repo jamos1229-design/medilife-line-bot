@@ -549,7 +549,72 @@ function NexusSimpleAssetList({
       color: 'var(--text-sub)',
       marginBottom: 8
     }
-  }, "登録なし"), items.map(item => /*#__PURE__*/React.createElement("div", {
+  }, "登録なし"), items.map(item => showQuantity ? /*#__PURE__*/React.createElement("div", {
+    key: item.id,
+    style: {
+      border: '1px solid var(--border)',
+      borderRadius: 8,
+      padding: 8,
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      alignItems: 'center',
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    style: {
+      flex: 1
+    },
+    placeholder: namePlaceholder,
+    value: item.name || '',
+    onChange: e => ops.update(item.id, {
+      name: e.target.value
+    })
+  }), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    className: "form-input",
+    style: {
+      width: 90,
+      flexShrink: 0
+    },
+    placeholder: quantityPlaceholder || '保有数',
+    value: item.quantity || '',
+    onChange: e => ops.update(item.id, {
+      quantity: e.target.value
+    })
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      alignItems: 'center'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }, /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
+    value: item.value || '',
+    placeholder: valuePlaceholder,
+    onChange: e => ops.update(item.id, {
+      value: e.target.value
+    })
+  })), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => ops.remove(item.id),
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--danger)',
+      fontSize: 18,
+      cursor: 'pointer',
+      flexShrink: 0
+    }
+  }, "×"))) : /*#__PURE__*/React.createElement("div", {
     key: item.id,
     style: {
       display: 'flex',
@@ -567,17 +632,6 @@ function NexusSimpleAssetList({
     value: item.name || '',
     onChange: e => ops.update(item.id, {
       name: e.target.value
-    })
-  }), showQuantity && /*#__PURE__*/React.createElement("input", {
-    type: "number",
-    className: "form-input",
-    style: {
-      width: 90
-    },
-    placeholder: quantityPlaceholder || '保有数',
-    value: item.quantity || '',
-    onChange: e => ops.update(item.id, {
-      quantity: e.target.value
     })
   }), /*#__PURE__*/React.createElement(AmountInput, {
     prefix: "¥",
