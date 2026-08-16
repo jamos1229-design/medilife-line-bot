@@ -13012,6 +13012,41 @@ function nexusEducationSummary(rows, preparedJpy) {
   };
 }
 
+// ── 住宅資金プランニング：将来の住宅購入を想定した頭金積立・住宅ローン月々返済額の試算 ──
+function nexusComputeHousingPlan(inputs, currentAge) {
+  const purchaseAge = inputs && inputs.purchaseAge !== undefined && inputs.purchaseAge !== '' ? parseFloat(inputs.purchaseAge) : null;
+  const homePrice = parseFloat(inputs && inputs.homePrice) || 0;
+  const downPaymentRatio = inputs && inputs.downPaymentRatio !== undefined && inputs.downPaymentRatio !== '' ? parseFloat(inputs.downPaymentRatio) : 20;
+  const currentSaved = parseFloat(inputs && inputs.currentSaved) || 0;
+  const loanRate = parseFloat(inputs && inputs.loanRate) || 0;
+  const loanYears = parseFloat(inputs && inputs.loanYears) || 35;
+  const yearsToPurchase = purchaseAge !== null && currentAge !== null ? Math.max(0, purchaseAge - currentAge) : null;
+  const downPaymentNeededJpy = Math.round(homePrice * downPaymentRatio / 100);
+  const shortfallJpy = Math.max(0, downPaymentNeededJpy - currentSaved);
+  const monthlySavingsNeeded = yearsToPurchase !== null && yearsToPurchase > 0 ? Math.round(shortfallJpy / (yearsToPurchase * 12)) : null;
+  const loanAmountJpy = Math.max(0, homePrice - downPaymentNeededJpy);
+  const monthlyRate = loanRate / 100 / 12;
+  const n = loanYears * 12;
+  let estimatedMonthlyPayment = null;
+  if (loanAmountJpy > 0 && n > 0) {
+    estimatedMonthlyPayment = monthlyRate > 0 ? Math.round(loanAmountJpy * monthlyRate / (1 - Math.pow(1 + monthlyRate, -n))) : Math.round(loanAmountJpy / n);
+  }
+  return {
+    purchaseAge,
+    homePrice,
+    downPaymentRatio,
+    downPaymentNeededJpy,
+    currentSaved,
+    shortfallJpy,
+    yearsToPurchase,
+    monthlySavingsNeeded,
+    loanAmountJpy,
+    loanRate,
+    loanYears,
+    estimatedMonthlyPayment
+  };
+}
+
 // ── Excel(.xlsx)出力ライブラリ（ExcelJS）の遅延読み込み ──
 // 罫線・見出しの色・列幅など「見た目のある表」として書き出すため、
 // セルスタイルに対応したExcelJSを使う（軽量なSheetJS無償版はセル装飾に非対応のため不採用）。
@@ -14017,6 +14052,14 @@ function NexusPlanningSection({
       }
     });
   };
+  const updateLpHousing = patch => {
+    updateLp({
+      housing: {
+        ...(customer.lp && customer.lp.housing || {}),
+        ...patch
+      }
+    });
+  };
   // 教育資金プランニングは子供（サスペクト）ごとに進学トラック・準備状況を保持する。
   // 子供が配偶者側の顧客レコードにだけ登録されている場合もあるため、キーはサスペクトIDを使う。
   const updateLpEducation = (kidId, patch) => {
@@ -14331,6 +14374,10 @@ function NexusPlanningSection({
   const retirementInputs = lp.retirement || {};
   const retirementCalc = nexusComputeRetirement(retirementInputs, ageSelf, portfolioTotal);
 
+  // ── 住宅資金プランニング（将来の住宅購入シミュレーション。既存のローン明細とは別の「これから」の試算）──
+  const housingInputs = lp.housing || {};
+  const housingCalc = nexusComputeHousingPlan(housingInputs, ageSelf);
+
   // ── 夫婦合算（資料の対象で選べる）── 配偶者が顧客連携済みの場合のみ計算
   const spouseContracts = linkedSpouseCustomer ? linkedSpouseCustomer.contracts || [] : [];
   const spousePortfolioInputs = linkedSpouseCustomer && linkedSpouseCustomer.lp && linkedSpouseCustomer.lp.portfolio || {};
@@ -14563,6 +14610,15 @@ function NexusPlanningSection({
         <table><tr><th>費目</th><th>進学先</th><th>年齢</th><th>状況</th><th>費用（残り）</th></tr>${rows.map(r => `<tr><td>${r.label}</td><td>${escapeHtmlForPrint(r.selected)}</td><td>${r.startAge}〜${r.endAge}歳</td><td>${r.status === 'done' ? '終了' : r.status === 'ongoing' ? '進行中' : 'これから'}</td><td>${r.status === 'done' ? '—' : r.remainingCostJpy.toLocaleString() + '円'}</td></tr>`).join('')}</table>
         <p style="font-size:11px;">大学入学までに必要な準備額：<b>${summary.universityNeededJpy.toLocaleString()}円</b>　／　現在の準備額：<b>${summary.prepared.toLocaleString()}円</b>　／　不足額：<b>${summary.shortfallJpy.toLocaleString()}円</b>${summary.monthsToUniversity !== null && summary.monthlySavingsNeeded !== null ? `　／　大学入学（${Math.floor(summary.monthsToUniversity / 12)}年後）までの毎月積立目安：<b>${summary.monthlySavingsNeeded.toLocaleString()}円／月</b>` : ''}</p>`).join('')}
       </div>`}
+      ${housingCalc.homePrice > 0 ? `
+      <div class="print-section">
+        <h3>住宅資金プランニング</h3>
+        <table>
+          <tr><th>頭金必要額</th><td>${housingCalc.downPaymentNeededJpy.toLocaleString()}円（${housingCalc.downPaymentRatio}%）</td><th>頭金の不足額</th><td>${housingCalc.shortfallJpy.toLocaleString()}円${housingCalc.yearsToPurchase !== null ? `（購入まで${housingCalc.yearsToPurchase}年）` : ''}${housingCalc.monthlySavingsNeeded !== null ? '　→　毎月の積立目安：' + housingCalc.monthlySavingsNeeded.toLocaleString() + '円／月' : ''}</td></tr>
+          <tr><th>借入予定額（概算）</th><td>${housingCalc.loanAmountJpy.toLocaleString()}円</td><th>月々の返済額目安</th><td>${housingCalc.estimatedMonthlyPayment !== null ? housingCalc.estimatedMonthlyPayment.toLocaleString() + `円／月（${housingCalc.loanYears}年・年率${housingCalc.loanRate}%）` : ''}</td></tr>
+        </table>
+        <p style="font-size:11px;color:#666;">※ 既存の住宅ローンは「ローン明細」欄に別途記載しています。これから住宅購入を検討する場合のシミュレーションです</p>
+      </div>` : ''}
       <div class="print-section">
         <h3>家族構成</h3>
         <table><tr><th>お名前</th><th>続柄</th><th>年齢</th><th>既契約</th><th>メモ</th></tr>${famRows}</table>
@@ -15005,6 +15061,14 @@ function NexusPlanningSection({
       }) => {
         row = nexusXlsxDataRows(ws, row, [[`${kid.name || '子'}：大学入学までに必要な準備額`, summary.universityNeededJpy], [`${kid.name || '子'}：現在の準備額`, summary.prepared], [`${kid.name || '子'}：不足額`, summary.shortfallJpy], [`${kid.name || '子'}：毎月の積立目安`, summary.monthlySavingsNeeded !== null ? summary.monthlySavingsNeeded : '']], [2]);
       });
+      row += 2;
+    }
+
+    // 住宅資金プランニング
+    if (housingCalc.homePrice > 0) {
+      row = nexusXlsxSubTitle(ws, row, '住宅資金プランニング', 2);
+      row = nexusXlsxHeaderRow(ws, row, ['項目', '内容']);
+      row = nexusXlsxDataRows(ws, row, [['頭金必要額', `${housingCalc.downPaymentNeededJpy.toLocaleString()}円（${housingCalc.downPaymentRatio}%）`], ['頭金の不足額', housingCalc.shortfallJpy], ['購入までの年数', housingCalc.yearsToPurchase !== null ? housingCalc.yearsToPurchase + '年' : ''], ['毎月の積立目安', housingCalc.monthlySavingsNeeded !== null ? housingCalc.monthlySavingsNeeded : ''], ['借入予定額（概算）', housingCalc.loanAmountJpy], ['月々の返済額目安', housingCalc.estimatedMonthlyPayment !== null ? `${housingCalc.estimatedMonthlyPayment.toLocaleString()}円／月（${housingCalc.loanYears}年・年率${housingCalc.loanRate}%）` : '']], [2]);
       row += 2;
     }
 
@@ -16674,6 +16738,121 @@ function NexusPlanningSection({
       color: 'var(--text-sub)'
     }
   }, "（既に大学入学年齢を超えています）"))))), /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "住宅資金プランニング"), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--text-sub)',
+      marginBottom: 10
+    }
+  }, "※ 既に組んでいる住宅ローンは上の「ローン明細」欄で管理します。ここは、これから住宅購入を検討する場合のシミュレーションです"), /*#__PURE__*/React.createElement("div", {
+    className: "form-row"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "購入予定年齢"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    className: "form-input",
+    value: housingInputs.purchaseAge || '',
+    onChange: e => updateLpHousing({
+      purchaseAge: e.target.value
+    }),
+    placeholder: "例：35"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "想定物件価格"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
+    value: housingInputs.homePrice || '',
+    onChange: e => updateLpHousing({
+      homePrice: e.target.value
+    }),
+    placeholder: "例：40000000"
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "form-row"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "頭金の割合（%）"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    className: "form-input",
+    value: housingInputs.downPaymentRatio || '',
+    onChange: e => updateLpHousing({
+      downPaymentRatio: e.target.value
+    }),
+    placeholder: "例：20"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "現在の頭金準備額"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
+    value: housingInputs.currentSaved || '',
+    onChange: e => updateLpHousing({
+      currentSaved: e.target.value
+    }),
+    placeholder: "任意"
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "form-row"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "借入金利（年率%）"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    className: "form-input",
+    value: housingInputs.loanRate || '',
+    onChange: e => updateLpHousing({
+      loanRate: e.target.value
+    }),
+    placeholder: "例：1.0"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "借入期間（年）"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    className: "form-input",
+    value: housingInputs.loanYears || '',
+    onChange: e => updateLpHousing({
+      loanYears: e.target.value
+    }),
+    placeholder: "例：35"
+  }))), housingCalc.homePrice > 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 14,
+      paddingTop: 12,
+      borderTop: '1px dashed var(--border)',
+      fontSize: 12.5,
+      lineHeight: 1.9
+    }
+  }, "頭金必要額：", /*#__PURE__*/React.createElement("b", null, housingCalc.downPaymentNeededJpy.toLocaleString(), "円"), "（", housingCalc.downPaymentRatio, "%）", /*#__PURE__*/React.createElement("br", null), "頭金の不足額：", /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: 'var(--danger)'
+    }
+  }, housingCalc.shortfallJpy.toLocaleString(), "円"), housingCalc.yearsToPurchase !== null && /*#__PURE__*/React.createElement(React.Fragment, null, "（購入まで", housingCalc.yearsToPurchase, "年）", housingCalc.monthlySavingsNeeded !== null && /*#__PURE__*/React.createElement(React.Fragment, null, "　→　毎月の積立目安：", /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: 'var(--accent)'
+    }
+  }, housingCalc.monthlySavingsNeeded.toLocaleString(), "円／月"))), /*#__PURE__*/React.createElement("br", null), "借入予定額（概算）：", /*#__PURE__*/React.createElement("b", null, housingCalc.loanAmountJpy.toLocaleString(), "円"), housingCalc.estimatedMonthlyPayment !== null && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("br", null), "月々の返済額目安：", /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: 'var(--accent)'
+    }
+  }, housingCalc.estimatedMonthlyPayment.toLocaleString(), "円／月（", housingCalc.loanYears, "年・年率", housingCalc.loanRate, "%）"))) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--text-sub)',
+      marginTop: 10
+    }
+  }, "想定物件価格を入力すると自動計算されます")), /*#__PURE__*/React.createElement("div", {
     className: "section-header"
   }, "分析"), /*#__PURE__*/React.createElement("div", {
     className: "card"
