@@ -609,6 +609,7 @@ function ContractBlock({
       purposes: [],
       name: '',
       amount: '',
+      amountUnit: '一時金',
       premium: '',
       termNote: '',
       paymentTermNote: '',
@@ -850,8 +851,24 @@ function ContractBlock({
     prefixColor: cur === 'ドル' ? '#059669' : undefined,
     value: contract.coverageAmount || '',
     onChange: s('coverageAmount'),
-    placeholder: cur === 'ドル' ? '例：31306.74' : '例：10000000'
-  })), cur === 'ドル' && /*#__PURE__*/React.createElement("div", {
+    placeholder: cur === 'ドル' ? '例：31306.74' : '例：10000000（入院日額なら「日額」を選択）'
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group",
+    style: {
+      marginTop: 4
+    }
+  }, ['一時金', '日額'].map(u => /*#__PURE__*/React.createElement("button", {
+    key: u,
+    type: "button",
+    className: `toggle-btn ${(contract.amountUnit || '一時金') === u ? 'sel' : ''}`,
+    style: {
+      minWidth: 'unset',
+      flex: 'none',
+      padding: '4px 8px',
+      fontSize: 10.5
+    },
+    onClick: () => sv('amountUnit')(u)
+  }, u)))), cur === 'ドル' && /*#__PURE__*/React.createElement("div", {
     className: "form-group",
     style: {
       marginBottom: 8
@@ -942,8 +959,27 @@ function ContractBlock({
     onChange: e => updateRider(r.id, {
       amount: e.target.value
     }),
-    placeholder: "例：3000000（入院日額なら日額でもOK・備考に単位をメモ）"
+    placeholder: "例：3000000（入院日額なら「日額」を選択）"
   }), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group",
+    style: {
+      marginTop: 4,
+      marginBottom: 6
+    }
+  }, ['一時金', '日額'].map(u => /*#__PURE__*/React.createElement("button", {
+    key: u,
+    type: "button",
+    className: `toggle-btn ${(r.amountUnit || '一時金') === u ? 'sel' : ''}`,
+    style: {
+      minWidth: 'unset',
+      flex: 'none',
+      padding: '4px 8px',
+      fontSize: 10.5
+    },
+    onClick: () => updateRider(r.id, {
+      amountUnit: u
+    })
+  }, u))), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11,
       fontWeight: 700,
@@ -3912,7 +3948,7 @@ function CustomerDetail({
         className: "info-label"
       }, "保険金額（加入当初）"), /*#__PURE__*/React.createElement("div", {
         className: "info-value"
-      }, ct.currency === 'ドル' ? '$' : '¥', Number(ct.coverageAmount).toLocaleString(), ct.currency === 'ドル' && ct.coverageAmountJpy && /*#__PURE__*/React.createElement("span", {
+      }, ct.currency === 'ドル' ? '$' : '¥', Number(ct.coverageAmount).toLocaleString(), ct.amountUnit === '日額' ? '／日' : '', ct.currency === 'ドル' && ct.coverageAmountJpy && /*#__PURE__*/React.createElement("span", {
         style: {
           fontSize: 12,
           color: 'var(--text-sub)',
@@ -12907,7 +12943,7 @@ function ContractNotesList({
       marginTop: 2,
       paddingLeft: 10
     }
-  }, "・特約：", rd.name || nexusRiderPurposes(rd).join('・') || '特約', nexusRiderPurposes(rd).length ? `（${nexusRiderPurposes(rd).join('・')}）` : '', " ", Number(rd.amount).toLocaleString(), "円")))));
+  }, "・特約：", rd.name || nexusRiderPurposes(rd).join('・') || '特約', nexusRiderPurposes(rd).length ? `（${nexusRiderPurposes(rd).join('・')}）` : '', " ", Number(rd.amount).toLocaleString(), "円", rd.amountUnit === '日額' ? '／日' : '')))));
 }
 
 // ── 目的別 保障集計（死亡保険合計・医療保険合計を明確に分離）──
@@ -12917,12 +12953,15 @@ function ContractNotesList({
 // 保険金額が異なるもの）も、特約自身の目的・金額でそれぞれ独立して集計する。
 function nexusPurposeSummary(contracts) {
   const byPurpose = {};
+  const dailyByPurpose = {};
   CONTRACT_PURPOSES.forEach(p => {
     byPurpose[p] = 0;
+    dailyByPurpose[p] = 0;
   });
   let unclassified = 0;
   let deathTotal = 0;
   let medicalTotal = 0;
+  let dailyTotal = 0;
   const unconvertibleContracts = [];
   // 目的は複数選択可（例：変額保険が積立と死亡保障を兼ねる場合、終身保険が死亡保障と貯蓄性を兼ねる場合など）。
   // どの目的が「実際の保障額」を表すかは商品次第でアプリ側からは判断できないため、
@@ -12931,7 +12970,16 @@ function nexusPurposeSummary(contracts) {
   // 例えば法人保険で「死亡保障」と「事業保障・退職金」を同時にタグ付けした場合、byPurposeの合計を
   // そのまま足すと同じ保険金額が2回計上されてしまうため、グループに該当するかを判定してから
   // 1回だけ加算する。
-  const addItem = (purposes, amt) => {
+  // 医療特約等の「日額（入院日額など）」は死亡保障の「一時金」と単位が全く異なるため、同じ合計に
+  // 混ぜて足さず、別枠の入院日額合計として集計する。
+  const addItem = (purposes, amt, isDaily) => {
+    if (isDaily) {
+      purposes.forEach(p => {
+        dailyByPurpose[p] += amt;
+      });
+      dailyTotal += amt;
+      return;
+    }
     if (purposes.length > 0) {
       purposes.forEach(p => {
         byPurpose[p] += amt;
@@ -12953,14 +13001,14 @@ function nexusPurposeSummary(contracts) {
         unconvertibleContracts.push(ct);
       } else {
         const purposes = nexusContractPurposes(ct).filter(p => byPurpose[p] !== undefined);
-        addItem(purposes, amt);
+        addItem(purposes, amt, ct.amountUnit === '日額');
       }
     }
     (ct.riders || []).forEach(r => {
       const ramt = parseFloat(r.amount) || 0;
       if (!ramt) return;
       const rPurposes = nexusRiderPurposes(r).filter(p => byPurpose[p] !== undefined);
-      addItem(rPurposes, ramt);
+      addItem(rPurposes, ramt, r.amountUnit === '日額');
     });
   });
   return {
@@ -12968,7 +13016,9 @@ function nexusPurposeSummary(contracts) {
     deathTotal,
     medicalTotal,
     unclassified,
-    unconvertibleContracts
+    unconvertibleContracts,
+    dailyByPurpose,
+    dailyTotal
   };
 }
 function NexusPurposeSummaryTable({
@@ -12980,9 +13030,12 @@ function NexusPurposeSummaryTable({
     deathTotal,
     medicalTotal,
     unclassified,
-    unconvertibleContracts
+    unconvertibleContracts,
+    dailyByPurpose,
+    dailyTotal
   } = nexusPurposeSummary(contracts);
   const rows = CONTRACT_PURPOSES.filter(p => byPurpose[p] > 0);
+  const dailyRows = CONTRACT_PURPOSES.filter(p => dailyByPurpose[p] > 0);
   return /*#__PURE__*/React.createElement("div", {
     style: {
       marginBottom: 14
@@ -13066,7 +13119,25 @@ function NexusPurposeSummaryTable({
       fontWeight: 700,
       color: '#D97706'
     }
-  }, "医療保険金額合計："), medicalTotal.toLocaleString(), "円")), byPurpose['年金・貯蓄型'] > 0 && /*#__PURE__*/React.createElement("div", {
+  }, "医療保険金額合計："), medicalTotal.toLocaleString(), "円"), dailyTotal > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: '#EDE9FE',
+      borderRadius: 8,
+      padding: '6px 12px',
+      fontSize: 12
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 700,
+      color: '#7C3AED'
+    }
+  }, "入院日額合計："), dailyTotal.toLocaleString(), "円／日")), dailyRows.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--text-sub)',
+      marginTop: 6
+    }
+  }, "内訳（日額）：", dailyRows.map(p => `${p} ${dailyByPurpose[p].toLocaleString()}円／日`).join('、'), "　※日額は死亡保険金額合計・医療保険金額合計とは単位が異なるため合算していません"), byPurpose['年金・貯蓄型'] > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 10.5,
       color: 'var(--text-sub)',
@@ -13708,13 +13779,17 @@ function NexusPlanningSection({
     const {
       byPurpose,
       deathTotal,
-      medicalTotal
+      medicalTotal,
+      dailyByPurpose,
+      dailyTotal
     } = nexusPurposeSummary(ownerName ? nexusOwnCoverageContracts(list, ownerName) : list);
     const rows = CONTRACT_PURPOSES.filter(p => byPurpose[p] > 0).map(p => `<tr><td>${p}</td><td>${byPurpose[p].toLocaleString()}円</td></tr>`).join('');
+    const dailyRows = CONTRACT_PURPOSES.filter(p => dailyByPurpose[p] > 0);
     return `<div class="print-section">
       <h3>${escapeHtmlForPrint(title)}</h3>
       <table><tr><th>目的</th><th>保険金額合計</th></tr>${rows || '<tr><td colspan="2">データなし</td></tr>'}</table>
-      <p style="font-size:12px;"><b>死亡保険金額合計：${deathTotal.toLocaleString()}円</b>　／　<b>医療保険金額合計：${medicalTotal.toLocaleString()}円</b></p>
+      <p style="font-size:12px;"><b>死亡保険金額合計：${deathTotal.toLocaleString()}円</b>　／　<b>医療保険金額合計：${medicalTotal.toLocaleString()}円</b>${dailyTotal > 0 ? `　／　<b>入院日額合計：${dailyTotal.toLocaleString()}円／日</b>` : ''}</p>
+      ${dailyRows.length > 0 ? `<p style="font-size:11px;color:#666;">内訳（日額）：${dailyRows.map(p => `${p} ${dailyByPurpose[p].toLocaleString()}円／日`).join('、')}　※日額は死亡・医療保険金額合計とは単位が異なるため合算していません</p>` : ''}
       </div>`;
   };
   const buildPrintHtml = () => {
@@ -13730,7 +13805,7 @@ function NexusPlanningSection({
       if (withNotes.length === 0) return '';
       return `<div style="font-size:11px;color:#444;margin-top:6px;">
         ${withNotes.map(r => `<p style="margin:2px 0;"><b>No.${list.indexOf(r) + 1}　${escapeHtmlForPrint([r.type, r.company].filter(Boolean).join('／') || '契約')}</b>：${escapeHtmlForPrint([(r.insuredName || '').trim() ? `被保険者：${r.insuredName}` : '', r.coverage, r.memo].filter(Boolean).join('／'))}
-          ${(r.riders || []).filter(rd => (parseFloat(rd.amount) || 0) > 0).map(rd => `<br>・特約：${escapeHtmlForPrint(rd.name || nexusRiderPurposes(rd).join('・') || '特約')}${nexusRiderPurposes(rd).length ? '（' + escapeHtmlForPrint(nexusRiderPurposes(rd).join('・')) + '）' : ''} ${Number(rd.amount).toLocaleString()}円`).join('')}
+          ${(r.riders || []).filter(rd => (parseFloat(rd.amount) || 0) > 0).map(rd => `<br>・特約：${escapeHtmlForPrint(rd.name || nexusRiderPurposes(rd).join('・') || '特約')}${nexusRiderPurposes(rd).length ? '（' + escapeHtmlForPrint(nexusRiderPurposes(rd).join('・')) + '）' : ''} ${Number(rd.amount).toLocaleString()}円${rd.amountUnit === '日額' ? '／日' : ''}`).join('')}
         </p>`).join('')}
       </div>`;
     };
@@ -14199,12 +14274,20 @@ function NexusPlanningSection({
       const {
         byPurpose,
         deathTotal,
-        medicalTotal
+        medicalTotal,
+        dailyByPurpose,
+        dailyTotal
       } = nexusPurposeSummary(list);
       const purposeRows = CONTRACT_PURPOSES.filter(p => byPurpose[p] > 0).map(p => [p, byPurpose[p]]);
       row = nexusXlsxHeaderRow(ws, row, ['目的', '保険金額合計']);
       row = nexusXlsxDataRows(ws, row, purposeRows.length ? purposeRows : [['データなし', '']], [2]);
       row = nexusXlsxDataRows(ws, row, [['死亡保険金額合計', deathTotal], ['医療保険金額合計', medicalTotal]], [2]);
+      if (dailyTotal > 0) {
+        const dailyRows = CONTRACT_PURPOSES.filter(p => dailyByPurpose[p] > 0).map(p => [p, dailyByPurpose[p]]);
+        row = nexusXlsxHeaderRow(ws, row, ['目的（日額）', '日額合計']);
+        row = nexusXlsxDataRows(ws, row, dailyRows.length ? dailyRows : [['データなし', '']], [2]);
+        row = nexusXlsxDataRows(ws, row, [['入院日額合計（円／日）', dailyTotal]], [2]);
+      }
     };
     const addContractBlock = (title, list, ownerName) => {
       row = nexusXlsxSubTitle(ws, row, title, contractHeaders.length);
