@@ -2285,6 +2285,18 @@ function CustomerForm({
     disability: 'なし',
     memo: ''
   }]);
+  // 契約の「被保険者」に入力済みの名前で、まだお子様として未登録のものを候補として提示する
+  // （証券に被保険者名が書かれているのに、お子様欄は名前未入力のまま、という食い違いを防ぐため）。
+  const childNameCandidates = Array.from(new Set((form.contracts || []).map(ct => (ct.insuredName || '').trim()).filter(n => n && n !== (form.name || '').trim() && !children.some(c => (c.name || '').trim() === n))));
+  const addChildWithName = name => s('suspects')([...(form.suspects || []), {
+    id: uid(),
+    name,
+    age: '',
+    relation: '子供',
+    cohabiting: true,
+    disability: 'なし',
+    memo: ''
+  }]);
   const updateChild = (id, data) => s('suspects')((form.suspects || []).map(sp => sp.id === id ? {
     ...sp,
     ...data
@@ -2638,6 +2650,16 @@ function CustomerForm({
   }
 }, "お子様", i + 1), /*#__PURE__*/React.createElement("input", {
   className: "form-input",
+  placeholder: "名前（分かる場合）",
+  style: {
+    flex: 1.4
+  },
+  value: child.name === `お子様${i + 1}` ? '' : child.name || '',
+  onChange: e => updateChild(child.id, {
+    name: e.target.value || `お子様${i + 1}`
+  })
+}), /*#__PURE__*/React.createElement("input", {
+  className: "form-input",
   type: "number",
   placeholder: "年齢",
   style: {
@@ -2684,7 +2706,33 @@ function CustomerForm({
     marginTop: 4
   },
   onClick: addChild
-}, "＋ お子様を追加"))), /*#__PURE__*/React.createElement("div", {
+}, "＋ お子様を追加"), childNameCandidates.length > 0 && /*#__PURE__*/React.createElement("div", {
+  style: {
+    marginTop: 6,
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 6,
+    alignItems: 'center'
+  }
+}, /*#__PURE__*/React.createElement("span", {
+  style: {
+    fontSize: 11,
+    color: 'var(--text-sub)'
+  }
+}, "契約の被保険者名から候補："), childNameCandidates.map(n => /*#__PURE__*/React.createElement("button", {
+  key: n,
+  type: "button",
+  onClick: () => addChildWithName(n),
+  style: {
+    fontSize: 11.5,
+    padding: '4px 10px',
+    borderRadius: 999,
+    border: '1px solid var(--accent)',
+    background: 'var(--accent-light)',
+    color: 'var(--accent)',
+    cursor: 'pointer'
+  }
+}, "＋ ", n))))), /*#__PURE__*/React.createElement("div", {
     className: "form-row",
     style: {
       marginTop: 14
