@@ -2383,17 +2383,30 @@ function CustomerForm({
       birthdate: ct.insuredBirthdate || ''
     });
   });
-  const addChildWithName = (name, birthdate) => s('suspects')([...(form.suspects || []), {
-    id: uid(),
-    name,
-    age: birthdate ? calcAge(birthdate) : '',
-    ageYear: birthdate ? new Date().getFullYear() : '',
-    birthdate: birthdate || '',
-    relation: '子供',
-    cohabiting: true,
-    disability: 'なし',
-    memo: ''
-  }]);
+  // 名前未入力（「お子様1」等のプレースホルダーのまま）の空き枠があれば、新規追加ではなく
+  // その枠を上書きする。空き枠を残したまま候補チップで別枠を追加すると、空き枠が「年齢不明の
+  // 同居の子」として残り続け、世帯属性の自動判定（就学児あり等）を誤らせてしまうため。
+  const addChildWithName = (name, birthdate) => {
+    const emptySlot = children.find(c => /^お子様\d+$/.test((c.name || '').trim()) && !c.birthdate);
+    const data = {
+      name,
+      age: birthdate ? calcAge(birthdate) : '',
+      ageYear: birthdate ? new Date().getFullYear() : '',
+      birthdate: birthdate || ''
+    };
+    if (emptySlot) {
+      updateChild(emptySlot.id, data);
+    } else {
+      s('suspects')([...(form.suspects || []), {
+        id: uid(),
+        ...data,
+        relation: '子供',
+        cohabiting: true,
+        disability: 'なし',
+        memo: ''
+      }]);
+    }
+  };
   const updateChild = (id, data) => s('suspects')((form.suspects || []).map(sp => sp.id === id ? {
     ...sp,
     ...data
