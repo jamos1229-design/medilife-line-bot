@@ -12818,9 +12818,18 @@ function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
   const retirementJpy = parseFloat(portfolioInputs.retirementJpy) || 0;
   const inheritanceJpy = parseFloat(portfolioInputs.inheritanceJpy) || 0;
   const corpOtherJpy = parseFloat(portfolioInputs.realEstateOtherJpy) || 0;
-  // 預貯金・債券・FX・不動産・退職金・相続・法人その他は、円建てはそのままの金額として扱う
+  // 「その他」＝ゴルフ会員権・自家用車・家財一式・美術品/骨董品・仏具/墓地・自由記入分をまとめて1区分にする
+  // （それぞれ別区分にすると円グラフが細かくなりすぎるため、資産クラス別グラフでは合算表示）。
+  const golfMembershipJpy = parseFloat(portfolioInputs.golfMembershipJpy) || 0;
+  const carJpy = parseFloat(portfolioInputs.carJpy) || 0;
+  const householdItemsJpy = parseFloat(portfolioInputs.householdItemsJpy) || 0;
+  const artJpy = parseFloat(portfolioInputs.artJpy) || 0;
+  const graveJpy = parseFloat(portfolioInputs.graveJpy) || 0;
+  const othersJpy = parseFloat(portfolioInputs.othersJpy) || 0;
+  const miscOtherJpy = golfMembershipJpy + carJpy + householdItemsJpy + artJpy + graveJpy + othersJpy;
+  // 預貯金・債券・FX・不動産・退職金・相続・自社株・その他は、円建てはそのままの金額として扱う
   // （不動産等は評価額を円で入力する運用のため、外貨建てという概念を想定していない）。
-  const manualJpyAssetsTotal = depositsJpy + bondsJpy + fxJpy + realEstateJpy + retirementJpy + inheritanceJpy + corpOtherJpy;
+  const manualJpyAssetsTotal = depositsJpy + bondsJpy + fxJpy + realEstateJpy + retirementJpy + inheritanceJpy + corpOtherJpy + miscOtherJpy;
   const assetClassChart = [{
     label: '現金・預貯金',
     value: Math.round(depositsJpy),
@@ -12858,9 +12867,13 @@ function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
     value: Math.round(inheritanceJpy),
     color: '#CA8A04'
   }, {
-    label: '法人その他',
+    label: '自社株',
     value: Math.round(corpOtherJpy),
     color: '#71717A'
+  }, {
+    label: 'その他（動産等）',
+    value: Math.round(miscOtherJpy),
+    color: '#A16207'
   }].filter(i => i.value > 0);
   const currencyChart = [{
     label: '円建て',
@@ -14136,6 +14149,7 @@ function NexusPlanningSection({
   const bondOps = makePortfolioListOps('bonds');
   const fxOps = makePortfolioListOps('fx');
   const realEstateOps = makePortfolioListOps('realEstate');
+  const othersOps = makePortfolioListOps('others');
   const addLoan = () => updateLp({
     loans: [...(customer.lp && customer.lp.loans || []), {
       id: uid(),
@@ -14354,7 +14368,13 @@ function NexusPlanningSection({
     realEstateJpy: nexusPortfolioListTotal(p.realEstate),
     retirementJpy: p.retirementJpy,
     inheritanceJpy: p.inheritanceJpy,
-    realEstateOtherJpy: p.realEstateOtherJpy
+    realEstateOtherJpy: p.realEstateOtherJpy,
+    golfMembershipJpy: p.golfMembershipJpy,
+    carJpy: p.carJpy,
+    householdItemsJpy: p.householdItemsJpy,
+    artJpy: p.artJpy,
+    graveJpy: p.graveJpy,
+    othersJpy: nexusPortfolioListTotal(p.others)
   });
   const sumPortfolioInputs = (a, b) => Object.keys(a).reduce((acc, k) => {
     acc[k] = (parseFloat(a[k]) || 0) + (parseFloat(b[k]) || 0);
@@ -16465,13 +16485,80 @@ function NexusPlanningSection({
       fontSize: 12.5,
       margin: '14px 0 8px'
     }
-  }, "法人その他（概算）"), /*#__PURE__*/React.createElement(AmountInput, {
+  }, "自社株（概算）"), /*#__PURE__*/React.createElement(AmountInput, {
     prefix: "¥",
     value: portfolio.realEstateOtherJpy || '',
     onChange: e => updateLpPortfolio({
       realEstateOtherJpy: e.target.value
     }),
     placeholder: "概算でOK"
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 12.5,
+      margin: '14px 0 8px'
+    }
+  }, "その他"), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "ゴルフ会員権"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
+    value: portfolio.golfMembershipJpy || '',
+    onChange: e => updateLpPortfolio({
+      golfMembershipJpy: e.target.value
+    }),
+    placeholder: "概算でOK"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "自家用車"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
+    value: portfolio.carJpy || '',
+    onChange: e => updateLpPortfolio({
+      carJpy: e.target.value
+    }),
+    placeholder: "概算でOK"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "家財一式"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
+    value: portfolio.householdItemsJpy || '',
+    onChange: e => updateLpPortfolio({
+      householdItemsJpy: e.target.value
+    }),
+    placeholder: "概算でOK"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "美術品・骨董品"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
+    value: portfolio.artJpy || '',
+    onChange: e => updateLpPortfolio({
+      artJpy: e.target.value
+    }),
+    placeholder: "概算でOK"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "仏具・墓地"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
+    value: portfolio.graveJpy || '',
+    onChange: e => updateLpPortfolio({
+      graveJpy: e.target.value
+    }),
+    placeholder: "概算でOK"
+  })), /*#__PURE__*/React.createElement(NexusSimpleAssetList, {
+    title: "その他（上記以外）",
+    list: portfolio.others,
+    ops: othersOps,
+    namePlaceholder: "例：貴金属",
+    valuePlaceholder: "例：500000"
   }), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 10.5,
