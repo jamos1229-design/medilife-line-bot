@@ -704,6 +704,110 @@ const NEXUS_FINDING_TOPICS = [{
   key: 'housing',
   label: '住宅資金プランニング'
 }];
+// ── 「資産ごとの将来予想額」欄：老後・教育資金・住宅資金プランニングで共通利用。
+// 資産を1件ずつ登録し、それぞれ「自動計算（現在額×利回り）」か「予想額を直接入力」かを選べる
+// （円建ての年金保険のように満期額がほぼ確定しているものは手動入力で対応するため）。──
+function NexusAssetProjectionList({
+  items,
+  onAdd,
+  onUpdate,
+  onRemove
+}) {
+  return /*#__PURE__*/React.createElement(React.Fragment, null, (items || []).map(a => /*#__PURE__*/React.createElement("div", {
+    key: a.id,
+    style: {
+      border: '1px solid var(--border)',
+      borderRadius: 8,
+      padding: 8,
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      alignItems: 'center',
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    style: {
+      flex: 1
+    },
+    placeholder: "例：ソニー生命 変額年金",
+    value: a.name || '',
+    onChange: e => onUpdate(a.id, {
+      name: e.target.value
+    })
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => onRemove(a.id),
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--danger)',
+      fontSize: 18,
+      cursor: 'pointer',
+      flexShrink: 0
+    }
+  }, "×")), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group",
+    style: {
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: 'toggle-btn' + (a.mode !== 'manual' ? ' sel' : ''),
+    onClick: () => onUpdate(a.id, {
+      mode: 'auto'
+    })
+  }, "自動計算（現在額×利回り）"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: 'toggle-btn' + (a.mode === 'manual' ? ' sel' : ''),
+    onClick: () => onUpdate(a.id, {
+      mode: 'manual'
+    })
+  }, "予想額を直接入力")), a.mode === 'manual' ? /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
+    value: a.manualValue || '',
+    placeholder: "将来の予想額（例：満期保険金額）",
+    onChange: e => onUpdate(a.id, {
+      manualValue: e.target.value
+    })
+  }) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      alignItems: 'center'
+    }
+  }, /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
+    value: a.currentValue || '',
+    placeholder: "現在額",
+    onChange: e => onUpdate(a.id, {
+      currentValue: e.target.value
+    })
+  }), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    className: "form-input",
+    style: {
+      width: 80,
+      flexShrink: 0
+    },
+    placeholder: "利回%",
+    value: a.rate || '',
+    onChange: e => onUpdate(a.id, {
+      rate: e.target.value
+    })
+  })))), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline",
+    style: {
+      fontSize: 12,
+      padding: '8px 12px'
+    },
+    onClick: onAdd
+  }, "＋ 資産の将来予想を追加"));
+}
 const NEXUS_FINDING_RATINGS = ['◎', '○', '△', '要確認'];
 function NexusFindingCard({
   label,
@@ -13220,18 +13324,30 @@ function nexusEducationSummary(rows, plan) {
   const universityNeededJpy = uni ? uni.remainingCostJpy : 0;
   const prepared = parseFloat(plan && plan.preparedJpy) || 0;
   const monthsToUniversity = uni ? uni.monthsUntilStart : null;
-  // 準備資金は、①「今のまま」から大学入学までの期間を年率〇%で運用した場合の予想額まで複利で
-  // 伸ばして自動計算する方法と、②学資保険の満期額のようにほぼ確定している金額を直接入力する
-  // 方法のどちらかを選べる（利回り未入力・自動モードなら現在の金額のまま＝従来通り）。
+  const projectionYears = monthsToUniversity !== null ? monthsToUniversity / 12 : 0;
+  // 準備資金は、①1つの金額に対して「今のまま」から大学入学までを年率〇%で運用した場合の
+  // 予想額まで複利で伸ばして自動計算する方法／満期額のようにほぼ確定している金額を直接入力する
+  // 方法（従来のシンプル版）に加えて、②学資保険・NISA等を資産ごとに個別入力する方法（老後
+  // プランニングと同じ「資産ごとの将来予想額」）も選べる。②を1件でも入力した場合はそちらを優先する。
+  const assetProjections = plan && plan.assetProjections || [];
+  const hasAssetProjections = assetProjections.length > 0;
+  const itemizedProjectedJpy = Math.round(assetProjections.reduce((sum, a) => {
+    if (a.mode === 'manual') return sum + (parseFloat(a.manualValue) || 0);
+    const cur = parseFloat(a.currentValue) || 0;
+    const rate = parseFloat(a.rate) || 0;
+    return sum + cur * Math.pow(1 + rate / 100, projectionYears);
+  }, 0));
   const isManual = plan && plan.projectionMode === 'manual';
   const assetReturnRate = plan && plan.assetReturnRate !== undefined && plan.assetReturnRate !== '' ? parseFloat(plan.assetReturnRate) || 0 : 0;
-  const projectedPreparedJpy = isManual ? parseFloat(plan && plan.manualProjectedJpy) || 0 : monthsToUniversity !== null ? Math.round(prepared * Math.pow(1 + assetReturnRate / 100, monthsToUniversity / 12)) : prepared;
+  const blanketProjectedJpy = isManual ? parseFloat(plan && plan.manualProjectedJpy) || 0 : monthsToUniversity !== null ? Math.round(prepared * Math.pow(1 + assetReturnRate / 100, projectionYears)) : prepared;
+  const projectedPreparedJpy = hasAssetProjections ? itemizedProjectedJpy : blanketProjectedJpy;
   const shortfallJpy = Math.max(0, universityNeededJpy - projectedPreparedJpy);
   const monthlySavingsNeeded = monthsToUniversity && monthsToUniversity > 0 ? Math.round(shortfallJpy / monthsToUniversity) : null;
   return {
     totalRemainingJpy,
     universityNeededJpy,
     prepared,
+    hasAssetProjections,
     isManual,
     assetReturnRate,
     projectedPreparedJpy,
@@ -13251,12 +13367,23 @@ function nexusComputeHousingPlan(inputs, currentAge) {
   const loanYears = parseFloat(inputs && inputs.loanYears) || 35;
   const yearsToPurchase = purchaseAge !== null && currentAge !== null ? Math.max(0, purchaseAge - currentAge) : null;
   const downPaymentNeededJpy = Math.round(homePrice * downPaymentRatio / 100);
-  // 頭金準備額は、①「今のまま」から購入予定年齢までの期間を年率〇%で運用した場合の予想額まで
-  // 複利で伸ばして自動計算する方法と、②満期額がほぼ確定している金融商品のように直接入力する
-  // 方法のどちらかを選べる（利回り未入力・自動モードなら現在の金額のまま＝従来通り）。
+  // 頭金準備額は、①1つの金額に対して「今のまま」から購入予定年齢までを年率〇%で運用した場合の
+  // 予想額まで複利で伸ばして自動計算する方法／満期額のようにほぼ確定している金額を直接入力する
+  // 方法（従来のシンプル版）に加えて、②預貯金・保険等を資産ごとに個別入力する方法（老後
+  // プランニングと同じ「資産ごとの将来予想額」）も選べる。②を1件でも入力した場合はそちらを優先する。
+  const assetProjections = inputs && inputs.assetProjections || [];
+  const hasAssetProjections = assetProjections.length > 0;
+  const projectionYears = yearsToPurchase !== null ? yearsToPurchase : 0;
+  const itemizedProjectedJpy = Math.round(assetProjections.reduce((sum, a) => {
+    if (a.mode === 'manual') return sum + (parseFloat(a.manualValue) || 0);
+    const cur = parseFloat(a.currentValue) || 0;
+    const rate = parseFloat(a.rate) || 0;
+    return sum + cur * Math.pow(1 + rate / 100, projectionYears);
+  }, 0));
   const isManual = inputs && inputs.projectionMode === 'manual';
   const assetReturnRate = inputs && inputs.assetReturnRate !== undefined && inputs.assetReturnRate !== '' ? parseFloat(inputs.assetReturnRate) || 0 : 0;
-  const projectedSavedJpy = isManual ? parseFloat(inputs && inputs.manualProjectedJpy) || 0 : yearsToPurchase !== null ? Math.round(currentSaved * Math.pow(1 + assetReturnRate / 100, yearsToPurchase)) : currentSaved;
+  const blanketProjectedJpy = isManual ? parseFloat(inputs && inputs.manualProjectedJpy) || 0 : yearsToPurchase !== null ? Math.round(currentSaved * Math.pow(1 + assetReturnRate / 100, yearsToPurchase)) : currentSaved;
+  const projectedSavedJpy = hasAssetProjections ? itemizedProjectedJpy : blanketProjectedJpy;
   const shortfallJpy = Math.max(0, downPaymentNeededJpy - projectedSavedJpy);
   const monthlySavingsNeeded = yearsToPurchase !== null && yearsToPurchase > 0 ? Math.round(shortfallJpy / (yearsToPurchase * 12)) : null;
   const loanAmountJpy = Math.max(0, homePrice - downPaymentNeededJpy);
@@ -13272,6 +13399,7 @@ function nexusComputeHousingPlan(inputs, currentAge) {
     downPaymentRatio,
     downPaymentNeededJpy,
     currentSaved,
+    hasAssetProjections,
     isManual,
     assetReturnRate,
     projectedSavedJpy,
@@ -14320,6 +14448,26 @@ function NexusPlanningSection({
       }
     });
   };
+  // 住宅資金プランニングも、老後プランニングと同じ「資産ごとの将来予想額」を持てるようにする。
+  const addHousingAssetProjection = () => updateLpHousing({
+    assetProjections: [...(customer.lp && customer.lp.housing && customer.lp.housing.assetProjections || []), {
+      id: uid(),
+      name: '',
+      mode: 'auto',
+      currentValue: '',
+      rate: '',
+      manualValue: ''
+    }]
+  });
+  const updateHousingAssetProjection = (projId, patch) => updateLpHousing({
+    assetProjections: (customer.lp && customer.lp.housing && customer.lp.housing.assetProjections || []).map(a => a.id === projId ? {
+      ...a,
+      ...patch
+    } : a)
+  });
+  const removeHousingAssetProjection = projId => updateLpHousing({
+    assetProjections: (customer.lp && customer.lp.housing && customer.lp.housing.assetProjections || []).filter(a => a.id !== projId)
+  });
   // 診断レポートの「FPの所見」：セクションごとの評価・所見・今後の確認ポイントと、
   // レポート末尾の総合所見。他のLPシートの入力項目と同じ customer.lp の下に保存する。
   const updateLpFinding = (key, patch) => {
@@ -14356,6 +14504,27 @@ function NexusPlanningSection({
       education
     });
   };
+  // 教育資金プランニングも、老後プランニングと同じ「資産ごとの将来予想額」を子供ごとに持てるようにする。
+  const getEducationPlan = kidId => customer.lp && customer.lp.education && customer.lp.education[kidId] || {};
+  const addEducationAssetProjection = kidId => updateLpEducation(kidId, {
+    assetProjections: [...(getEducationPlan(kidId).assetProjections || []), {
+      id: uid(),
+      name: '',
+      mode: 'auto',
+      currentValue: '',
+      rate: '',
+      manualValue: ''
+    }]
+  });
+  const updateEducationAssetProjection = (kidId, projId, patch) => updateLpEducation(kidId, {
+    assetProjections: (getEducationPlan(kidId).assetProjections || []).map(a => a.id === projId ? {
+      ...a,
+      ...patch
+    } : a)
+  });
+  const removeEducationAssetProjection = (kidId, projId) => updateLpEducation(kidId, {
+    assetProjections: (getEducationPlan(kidId).assetProjections || []).filter(a => a.id !== projId)
+  });
   const addStock = () => updateLpPortfolio({
     stocks: [...(customer.lp && customer.lp.portfolio && customer.lp.portfolio.stocks || []), {
       id: uid(),
@@ -14887,7 +15056,7 @@ function NexusPlanningSection({
       return `
       <div class="print-section">
         <h3>老後プランニング${isCoupleScope ? '｜夫婦合算' : ''}</h3>
-        ${rc.hasAssetProjections ? `<table><tr><th>資産名</th><th>方式</th><th>内容</th></tr>${(retirementInputs.assetProjections || []).map(a => `<tr><td>${escapeHtmlForPrint(a.name) || '（名称未記入）'}</td><td>${a.mode === 'manual' ? '手動入力' : '自動計算'}</td><td>${a.mode === 'manual' ? (parseFloat(a.manualValue) || 0).toLocaleString() + '円（予想額）' : `${(parseFloat(a.currentValue) || 0).toLocaleString()}円 × 年率${a.rate || 0}%`}</td></tr>`).join('')}</table>` : ''}
+        ${nexusAssetProjectionTableHtml(retirementInputs.assetProjections)}
         <table>
           <tr><th>老後期間</th><td>${rc.yearsInRetirement}年（${rc.retirementAge}歳〜${rc.lifeExpectancy}歳）</td><th>月あたり${rc.monthlyShortfall >= 0 ? '不足額' : '黒字額'}</th><td>${Math.abs(Math.round(rc.monthlyShortfall)).toLocaleString()}円／月</td></tr>
           <tr><th>老後資金 必要総額</th><td>${rc.totalNeededJpy.toLocaleString()}円</td><th>${rc.hasAssetProjections ? '資産ごとの退職時の予想額 合計' : '現在の資産（自社株除く）'}</th><td>${rc.hasAssetProjections ? rc.projectedAssetsJpy.toLocaleString() : rc.currentAssetsJpy.toLocaleString()}円</td></tr>
@@ -14909,14 +15078,16 @@ function NexusPlanningSection({
     }) => `
         <p style="font-size:12px;margin:6px 0 2px;"><b>${escapeHtmlForPrint(kid.name || '子')}${age !== null ? `（${age}歳）` : ''}</b></p>
         <table><tr><th>費目</th><th>進学先</th><th>年齢</th><th>状況</th><th>費用（残り）</th></tr>${rows.map(r => `<tr><td>${r.label}</td><td>${escapeHtmlForPrint(r.selected)}</td><td>${r.startAge}〜${r.endAge}歳</td><td>${r.status === 'done' ? '終了' : r.status === 'ongoing' ? '進行中' : 'これから'}</td><td>${r.status === 'done' ? '—' : r.remainingCostJpy.toLocaleString() + '円'}</td></tr>`).join('')}</table>
-        <p style="font-size:11px;">大学入学までに必要な準備額：<b>${summary.universityNeededJpy.toLocaleString()}円</b>　／　現在の準備額：<b>${summary.prepared.toLocaleString()}円</b>${summary.isManual ? `　／　大学入学時の予想準備額（直接入力）：<b>${summary.projectedPreparedJpy.toLocaleString()}円</b>` : summary.assetReturnRate > 0 ? `　／　大学入学時の予想準備額（年率${summary.assetReturnRate}%で運用）：<b>${summary.projectedPreparedJpy.toLocaleString()}円</b>` : ''}　／　不足額：<b>${summary.shortfallJpy.toLocaleString()}円</b>${summary.monthsToUniversity !== null && summary.monthlySavingsNeeded !== null ? `　／　大学入学（${Math.floor(summary.monthsToUniversity / 12)}年後）までの毎月積立目安：<b>${summary.monthlySavingsNeeded.toLocaleString()}円／月</b>` : ''}</p>`).join('')}
+        ${nexusAssetProjectionTableHtml(plan.assetProjections)}
+        <p style="font-size:11px;">大学入学までに必要な準備額：<b>${summary.universityNeededJpy.toLocaleString()}円</b>　／　現在の準備額：<b>${summary.prepared.toLocaleString()}円</b>${summary.hasAssetProjections ? `　／　資産ごとの大学入学時の予想額 合計：<b>${summary.projectedPreparedJpy.toLocaleString()}円</b>` : summary.isManual ? `　／　大学入学時の予想準備額（直接入力）：<b>${summary.projectedPreparedJpy.toLocaleString()}円</b>` : summary.assetReturnRate > 0 ? `　／　大学入学時の予想準備額（年率${summary.assetReturnRate}%で運用）：<b>${summary.projectedPreparedJpy.toLocaleString()}円</b>` : ''}　／　不足額：<b>${summary.shortfallJpy.toLocaleString()}円</b>${summary.monthsToUniversity !== null && summary.monthlySavingsNeeded !== null ? `　／　大学入学（${Math.floor(summary.monthsToUniversity / 12)}年後）までの毎月積立目安：<b>${summary.monthlySavingsNeeded.toLocaleString()}円／月</b>` : ''}</p>`).join('')}
       </div>`}
       ${housingCalc.homePrice > 0 ? `
       <div class="print-section">
         <h3>住宅資金プランニング</h3>
+        ${nexusAssetProjectionTableHtml(housingInputs.assetProjections)}
         <table>
           <tr><th>頭金必要額</th><td>${housingCalc.downPaymentNeededJpy.toLocaleString()}円（${housingCalc.downPaymentRatio}%）</td><th>頭金の不足額</th><td>${housingCalc.shortfallJpy.toLocaleString()}円${housingCalc.yearsToPurchase !== null ? `（購入まで${housingCalc.yearsToPurchase}年）` : ''}${housingCalc.monthlySavingsNeeded !== null ? '　→　毎月の積立目安：' + housingCalc.monthlySavingsNeeded.toLocaleString() + '円／月' : ''}</td></tr>
-          ${housingCalc.isManual ? `<tr><th>購入時の予想準備額（直接入力）</th><td colspan="3">${housingCalc.projectedSavedJpy.toLocaleString()}円</td></tr>` : housingCalc.assetReturnRate > 0 ? `<tr><th>購入時の予想準備額（年率${housingCalc.assetReturnRate}%で運用）</th><td colspan="3">${housingCalc.projectedSavedJpy.toLocaleString()}円</td></tr>` : ''}
+          ${housingCalc.hasAssetProjections ? `<tr><th>資産ごとの購入時の予想額 合計</th><td colspan="3">${housingCalc.projectedSavedJpy.toLocaleString()}円</td></tr>` : housingCalc.isManual ? `<tr><th>購入時の予想準備額（直接入力）</th><td colspan="3">${housingCalc.projectedSavedJpy.toLocaleString()}円</td></tr>` : housingCalc.assetReturnRate > 0 ? `<tr><th>購入時の予想準備額（年率${housingCalc.assetReturnRate}%で運用）</th><td colspan="3">${housingCalc.projectedSavedJpy.toLocaleString()}円</td></tr>` : ''}
           <tr><th>借入予定額（概算）</th><td>${housingCalc.loanAmountJpy.toLocaleString()}円</td><th>月々の返済額目安</th><td>${housingCalc.estimatedMonthlyPayment !== null ? housingCalc.estimatedMonthlyPayment.toLocaleString() + `円／月（${housingCalc.loanYears}年・年率${housingCalc.loanRate}%）` : ''}</td></tr>
         </table>
         <p style="font-size:11px;color:#666;">※ 既存の住宅ローンは「ローン明細」欄に別途記載しています。これから住宅購入を検討する場合のシミュレーションです</p>
@@ -15372,7 +15543,7 @@ function NexusPlanningSection({
         summary
       }) => {
         const eduSummaryRows = [[`${kid.name || '子'}：大学入学までに必要な準備額`, summary.universityNeededJpy], [`${kid.name || '子'}：現在の準備額`, summary.prepared]];
-        if (summary.isManual) eduSummaryRows.push([`${kid.name || '子'}：大学入学時の予想準備額（直接入力）`, summary.projectedPreparedJpy]);else if (summary.assetReturnRate > 0) eduSummaryRows.push([`${kid.name || '子'}：大学入学時の予想準備額（年率${summary.assetReturnRate}%で運用）`, summary.projectedPreparedJpy]);
+        if (summary.hasAssetProjections) eduSummaryRows.push([`${kid.name || '子'}：資産ごとの大学入学時の予想額 合計`, summary.projectedPreparedJpy]);else if (summary.isManual) eduSummaryRows.push([`${kid.name || '子'}：大学入学時の予想準備額（直接入力）`, summary.projectedPreparedJpy]);else if (summary.assetReturnRate > 0) eduSummaryRows.push([`${kid.name || '子'}：大学入学時の予想準備額（年率${summary.assetReturnRate}%で運用）`, summary.projectedPreparedJpy]);
         eduSummaryRows.push([`${kid.name || '子'}：不足額`, summary.shortfallJpy], [`${kid.name || '子'}：毎月の積立目安`, summary.monthlySavingsNeeded !== null ? summary.monthlySavingsNeeded : '']);
         row = nexusXlsxDataRows(ws, row, eduSummaryRows, [2]);
       });
@@ -15384,7 +15555,7 @@ function NexusPlanningSection({
       row = nexusXlsxSubTitle(ws, row, '住宅資金プランニング', 2);
       row = nexusXlsxHeaderRow(ws, row, ['項目', '内容']);
       const housingRows = [['頭金必要額', `${housingCalc.downPaymentNeededJpy.toLocaleString()}円（${housingCalc.downPaymentRatio}%）`]];
-      if (housingCalc.isManual) housingRows.push(['購入時の予想準備額（直接入力）', housingCalc.projectedSavedJpy]);else if (housingCalc.assetReturnRate > 0) housingRows.push([`購入時の予想準備額（年率${housingCalc.assetReturnRate}%で運用）`, housingCalc.projectedSavedJpy]);
+      if (housingCalc.hasAssetProjections) housingRows.push(['資産ごとの購入時の予想額 合計', housingCalc.projectedSavedJpy]);else if (housingCalc.isManual) housingRows.push(['購入時の予想準備額（直接入力）', housingCalc.projectedSavedJpy]);else if (housingCalc.assetReturnRate > 0) housingRows.push([`購入時の予想準備額（年率${housingCalc.assetReturnRate}%で運用）`, housingCalc.projectedSavedJpy]);
       housingRows.push(['頭金の不足額', housingCalc.shortfallJpy], ['購入までの年数', housingCalc.yearsToPurchase !== null ? housingCalc.yearsToPurchase + '年' : ''], ['毎月の積立目安', housingCalc.monthlySavingsNeeded !== null ? housingCalc.monthlySavingsNeeded : ''], ['借入予定額（概算）', housingCalc.loanAmountJpy], ['月々の返済額目安', housingCalc.estimatedMonthlyPayment !== null ? `${housingCalc.estimatedMonthlyPayment.toLocaleString()}円／月（${housingCalc.loanYears}年・年率${housingCalc.loanRate}%）` : '']);
       row = nexusXlsxDataRows(ws, row, housingRows, [2]);
       row += 2;
@@ -17036,100 +17207,12 @@ function NexusPlanningSection({
       marginTop: 4,
       marginBottom: 6
     }
-  }, "資産ごとの将来予想額（任意・1件でも入力すると上の一律利回り計算より優先されます）"), (retirementInputs.assetProjections || []).map(a => /*#__PURE__*/React.createElement("div", {
-    key: a.id,
-    style: {
-      border: '1px solid var(--border)',
-      borderRadius: 8,
-      padding: 8,
-      marginBottom: 8
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 6,
-      alignItems: 'center',
-      marginBottom: 6
-    }
-  }, /*#__PURE__*/React.createElement("input", {
-    className: "form-input",
-    style: {
-      flex: 1
-    },
-    placeholder: "例：ソニー生命 変額年金",
-    value: a.name || '',
-    onChange: e => updateAssetProjection(a.id, {
-      name: e.target.value
-    })
-  }), /*#__PURE__*/React.createElement("button", {
-    type: "button",
-    onClick: () => removeAssetProjection(a.id),
-    style: {
-      background: 'none',
-      border: 'none',
-      color: 'var(--danger)',
-      fontSize: 18,
-      cursor: 'pointer',
-      flexShrink: 0
-    }
-  }, "×")), /*#__PURE__*/React.createElement("div", {
-    className: "toggle-group",
-    style: {
-      marginBottom: 6
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    type: "button",
-    className: 'toggle-btn' + (a.mode !== 'manual' ? ' sel' : ''),
-    onClick: () => updateAssetProjection(a.id, {
-      mode: 'auto'
-    })
-  }, "自動計算（現在額×利回り）"), /*#__PURE__*/React.createElement("button", {
-    type: "button",
-    className: 'toggle-btn' + (a.mode === 'manual' ? ' sel' : ''),
-    onClick: () => updateAssetProjection(a.id, {
-      mode: 'manual'
-    })
-  }, "予想額を直接入力")), a.mode === 'manual' ? /*#__PURE__*/React.createElement(AmountInput, {
-    prefix: "¥",
-    value: a.manualValue || '',
-    placeholder: "退職時の予想額（例：満期保険金額）",
-    onChange: e => updateAssetProjection(a.id, {
-      manualValue: e.target.value
-    })
-  }) : /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 6,
-      alignItems: 'center'
-    }
-  }, /*#__PURE__*/React.createElement(AmountInput, {
-    prefix: "¥",
-    value: a.currentValue || '',
-    placeholder: "現在額",
-    onChange: e => updateAssetProjection(a.id, {
-      currentValue: e.target.value
-    })
-  }), /*#__PURE__*/React.createElement("input", {
-    type: "number",
-    className: "form-input",
-    style: {
-      width: 80,
-      flexShrink: 0
-    },
-    placeholder: "利回%",
-    value: a.rate || '',
-    onChange: e => updateAssetProjection(a.id, {
-      rate: e.target.value
-    })
-  })))), /*#__PURE__*/React.createElement("button", {
-    type: "button",
-    className: "btn btn-outline",
-    style: {
-      fontSize: 12,
-      padding: '8px 12px'
-    },
-    onClick: addAssetProjection
-  }, "＋ 資産の将来予想を追加"), retirementCalc.yearsInRetirement !== null ? /*#__PURE__*/React.createElement("div", {
+  }, "資産ごとの将来予想額（任意・1件でも入力すると上の一律利回り計算より優先されます）"), /*#__PURE__*/React.createElement(NexusAssetProjectionList, {
+    items: retirementInputs.assetProjections,
+    onAdd: addAssetProjection,
+    onUpdate: updateAssetProjection,
+    onRemove: removeAssetProjection
+  }), retirementCalc.yearsInRetirement !== null ? /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 14,
       paddingTop: 12,
@@ -17308,10 +17391,25 @@ function NexusPlanningSection({
     placeholder: "例：2（未入力なら今の金額のまま計算）"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      fontWeight: 700,
+      fontSize: 12.5,
+      margin: '10px 0 6px'
+    }
+  }, "資産ごとの将来予想額（任意・1件でも入力すると上の計算より優先されます）"), /*#__PURE__*/React.createElement(NexusAssetProjectionList, {
+    items: plan.assetProjections,
+    onAdd: () => addEducationAssetProjection(kid.id),
+    onUpdate: (projId, patch) => updateEducationAssetProjection(kid.id, projId, patch),
+    onRemove: projId => removeEducationAssetProjection(kid.id, projId)
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
       fontSize: 12.5,
       lineHeight: 1.9
     }
-  }, "大学入学までに必要な準備額：", /*#__PURE__*/React.createElement("b", null, summary.universityNeededJpy.toLocaleString(), "円"), (summary.isManual || summary.assetReturnRate > 0) && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("br", null), summary.isManual ? "大学入学時の予想準備額（直接入力）：" : `大学入学時の予想準備額（年率${summary.assetReturnRate}%で運用）：`, /*#__PURE__*/React.createElement("b", {
+  }, "大学入学までに必要な準備額：", /*#__PURE__*/React.createElement("b", null, summary.universityNeededJpy.toLocaleString(), "円"), summary.hasAssetProjections ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("br", null), "資産ごとの大学入学時の予想額 合計：", /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: 'var(--accent)'
+    }
+  }, summary.projectedPreparedJpy.toLocaleString(), "円")) : (summary.isManual || summary.assetReturnRate > 0) && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("br", null), summary.isManual ? "大学入学時の予想準備額（直接入力）：" : `大学入学時の予想準備額（年率${summary.assetReturnRate}%で運用）：`, /*#__PURE__*/React.createElement("b", {
     style: {
       color: 'var(--accent)'
     }
@@ -17429,6 +17527,17 @@ function NexusPlanningSection({
     }),
     placeholder: "例：2（未入力なら今の金額のまま計算）"
   })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 12.5,
+      margin: '10px 0 6px'
+    }
+  }, "資産ごとの将来予想額（任意・1件でも入力すると上の計算より優先されます）"), /*#__PURE__*/React.createElement(NexusAssetProjectionList, {
+    items: housingInputs.assetProjections,
+    onAdd: addHousingAssetProjection,
+    onUpdate: updateHousingAssetProjection,
+    onRemove: removeHousingAssetProjection
+  }), /*#__PURE__*/React.createElement("div", {
     className: "form-row"
   }, /*#__PURE__*/React.createElement("div", {
     className: "form-group"
@@ -17465,7 +17574,11 @@ function NexusPlanningSection({
       fontSize: 12.5,
       lineHeight: 1.9
     }
-  }, "頭金必要額：", /*#__PURE__*/React.createElement("b", null, housingCalc.downPaymentNeededJpy.toLocaleString(), "円"), "（", housingCalc.downPaymentRatio, "%）", (housingCalc.isManual || housingCalc.assetReturnRate > 0) && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("br", null), housingCalc.isManual ? "購入時の予想準備額（直接入力）：" : `購入時の予想準備額（年率${housingCalc.assetReturnRate}%で運用）：`, /*#__PURE__*/React.createElement("b", {
+  }, "頭金必要額：", /*#__PURE__*/React.createElement("b", null, housingCalc.downPaymentNeededJpy.toLocaleString(), "円"), "（", housingCalc.downPaymentRatio, "%）", housingCalc.hasAssetProjections ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("br", null), "資産ごとの購入時の予想額 合計：", /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: 'var(--accent)'
+    }
+  }, housingCalc.projectedSavedJpy.toLocaleString(), "円")) : (housingCalc.isManual || housingCalc.assetReturnRate > 0) && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("br", null), housingCalc.isManual ? "購入時の予想準備額（直接入力）：" : `購入時の予想準備額（年率${housingCalc.assetReturnRate}%で運用）：`, /*#__PURE__*/React.createElement("b", {
     style: {
       color: 'var(--accent)'
     }
@@ -17845,6 +17958,12 @@ function escapeHtmlForPrint(v) {
 // HTMLエスケープした上で改行を<br>に変換する（所見欄の複数行テキストを印刷でそのまま見やすく表示するため）
 function nexusMultilineHtmlForPrint(v) {
   return escapeHtmlForPrint(v).replace(/\r\n/g, '\n').replace(/\n/g, '<br>');
+}
+// 老後・教育資金・住宅資金プランニング共通：「資産ごとの将来予想額」の内訳表（印刷/PDF用）
+function nexusAssetProjectionTableHtml(list) {
+  const items = list || [];
+  if (items.length === 0) return '';
+  return `<table><tr><th>資産名</th><th>方式</th><th>内容</th></tr>${items.map(a => `<tr><td>${escapeHtmlForPrint(a.name) || '（名称未記入）'}</td><td>${a.mode === 'manual' ? '手動入力' : '自動計算'}</td><td>${a.mode === 'manual' ? (parseFloat(a.manualValue) || 0).toLocaleString() + '円（予想額）' : `${(parseFloat(a.currentValue) || 0).toLocaleString()}円 × 年率${a.rate || 0}%`}</td></tr>`).join('')}</table>`;
 }
 // 評価・所見・今後の確認ポイントが1つも入力されていなければ、印刷上に空白のブロックを
 // 作らないよう何も出力しない（所見が空欄の場合はブロックごと非表示にする、という仕様のため）。
