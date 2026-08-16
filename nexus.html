@@ -354,6 +354,14 @@
     .print-doc table { break-inside: auto; }
     .print-doc tr { break-inside: avoid; page-break-inside: avoid; }
     .print-doc thead { display: table-header-group; }
+    .print-doc .finding-block { background: #FBF8F2; border: 1px solid #e2d3ae; border-radius: 6px; padding: 10px 14px; margin-bottom: 10px; }
+    .print-doc .finding-block h3 { margin-top: 0; border-bottom: 1px solid #d9c795; font-size: 14px; }
+    .print-doc .finding-rating { font-size: 13px; margin: 4px 0; }
+    .print-doc .finding-text { font-size: 12px; line-height: 1.8; margin: 6px 0; text-align: left; }
+    .print-doc .finding-overall { background: #FDF3E1; border: 1.5px solid #b98a3d; padding: 16px 18px; margin-top: 4px; }
+    .print-doc .finding-overall h3 { font-size: 16px; }
+    .print-doc .finding-overall .finding-rating { font-size: 14px; }
+    .print-doc .finding-overall .finding-text { font-size: 13px; }
     @media print {
       @page { size: landscape; margin: 12mm; }
       body.ml-printing > *:not(.ml-print-overlay) { display: none !important; }
@@ -660,6 +668,105 @@ function NexusSimpleAssetList({
     },
     onClick: ops.add
   }, "＋ ", title, "を追加"));
+}
+// ── 診断レポートの「FPの所見」欄：セクションごとに評価・所見・今後の確認ポイントを入力できる ──
+const NEXUS_FINDING_TOPICS = [{
+  key: 'deathCoverage',
+  label: '生命保険・保障内容（死亡保障）'
+}, {
+  key: 'medicalCoverage',
+  label: '医療保障'
+}, {
+  key: 'cancerCoverage',
+  label: 'がん保障（特定疾病）'
+}, {
+  key: 'disabilityCoverage',
+  label: '介護・就業不能保障'
+}, {
+  key: 'premiumBurden',
+  label: '保険料負担'
+}, {
+  key: 'portfolio',
+  label: '資産ポートフォリオ'
+}, {
+  key: 'currencyBalance',
+  label: '円建て／外貨建てのバランス'
+}, {
+  key: 'corpStock',
+  label: '自社株を含む資産構成'
+}, {
+  key: 'retirement',
+  label: '老後プランニング'
+}, {
+  key: 'education',
+  label: '教育資金プランニング'
+}, {
+  key: 'housing',
+  label: '住宅資金プランニング'
+}];
+const NEXUS_FINDING_RATINGS = ['◎', '○', '△', '要確認'];
+function NexusFindingCard({
+  label,
+  value,
+  onChange
+}) {
+  const v = value || {};
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 13,
+      color: 'var(--text)',
+      marginBottom: 10
+    }
+  }, label), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "評価"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, ['', ...NEXUS_FINDING_RATINGS].map(r => /*#__PURE__*/React.createElement("button", {
+    key: r || 'none',
+    type: "button",
+    className: 'toggle-btn' + (v.rating === r ? ' sel' : ''),
+    onClick: () => onChange({
+      rating: r
+    })
+  }, r || '未選択')))), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "所見"), /*#__PURE__*/React.createElement("textarea", {
+    className: "form-textarea",
+    style: {
+      resize: 'vertical',
+      minHeight: 80
+    },
+    placeholder: "例：死亡保障は一定額確保されています。一方で、自社株の割合が高く、家計資産と会社資産が集中している点には注意が必要です。",
+    value: v.comment || '',
+    onChange: e => onChange({
+      comment: e.target.value
+    })
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "今後の確認ポイント"), /*#__PURE__*/React.createElement("textarea", {
+    className: "form-textarea",
+    style: {
+      resize: 'vertical',
+      minHeight: 60
+    },
+    placeholder: "例：換金しやすい金融資産とのバランスを確認しながら、資産分散を検討します。",
+    value: v.checkpoints || '',
+    onChange: e => onChange({
+      checkpoints: e.target.value
+    })
+  })));
 }
 const CONTRACT_STATUSES = ['有効', '解約', '失効', '減額'];
 // 契約の目的（生保管理表の集計区分に合わせる。死亡保障系と医療保障系を明確に分離して集計するために使用）
@@ -14213,6 +14320,28 @@ function NexusPlanningSection({
       }
     });
   };
+  // 診断レポートの「FPの所見」：セクションごとの評価・所見・今後の確認ポイントと、
+  // レポート末尾の総合所見。他のLPシートの入力項目と同じ customer.lp の下に保存する。
+  const updateLpFinding = (key, patch) => {
+    const findings = {
+      ...(customer.lp && customer.lp.findings || {})
+    };
+    findings[key] = {
+      ...(findings[key] || {}),
+      ...patch
+    };
+    updateLp({
+      findings
+    });
+  };
+  const updateLpOverallFinding = patch => {
+    updateLp({
+      overallFinding: {
+        ...(customer.lp && customer.lp.overallFinding || {}),
+        ...patch
+      }
+    });
+  };
   // 教育資金プランニングは子供（サスペクト）ごとに進学トラック・準備状況を保持する。
   // 子供が配偶者側の顧客レコードにだけ登録されている場合もあるため、キーはサスペクトIDを使う。
   const updateLpEducation = (kidId, patch) => {
@@ -14392,6 +14521,8 @@ function NexusPlanningSection({
   const categories = lp.categories || {};
   const budget = lp.budget || {};
   const portfolio = lp.portfolio || {};
+  const findings = lp.findings || {};
+  const overallFinding = lp.overallFinding || {};
   const loans = lp.loans || [];
   const incomeItems = lp.incomeItems || [];
   const expenseItems = lp.expenseItems || [];
@@ -14794,6 +14925,8 @@ function NexusPlanningSection({
         <h3>家族構成</h3>
         <table><tr><th>お名前</th><th>続柄</th><th>年齢</th><th>既契約</th><th>メモ</th></tr>${famRows}</table>
       </div>
+      ${NEXUS_FINDING_TOPICS.map(t => nexusFindingBlockHtml(t.label, findings[t.key])).join('')}
+      ${nexusOverallFindingBlockHtml(overallFinding)}
     `;
   };
   const handleOpenPrint = () => setShowPrint(true);
@@ -15267,7 +15400,27 @@ function NexusPlanningSection({
       const fHasInsurance = linked ? (linked.contracts || []).length > 0 ? 'yes' : 'unknown' : m.hasInsurance || 'unknown';
       return [fName, m.relation || '', fAge ?? '', FAMILY_INSURANCE_LABEL[fHasInsurance], m.memo || ''];
     });
-    nexusXlsxDataRows(ws, row, famRows.length ? famRows : [['登録なし', '', '', '', '']], []);
+    row = nexusXlsxDataRows(ws, row, famRows.length ? famRows : [['登録なし', '', '', '', '']], []);
+    row += 2;
+
+    // FPの所見
+    const findingRows = [];
+    NEXUS_FINDING_TOPICS.forEach(t => {
+      const f = findings[t.key] || {};
+      if (!(f.rating || '').trim() && !(f.comment || '').trim() && !(f.checkpoints || '').trim()) return;
+      findingRows.push([t.label, f.rating || '', f.comment || '', f.checkpoints || '']);
+    });
+    if (findingRows.length > 0) {
+      row = nexusXlsxSubTitle(ws, row, 'FPの所見', 4);
+      row = nexusXlsxHeaderRow(ws, row, ['項目', '評価', '所見', '今後の確認ポイント']);
+      row = nexusXlsxDataRows(ws, row, findingRows, []);
+      row += 2;
+    }
+    if ((overallFinding.rating || '').trim() || (overallFinding.comment || '').trim() || (overallFinding.priorities || '').trim() || (overallFinding.direction || '').trim()) {
+      row = nexusXlsxSubTitle(ws, row, '総合所見', 2);
+      row = nexusXlsxHeaderRow(ws, row, ['項目', '内容']);
+      nexusXlsxDataRows(ws, row, [['総合評価', overallFinding.rating || ''], ['総合所見', overallFinding.comment || ''], ['優先して確認すること', overallFinding.priorities || ''], ['今後の方向性', overallFinding.direction || '']], [2]);
+    }
     return wb;
   };
   const handleExportExcel = () => {
@@ -17527,6 +17680,93 @@ function NexusPlanningSection({
       color: 'var(--danger)'
     }
   }, "不足：月間 ", Math.abs(diff).toLocaleString(), "円足りません")), /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "FPの所見（診断コメント）"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--text-sub)',
+      marginBottom: 8,
+      marginTop: -4
+    }
+  }, "各項目のデータを踏まえた分析コメントです。空欄の項目は印刷／PDFに表示されません。"), NEXUS_FINDING_TOPICS.map(t => /*#__PURE__*/React.createElement(NexusFindingCard, {
+    key: t.key,
+    label: t.label,
+    value: findings[t.key],
+    onChange: patch => updateLpFinding(t.key, patch)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      border: '1.5px solid #b98a3d'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 14,
+      color: 'var(--text)',
+      marginBottom: 10
+    }
+  }, "総合所見（レポート最後に表示）"), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "総合評価"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, ['', ...NEXUS_FINDING_RATINGS].map(r => /*#__PURE__*/React.createElement("button", {
+    key: r || 'none',
+    type: "button",
+    className: 'toggle-btn' + (overallFinding.rating === r ? ' sel' : ''),
+    onClick: () => updateLpOverallFinding({
+      rating: r
+    })
+  }, r || '未選択')))), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "総合所見"), /*#__PURE__*/React.createElement("textarea", {
+    className: "form-textarea",
+    style: {
+      resize: 'vertical',
+      minHeight: 100
+    },
+    placeholder: "レポート全体を踏まえた総合的な所見を入力してください。",
+    value: overallFinding.comment || '',
+    onChange: e => updateLpOverallFinding({
+      comment: e.target.value
+    })
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "優先して確認すること"), /*#__PURE__*/React.createElement("textarea", {
+    className: "form-textarea",
+    style: {
+      resize: 'vertical',
+      minHeight: 70
+    },
+    placeholder: "例：まず死亡保障の過不足を確認し、次に資産の分散状況を見直します。",
+    value: overallFinding.priorities || '',
+    onChange: e => updateLpOverallFinding({
+      priorities: e.target.value
+    })
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "今後の方向性"), /*#__PURE__*/React.createElement("textarea", {
+    className: "form-textarea",
+    style: {
+      resize: 'vertical',
+      minHeight: 70
+    },
+    placeholder: "例：次回面談までに公的年金の見込み額を確認し、老後資金のプランを再検討します。",
+    value: overallFinding.direction || '',
+    onChange: e => updateLpOverallFinding({
+      direction: e.target.value
+    })
+  }))), /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, linkedSpouseCustomer && /*#__PURE__*/React.createElement("div", {
     className: "form-group",
@@ -17601,6 +17841,42 @@ function NexusPlanningSection({
 function escapeHtmlForPrint(v) {
   if (v === undefined || v === null) return '';
   return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+// HTMLエスケープした上で改行を<br>に変換する（所見欄の複数行テキストを印刷でそのまま見やすく表示するため）
+function nexusMultilineHtmlForPrint(v) {
+  return escapeHtmlForPrint(v).replace(/\r\n/g, '\n').replace(/\n/g, '<br>');
+}
+// 評価・所見・今後の確認ポイントが1つも入力されていなければ、印刷上に空白のブロックを
+// 作らないよう何も出力しない（所見が空欄の場合はブロックごと非表示にする、という仕様のため）。
+function nexusFindingBlockHtml(label, finding) {
+  const f = finding || {};
+  const rating = (f.rating || '').trim();
+  const comment = (f.comment || '').trim();
+  const checkpoints = (f.checkpoints || '').trim();
+  if (!rating && !comment && !checkpoints) return '';
+  return `
+      <div class="print-section finding-block">
+        <h3>【${escapeHtmlForPrint(label)}】</h3>
+        ${rating ? `<p class="finding-rating">評価：<b>${escapeHtmlForPrint(rating)}</b></p>` : ''}
+        ${comment ? `<p class="finding-text"><b>所見</b><br>${nexusMultilineHtmlForPrint(comment)}</p>` : ''}
+        ${checkpoints ? `<p class="finding-text"><b>今後の確認ポイント</b><br>${nexusMultilineHtmlForPrint(checkpoints)}</p>` : ''}
+      </div>`;
+}
+function nexusOverallFindingBlockHtml(overall) {
+  const f = overall || {};
+  const rating = (f.rating || '').trim();
+  const comment = (f.comment || '').trim();
+  const priorities = (f.priorities || '').trim();
+  const direction = (f.direction || '').trim();
+  if (!rating && !comment && !priorities && !direction) return '';
+  return `
+      <div class="print-section finding-block finding-overall">
+        <h3>総合所見</h3>
+        ${rating ? `<p class="finding-rating">総合評価：<b>${escapeHtmlForPrint(rating)}</b></p>` : ''}
+        ${comment ? `<p class="finding-text"><b>総合所見</b><br>${nexusMultilineHtmlForPrint(comment)}</p>` : ''}
+        ${priorities ? `<p class="finding-text"><b>優先して確認すること</b><br>${nexusMultilineHtmlForPrint(priorities)}</p>` : ''}
+        ${direction ? `<p class="finding-text"><b>今後の方向性</b><br>${nexusMultilineHtmlForPrint(direction)}</p>` : ''}
+      </div>`;
 }
 
 // ── 印刷/PDF・Excel共通：ポートフォリオ等の内訳を円グラフ（SVG）で表示 ──
