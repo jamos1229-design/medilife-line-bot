@@ -12910,6 +12910,108 @@ function nexusComputeRetirement(inputs, currentAge, currentAssetsJpy) {
   };
 }
 
+// ── 教育資金プランニング：進学段階ごとの標準的な学習費（文部科学省「子供の学習費調査」等を参考にした目安。単位：万円）──
+const NEXUS_EDUCATION_STAGES = [{
+  key: 'kindergarten',
+  label: '幼稚園',
+  startAge: 3,
+  years: 3,
+  annualCosts: {
+    '公立': 22,
+    '私立': 53
+  }
+}, {
+  key: 'elementary',
+  label: '小学校',
+  startAge: 6,
+  years: 6,
+  annualCosts: {
+    '公立': 32,
+    '私立': 160
+  }
+}, {
+  key: 'juniorHigh',
+  label: '中学校',
+  startAge: 12,
+  years: 3,
+  annualCosts: {
+    '公立': 49,
+    '私立': 141
+  }
+}, {
+  key: 'highSchool',
+  label: '高校',
+  startAge: 15,
+  years: 3,
+  annualCosts: {
+    '公立': 46,
+    '私立': 97
+  }
+}, {
+  key: 'university',
+  label: '大学',
+  startAge: 18,
+  years: 4,
+  lumpCosts: {
+    '国公立': 250,
+    '私立文系': 400,
+    '私立理系': 550
+  }
+}];
+function nexusComputeEducationPlan(kidAge, track) {
+  return NEXUS_EDUCATION_STAGES.map(stage => {
+    const options = stage.lumpCosts || stage.annualCosts;
+    const selected = track && track[stage.key] && options[track[stage.key]] !== undefined ? track[stage.key] : Object.keys(options)[0];
+    const totalCostJpy = (stage.lumpCosts ? stage.lumpCosts[selected] : stage.annualCosts[selected] * stage.years) * 10000;
+    const annualCostJpy = stage.lumpCosts ? null : stage.annualCosts[selected] * 10000;
+    const endAge = stage.startAge + stage.years;
+    let status, remainingCostJpy, monthsUntilStart = null;
+    if (kidAge === null || kidAge === undefined) {
+      status = 'unknown';
+      remainingCostJpy = totalCostJpy;
+    } else if (kidAge >= endAge) {
+      status = 'done';
+      remainingCostJpy = 0;
+    } else if (kidAge >= stage.startAge) {
+      status = 'ongoing';
+      remainingCostJpy = stage.lumpCosts ? totalCostJpy : annualCostJpy * (endAge - kidAge);
+    } else {
+      status = 'upcoming';
+      remainingCostJpy = totalCostJpy;
+      monthsUntilStart = Math.round((stage.startAge - kidAge) * 12);
+    }
+    return {
+      key: stage.key,
+      label: stage.label,
+      selected,
+      options: Object.keys(options),
+      startAge: stage.startAge,
+      endAge,
+      status,
+      totalCostJpy,
+      remainingCostJpy,
+      monthsUntilStart
+    };
+  });
+}
+function nexusEducationSummary(rows, preparedJpy) {
+  const totalRemainingJpy = rows.reduce((s, r) => s + r.remainingCostJpy, 0);
+  const uni = rows.find(r => r.key === 'university');
+  const universityNeededJpy = uni ? uni.remainingCostJpy : 0;
+  const prepared = parseFloat(preparedJpy) || 0;
+  const shortfallJpy = Math.max(0, universityNeededJpy - prepared);
+  const monthsToUniversity = uni ? uni.monthsUntilStart : null;
+  const monthlySavingsNeeded = monthsToUniversity && monthsToUniversity > 0 ? Math.round(shortfallJpy / monthsToUniversity) : null;
+  return {
+    totalRemainingJpy,
+    universityNeededJpy,
+    prepared,
+    shortfallJpy,
+    monthsToUniversity,
+    monthlySavingsNeeded
+  };
+}
+
 // ── Excel(.xlsx)出力ライブラリ（ExcelJS）の遅延読み込み ──
 // 罫線・見出しの色・列幅など「見た目のある表」として書き出すため、
 // セルスタイルに対応したExcelJSを使う（軽量なSheetJS無償版はセル装飾に非対応のため不採用）。
@@ -13915,6 +14017,20 @@ function NexusPlanningSection({
       }
     });
   };
+  // 教育資金プランニングは子供（サスペクト）ごとに進学トラック・準備状況を保持する。
+  // 子供が配偶者側の顧客レコードにだけ登録されている場合もあるため、キーはサスペクトIDを使う。
+  const updateLpEducation = (kidId, patch) => {
+    const education = {
+      ...(customer.lp && customer.lp.education || {})
+    };
+    education[kidId] = {
+      ...(education[kidId] || {}),
+      ...patch
+    };
+    updateLp({
+      education
+    });
+  };
   const addStock = () => updateLpPortfolio({
     stocks: [...(customer.lp && customer.lp.portfolio && customer.lp.portfolio.stocks || []), {
       id: uid(),
@@ -14104,6 +14220,21 @@ function NexusPlanningSection({
     const a = k.birthdate ? calcAge(k.birthdate) : calcStoredAge(k.age, k.ageYear);
     return `${k.name || '子'}${a !== null ? a + '歳' : ''}`;
   }).join('、') : '未登録';
+  // ── 教育資金プランニング：子供ごとに進学段階の費用を試算 ──
+  const educationPlans = lp.education || {};
+  const kidsWithEducation = kids.map(k => {
+    const age = k.birthdate ? calcAge(k.birthdate) : calcStoredAge(k.age, k.ageYear);
+    const plan = educationPlans[k.id] || {};
+    const rows = nexusComputeEducationPlan(age, plan.track || {});
+    const summary = nexusEducationSummary(rows, plan.preparedJpy);
+    return {
+      kid: k,
+      age,
+      plan,
+      rows,
+      summary
+    };
+  });
   const monthlyTarget = Object.keys(LP_CATEGORY_LABELS).reduce((sum, key) => sum + nexusLpCategoryMonthly(categories[key]), 0);
   const capacity = parseFloat(lp.savingsCapacity) || 0;
   const diff = capacity - monthlyTarget;
@@ -14418,6 +14549,20 @@ function NexusPlanningSection({
         <p style="font-size:11px;color:#666;">※「現在確保できている資産」はポートフォリオ合計をそのまま使用した概算です（不動産等の流動性は考慮していません）</p>
       </div>`;
     })()}
+      ${kidsWithEducation.length === 0 ? '' : `
+      <div class="print-section">
+        <h3>教育資金プランニング</h3>
+        ${kidsWithEducation.map(({
+      kid,
+      age,
+      plan,
+      rows,
+      summary
+    }) => `
+        <p style="font-size:12px;margin:6px 0 2px;"><b>${escapeHtmlForPrint(kid.name || '子')}${age !== null ? `（${age}歳）` : ''}</b></p>
+        <table><tr><th>費目</th><th>進学先</th><th>年齢</th><th>状況</th><th>費用（残り）</th></tr>${rows.map(r => `<tr><td>${r.label}</td><td>${escapeHtmlForPrint(r.selected)}</td><td>${r.startAge}〜${r.endAge}歳</td><td>${r.status === 'done' ? '終了' : r.status === 'ongoing' ? '進行中' : 'これから'}</td><td>${r.status === 'done' ? '—' : r.remainingCostJpy.toLocaleString() + '円'}</td></tr>`).join('')}</table>
+        <p style="font-size:11px;">大学入学までに必要な準備額：<b>${summary.universityNeededJpy.toLocaleString()}円</b>　／　現在の準備額：<b>${summary.prepared.toLocaleString()}円</b>　／　不足額：<b>${summary.shortfallJpy.toLocaleString()}円</b>${summary.monthsToUniversity !== null && summary.monthlySavingsNeeded !== null ? `　／　大学入学（${Math.floor(summary.monthsToUniversity / 12)}年後）までの毎月積立目安：<b>${summary.monthlySavingsNeeded.toLocaleString()}円／月</b>` : ''}</p>`).join('')}
+      </div>`}
       <div class="print-section">
         <h3>家族構成</h3>
         <table><tr><th>お名前</th><th>続柄</th><th>年齢</th><th>既契約</th><th>メモ</th></tr>${famRows}</table>
@@ -14836,6 +14981,31 @@ function NexusPlanningSection({
         row = nexusXlsxDataRows(ws, row, [['老後期間', `${rc.yearsInRetirement}年（${rc.retirementAge}歳〜${rc.lifeExpectancy}歳）`], [`月あたり${rc.monthlyShortfall >= 0 ? '不足額' : '黒字額'}`, Math.abs(Math.round(rc.monthlyShortfall))], ['老後資金 必要総額', rc.totalNeededJpy], ['現在確保できている資産', rc.currentAssetsJpy], ['不足額（資産控除後）', rc.shortfallAfterAssetsJpy], ['退職までの年数', rc.yearsToRetirement !== null ? rc.yearsToRetirement + '年' : ''], ['退職までに必要な毎月積立額', rc.requiredMonthlySavings !== null ? rc.requiredMonthlySavings : '']], [2]);
         row += 2;
       }
+    }
+
+    // 教育資金プランニング
+    if (kidsWithEducation.length > 0) {
+      const headers = ['子供', '費目', '進学先', '年齢', '状況', '費用（残り）'];
+      row = nexusXlsxSubTitle(ws, row, '教育資金プランニング', headers.length);
+      row = nexusXlsxHeaderRow(ws, row, headers);
+      const eduRows = [];
+      kidsWithEducation.forEach(({
+        kid,
+        rows
+      }) => {
+        rows.forEach(r => {
+          eduRows.push([kid.name || '子', r.label, r.selected, `${r.startAge}〜${r.endAge}歳`, r.status === 'done' ? '終了' : r.status === 'ongoing' ? '進行中' : 'これから', r.status === 'done' ? '' : r.remainingCostJpy]);
+        });
+      });
+      row = nexusXlsxDataRows(ws, row, eduRows, [6]);
+      row += 1;
+      kidsWithEducation.forEach(({
+        kid,
+        summary
+      }) => {
+        row = nexusXlsxDataRows(ws, row, [[`${kid.name || '子'}：大学入学までに必要な準備額`, summary.universityNeededJpy], [`${kid.name || '子'}：現在の準備額`, summary.prepared], [`${kid.name || '子'}：不足額`, summary.shortfallJpy], [`${kid.name || '子'}：毎月の積立目安`, summary.monthlySavingsNeeded !== null ? summary.monthlySavingsNeeded : '']], [2]);
+      });
+      row += 2;
     }
 
     // 家族構成
@@ -16400,6 +16570,110 @@ function NexusPlanningSection({
       marginTop: 8
     }
   }, "※「現在確保できている資産」は上のポートフォリオ合計をそのまま使用した概算です（不動産等の流動性は考慮していません）")), /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "教育資金プランニング"), kidsWithEducation.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--text-sub)'
+    }
+  }, "お子様が登録されていません（サスペクトの続柄「子供」で登録すると、ここに表示されます）")) : kidsWithEducation.map(({
+    kid,
+    age,
+    plan,
+    rows,
+    summary
+  }) => /*#__PURE__*/React.createElement("div", {
+    key: kid.id,
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 13,
+      color: 'var(--text)',
+      marginBottom: 10
+    }
+  }, kid.name || '子', age !== null ? `（${age}歳）` : ''), rows.map(r => /*#__PURE__*/React.createElement("div", {
+    key: r.key,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      marginBottom: 6,
+      fontSize: 12
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: 52,
+      flexShrink: 0,
+      fontWeight: 700
+    }
+  }, r.label), /*#__PURE__*/React.createElement("select", {
+    className: "form-input",
+    style: {
+      width: 96,
+      fontSize: 12
+    },
+    value: r.selected,
+    onChange: e => updateLpEducation(kid.id, {
+      track: {
+        ...(plan.track || {}),
+        [r.key]: e.target.value
+      }
+    })
+  }, r.options.map(o => /*#__PURE__*/React.createElement("option", {
+    key: o,
+    value: o
+  }, o))), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--text-sub)',
+      flexShrink: 0
+    }
+  }, r.startAge, "〜", r.endAge, "歳"), /*#__PURE__*/React.createElement("span", {
+    style: {
+      marginLeft: 'auto',
+      flexShrink: 0,
+      color: r.status === 'done' ? 'var(--text-sub)' : 'var(--text)'
+    }
+  }, r.status === 'done' ? '終了' : r.remainingCostJpy.toLocaleString() + '円' + (r.status === 'ongoing' ? '（進行中・残り分）' : '')))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10,
+      paddingTop: 10,
+      borderTop: '1px dashed var(--border)'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "現在の教育資金準備額（学資保険の解約返戻金等）"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
+    value: plan.preparedJpy || '',
+    onChange: e => updateLpEducation(kid.id, {
+      preparedJpy: e.target.value
+    }),
+    placeholder: "任意"
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      lineHeight: 1.9
+    }
+  }, "大学入学までに必要な準備額：", /*#__PURE__*/React.createElement("b", null, summary.universityNeededJpy.toLocaleString(), "円"), /*#__PURE__*/React.createElement("br", null), "不足額：", /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: 'var(--danger)'
+    }
+  }, summary.shortfallJpy.toLocaleString(), "円"), summary.monthsToUniversity !== null && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("br", null), "大学入学まで：", Math.floor(summary.monthsToUniversity / 12), "年", summary.monthlySavingsNeeded !== null && /*#__PURE__*/React.createElement(React.Fragment, null, "　→　毎月の積立目安：", /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: 'var(--accent)'
+    }
+  }, summary.monthlySavingsNeeded.toLocaleString(), "円／月"))), summary.monthsToUniversity === null && age !== null && age >= 18 && /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--text-sub)'
+    }
+  }, "（既に大学入学年齢を超えています）"))))), /*#__PURE__*/React.createElement("div", {
     className: "section-header"
   }, "分析"), /*#__PURE__*/React.createElement("div", {
     className: "card"
