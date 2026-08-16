@@ -14178,10 +14178,12 @@ function NexusPlanningSection({
     })()}
       <div class="print-section">
         <h3>ポートフォリオ（資産クラス別）${isCoupleScope ? '｜夫婦合算' : ''}</h3>
+        ${nexusPieChartBlockHtml(pAssetClassChart)}
         <table><tr><th>区分</th><th>金額</th><th>割合</th></tr>${assetClassRowsHtml}</table>
       </div>
       <div class="print-section">
         <h3>ポートフォリオ（通貨別：円建て／外貨建て）${isCoupleScope ? '｜夫婦合算' : ''}</h3>
+        ${nexusPieChartBlockHtml(pCurrencyChart)}
         <table><tr><th>区分</th><th>金額</th></tr>${currencyRowsHtml}</table>
         ${pInsuranceSavingsUnconvertible > 0 || pCurrencyUnconvertible > 0 ? '<p style="font-size:11px;color:#b98a3d;">※ 外貨建て契約のうち適用レート未入力のものは円換算できず、上記には含まれていません</p>' : ''}
       </div>
@@ -16253,6 +16255,45 @@ function NexusPlanningSection({
 function escapeHtmlForPrint(v) {
   if (v === undefined || v === null) return '';
   return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// ── 印刷/PDF・Excel共通：ポートフォリオ等の内訳を円グラフ（SVG）で表示 ──
+// items: [{ label, value, color }]
+function nexusPieChartSvg(items, size) {
+  const s = size || 140;
+  const total = items.reduce((sum, i) => sum + i.value, 0);
+  if (total <= 0) return '';
+  const cx = s / 2,
+    cy = s / 2,
+    r = s / 2 - 2;
+  let angle = -90;
+  const toXY = a => {
+    const rad = a * Math.PI / 180;
+    return [cx + r * Math.cos(rad), cy + r * Math.sin(rad)];
+  };
+  const slices = items.map(item => {
+    const frac = item.value / total;
+    if (frac <= 0) return '';
+    if (frac >= 0.9999) {
+      return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${item.color}" />`;
+    }
+    const startAngle = angle;
+    const endAngle = angle + frac * 360;
+    angle = endAngle;
+    const large = endAngle - startAngle > 180 ? 1 : 0;
+    const [x1, y1] = toXY(startAngle);
+    const [x2, y2] = toXY(endAngle);
+    return `<path d="M ${cx} ${cy} L ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${x2.toFixed(2)} ${y2.toFixed(2)} Z" fill="${item.color}" />`;
+  }).join('');
+  return `<svg width="${s}" height="${s}" viewBox="0 0 ${s} ${s}" xmlns="http://www.w3.org/2000/svg">${slices}</svg>`;
+}
+function nexusPieChartLegendHtml(items, total) {
+  return `<ul style="list-style:none;padding:0;margin:0;font-size:11px;">${items.map(i => `<li style="display:flex;align-items:center;gap:6px;margin-bottom:4px;"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${i.color};flex-shrink:0;"></span>${escapeHtmlForPrint(i.label)}：${i.value.toLocaleString()}円（${total > 0 ? Math.round(i.value / total * 100) : 0}%）</li>`).join('')}</ul>`;
+}
+function nexusPieChartBlockHtml(items) {
+  const total = items.reduce((sum, i) => sum + i.value, 0);
+  if (!items.length || total <= 0) return '';
+  return `<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:8px 0;">${nexusPieChartSvg(items, 140)}${nexusPieChartLegendHtml(items, total)}</div>`;
 }
 
 // ── 人脈ネクサス タブ本体（顧客一覧・提案候補・つながり・サービス・理念）──
