@@ -2310,13 +2310,25 @@ function CustomerForm({
     disability: 'なし',
     memo: ''
   }]);
-  // 契約の「被保険者」に入力済みの名前で、まだお子様として未登録のものを候補として提示する
-  // （証券に被保険者名が書かれているのに、お子様欄は名前未入力のまま、という食い違いを防ぐため）。
-  const childNameCandidates = Array.from(new Set((form.contracts || []).map(ct => (ct.insuredName || '').trim()).filter(n => n && n !== (form.name || '').trim() && !children.some(c => (c.name || '').trim() === n))));
-  const addChildWithName = name => s('suspects')([...(form.suspects || []), {
+  // 契約の「被保険者」に入力済みの名前・生年月日で、まだお子様として未登録のものを候補として提示する
+  // （証券に被保険者名・生年月日が書かれているのに、お子様欄は未入力のまま、という食い違いを防ぐため）。
+  const childNameCandidates = [];
+  const seenChildCandidateNames = new Set();
+  (form.contracts || []).forEach(ct => {
+    const n = (ct.insuredName || '').trim();
+    if (!n || n === (form.name || '').trim() || seenChildCandidateNames.has(n) || children.some(c => (c.name || '').trim() === n)) return;
+    seenChildCandidateNames.add(n);
+    childNameCandidates.push({
+      name: n,
+      birthdate: ct.insuredBirthdate || ''
+    });
+  });
+  const addChildWithName = (name, birthdate) => s('suspects')([...(form.suspects || []), {
     id: uid(),
     name,
-    age: '',
+    age: birthdate ? calcAge(birthdate) : '',
+    ageYear: birthdate ? new Date().getFullYear() : '',
+    birthdate: birthdate || '',
     relation: '子供',
     cohabiting: true,
     disability: 'なし',
@@ -2744,10 +2756,10 @@ function CustomerForm({
     fontSize: 11,
     color: 'var(--text-sub)'
   }
-}, "契約の被保険者名から候補："), childNameCandidates.map(n => /*#__PURE__*/React.createElement("button", {
-  key: n,
+}, "契約の被保険者名から候補："), childNameCandidates.map(cand => /*#__PURE__*/React.createElement("button", {
+  key: cand.name,
   type: "button",
-  onClick: () => addChildWithName(n),
+  onClick: () => addChildWithName(cand.name, cand.birthdate),
   style: {
     fontSize: 11.5,
     padding: '4px 10px',
@@ -2757,7 +2769,7 @@ function CustomerForm({
     color: 'var(--accent)',
     cursor: 'pointer'
   }
-}, "＋ ", n))))), /*#__PURE__*/React.createElement("div", {
+}, "＋ ", cand.name))))), /*#__PURE__*/React.createElement("div", {
     className: "form-row",
     style: {
       marginTop: 14
