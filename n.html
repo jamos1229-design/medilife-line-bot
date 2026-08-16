@@ -549,6 +549,31 @@ function nexusOwnCoverageContracts(list, ownerName) {
     return !insured || insured === name;
   });
 }
+// 契約は「誰が契約者か（＝どのcontracts配列に入っているか）」ではなく「誰が被保険者か」で
+// 保障がかかっている人が決まる。本人・法人・配偶者の契約をまとめて「被保険者ごと」に
+// グルーピングし直すことで、生命保険の管理表でよくある「被保険者別の保障額一覧」を作れるようにする。
+// sources: [{ contracts, defaultName }] の配列（被保険者名が未入力の契約は defaultName の人の契約として扱う）
+function nexusGroupContractsByInsured(sources) {
+  const order = [];
+  const groups = {};
+  sources.forEach(({
+    contracts,
+    defaultName
+  }) => {
+    (contracts || []).forEach(ct => {
+      const name = (ct.insuredName || '').trim() || defaultName;
+      if (!groups[name]) {
+        groups[name] = [];
+        order.push(name);
+      }
+      groups[name].push(ct);
+    });
+  });
+  return order.map(name => ({
+    name,
+    contracts: groups[name]
+  }));
+}
 // 特別勘定の割合（0〜100）。一般勘定・特別勘定を割合で持てる商品（例：外貨建て混合型）に対応。
 // 未入力の場合は旧仕様のaccountType（'特別勘定'なら100、それ以外は0）にフォールバックする。
 // ※ これは「入金時にどちらへ配分するか」の割合であり、特別勘定は運用実績で変動するため、
@@ -13894,6 +13919,18 @@ function NexusPlanningSection({
     label: linkedSpouseCustomer.name,
     ...nexusPremiumTotals(spouseContracts)
   }].filter(Boolean);
+  // 被保険者ごとの保障集計（本人・法人・配偶者の契約をまとめて、実際に保障がかかっている人単位で
+  // 目的別に集計し直す。生命保険の管理表でよくある「被保険者ごとに保障額が一目でわかる」表）。
+  const insuredGroups = nexusGroupContractsByInsured([{
+    contracts,
+    defaultName: customer.name
+  }, linkedCorp && {
+    contracts: corpContracts,
+    defaultName: `${linkedCorp.corporateName}（被保険者未入力）`
+  }, linkedSpouseCustomer && {
+    contracts: spouseContracts,
+    defaultName: linkedSpouseCustomer.name
+  }].filter(Boolean));
   const scopedPortfolio = isCoupleScope ? couplePortfolio : {
     assetClassChart,
     currencyChart,
@@ -14001,6 +14038,7 @@ function NexusPlanningSection({
           <tr><th>年間貯蓄（自動計算）</th><td colspan="3">${computedAnnualSavings.toLocaleString()}円</td></tr>
         </table>
       </div>
+      ${insuredGroups.map(g => buildPurposeRowsForPrint(`被保険者別 保障集計：${g.name}`, g.contracts)).join('')}
       <div class="print-section">
         <h3>既契約一覧（本人）</h3>
         <table><tr><th>No</th><th>目的</th><th>保険種類</th><th>保険会社</th><th>証券番号</th><th>契約日</th><th>保険期間</th><th>払込期間</th><th>保険金額（加入当初）</th><th>現在の解約返戻金</th><th>保険料</th></tr>${rowsHtml(contracts)}</table>
@@ -15270,7 +15308,18 @@ function NexusPlanningSection({
       fontWeight: 700,
       color: computedAnnualSavings >= 0 ? 'var(--success)' : 'var(--danger)'
     }
-  }, computedAnnualSavings.toLocaleString(), "円／年"))), /*#__PURE__*/React.createElement("div", {
+  }, computedAnnualSavings.toLocaleString(), "円／年"))), insuredGroups.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "被保険者別 保障集計"), insuredGroups.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, insuredGroups.map((g, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    className: "card",
+    style: {
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement(NexusPurposeSummaryTable, {
+    title: `被保険者：${g.name}`,
+    contracts: g.contracts
+  })))), /*#__PURE__*/React.createElement("div", {
     className: "section-header"
   }, "既契約一覧", linkedCorp ? '（本人）' : ''), /*#__PURE__*/React.createElement("div", {
     className: "card"
