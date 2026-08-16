@@ -12883,6 +12883,33 @@ function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
   };
 }
 
+// ── 老後プランニング：退職後の生活費・年金見込み・現在の資産から必要な積立額を逆算する ──
+function nexusComputeRetirement(inputs, currentAge, currentAssetsJpy) {
+  const retirementAge = inputs && inputs.retirementAge !== undefined && inputs.retirementAge !== '' ? parseFloat(inputs.retirementAge) : null;
+  const lifeExpectancy = inputs && inputs.lifeExpectancy !== undefined && inputs.lifeExpectancy !== '' ? parseFloat(inputs.lifeExpectancy) : null;
+  const desiredMonthlyExpense = parseFloat(inputs && inputs.desiredMonthlyExpense) || 0;
+  const pensionMonthly = parseFloat(inputs && inputs.pensionMonthly) || 0;
+  const spousePensionMonthly = parseFloat(inputs && inputs.spousePensionMonthly) || 0;
+  const otherMonthlyIncome = parseFloat(inputs && inputs.otherMonthlyIncome) || 0;
+  const yearsInRetirement = retirementAge !== null && lifeExpectancy !== null ? Math.max(0, lifeExpectancy - retirementAge) : null;
+  const monthlyShortfall = desiredMonthlyExpense - pensionMonthly - spousePensionMonthly - otherMonthlyIncome;
+  const totalNeededJpy = yearsInRetirement !== null ? Math.max(0, monthlyShortfall) * 12 * yearsInRetirement : null;
+  const yearsToRetirement = retirementAge !== null && currentAge !== null ? Math.max(0, retirementAge - currentAge) : null;
+  const shortfallAfterAssetsJpy = totalNeededJpy !== null ? Math.max(0, totalNeededJpy - (currentAssetsJpy || 0)) : null;
+  const requiredMonthlySavings = shortfallAfterAssetsJpy !== null && yearsToRetirement ? Math.round(shortfallAfterAssetsJpy / (yearsToRetirement * 12)) : null;
+  return {
+    retirementAge,
+    lifeExpectancy,
+    yearsInRetirement,
+    monthlyShortfall,
+    totalNeededJpy,
+    yearsToRetirement,
+    currentAssetsJpy: currentAssetsJpy || 0,
+    shortfallAfterAssetsJpy,
+    requiredMonthlySavings
+  };
+}
+
 // ── Excel(.xlsx)出力ライブラリ（ExcelJS）の遅延読み込み ──
 // 罫線・見出しの色・列幅など「見た目のある表」として書き出すため、
 // セルスタイルに対応したExcelJSを使う（軽量なSheetJS無償版はセル装飾に非対応のため不採用）。
@@ -13880,6 +13907,14 @@ function NexusPlanningSection({
       }
     });
   };
+  const updateLpRetirement = patch => {
+    updateLp({
+      retirement: {
+        ...(customer.lp && customer.lp.retirement || {}),
+        ...patch
+      }
+    });
+  };
   const addStock = () => updateLpPortfolio({
     stocks: [...(customer.lp && customer.lp.portfolio && customer.lp.portfolio.stocks || []), {
       id: uid(),
@@ -14161,6 +14196,10 @@ function NexusPlanningSection({
     insuranceSavingsSeparateAccountJpy
   } = nexusComputePortfolio(allContractsForCharts, portfolioInputsFor(portfolio));
 
+  // ── 老後プランニング（画面表示は常に本人のみの資産をベースに計算。夫婦合算は印刷/Excel側で別途計算）──
+  const retirementInputs = lp.retirement || {};
+  const retirementCalc = nexusComputeRetirement(retirementInputs, ageSelf, portfolioTotal);
+
   // ── 夫婦合算（資料の対象で選べる）── 配偶者が顧客連携済みの場合のみ計算
   const spouseContracts = linkedSpouseCustomer ? linkedSpouseCustomer.contracts || [] : [];
   const spousePortfolioInputs = linkedSpouseCustomer && linkedSpouseCustomer.lp && linkedSpouseCustomer.lp.portfolio || {};
@@ -14365,6 +14404,20 @@ function NexusPlanningSection({
         <table><tr><th>区分</th><th>金額</th></tr>${currencyRowsHtml}</table>
         ${pInsuranceSavingsUnconvertible > 0 || pCurrencyUnconvertible > 0 ? '<p style="font-size:11px;color:#b98a3d;">※ 外貨建て契約のうち適用レート未入力のものは円換算できず、上記には含まれていません</p>' : ''}
       </div>
+      ${(() => {
+      const rc = nexusComputeRetirement(retirementInputs, ageSelf, pPortfolioTotal);
+      if (rc.yearsInRetirement === null) return '';
+      return `
+      <div class="print-section">
+        <h3>老後プランニング${isCoupleScope ? '｜夫婦合算' : ''}</h3>
+        <table>
+          <tr><th>老後期間</th><td>${rc.yearsInRetirement}年（${rc.retirementAge}歳〜${rc.lifeExpectancy}歳）</td><th>月あたり${rc.monthlyShortfall >= 0 ? '不足額' : '黒字額'}</th><td>${Math.abs(Math.round(rc.monthlyShortfall)).toLocaleString()}円／月</td></tr>
+          <tr><th>老後資金 必要総額</th><td>${rc.totalNeededJpy.toLocaleString()}円</td><th>現在確保できている資産</th><td>${rc.currentAssetsJpy.toLocaleString()}円</td></tr>
+          <tr><th>不足額（資産控除後）</th><td>${rc.shortfallAfterAssetsJpy.toLocaleString()}円</td><th>退職までに必要な毎月積立額</th><td>${rc.yearsToRetirement !== null ? rc.yearsToRetirement + '年' : ''}${rc.requiredMonthlySavings !== null ? '　→　' + rc.requiredMonthlySavings.toLocaleString() + '円／月' : ''}</td></tr>
+        </table>
+        <p style="font-size:11px;color:#666;">※「現在確保できている資産」はポートフォリオ合計をそのまま使用した概算です（不動産等の流動性は考慮していません）</p>
+      </div>`;
+    })()}
       <div class="print-section">
         <h3>家族構成</h3>
         <table><tr><th>お名前</th><th>続柄</th><th>年齢</th><th>既契約</th><th>メモ</th></tr>${famRows}</table>
@@ -14773,6 +14826,17 @@ function NexusPlanningSection({
     row = nexusXlsxHeaderRow(ws, row, ['区分', '金額']);
     row = nexusXlsxDataRows(ws, row, scopedPortfolio.currencyChart.length ? scopedPortfolio.currencyChart.map(i => [i.label, i.value]) : [['データなし', '']], [2]);
     row += 2;
+
+    // 老後プランニング
+    {
+      const rc = nexusComputeRetirement(retirementInputs, ageSelf, scopedPortfolio.portfolioTotal);
+      if (rc.yearsInRetirement !== null) {
+        row = nexusXlsxSubTitle(ws, row, `老後プランニング${scopeNote}`, 2);
+        row = nexusXlsxHeaderRow(ws, row, ['項目', '内容']);
+        row = nexusXlsxDataRows(ws, row, [['老後期間', `${rc.yearsInRetirement}年（${rc.retirementAge}歳〜${rc.lifeExpectancy}歳）`], [`月あたり${rc.monthlyShortfall >= 0 ? '不足額' : '黒字額'}`, Math.abs(Math.round(rc.monthlyShortfall))], ['老後資金 必要総額', rc.totalNeededJpy], ['現在確保できている資産', rc.currentAssetsJpy], ['不足額（資産控除後）', rc.shortfallAfterAssetsJpy], ['退職までの年数', rc.yearsToRetirement !== null ? rc.yearsToRetirement + '年' : ''], ['退職までに必要な毎月積立額', rc.requiredMonthlySavings !== null ? rc.requiredMonthlySavings : '']], [2]);
+        row += 2;
+      }
+    }
 
     // 家族構成
     row = nexusXlsxSubTitle(ws, row, '家族構成', 5);
@@ -16225,6 +16289,117 @@ function NexusPlanningSection({
     items: currencyChart,
     unit: "円"
   })), /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "老後プランニング"), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "form-row"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "退職予定年齢"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    className: "form-input",
+    value: retirementInputs.retirementAge || '',
+    onChange: e => updateLpRetirement({
+      retirementAge: e.target.value
+    }),
+    placeholder: "例：65"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "想定寿命年齢"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    className: "form-input",
+    value: retirementInputs.lifeExpectancy || '',
+    onChange: e => updateLpRetirement({
+      lifeExpectancy: e.target.value
+    }),
+    placeholder: "例：90"
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "老後の生活費目安（月額）"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
+    value: retirementInputs.desiredMonthlyExpense || '',
+    onChange: e => updateLpRetirement({
+      desiredMonthlyExpense: e.target.value
+    }),
+    placeholder: totalExpense > 0 ? `参考：現在の支出は月額${Math.round(totalExpense / 12).toLocaleString()}円` : "月額の目安"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-row"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "公的年金見込み額（月額）"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
+    value: retirementInputs.pensionMonthly || '',
+    onChange: e => updateLpRetirement({
+      pensionMonthly: e.target.value
+    }),
+    placeholder: "ねんきん定期便等"
+  })), linkedSpouseCustomer && /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "配偶者の年金見込み額（月額）"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
+    value: retirementInputs.spousePensionMonthly || '',
+    onChange: e => updateLpRetirement({
+      spousePensionMonthly: e.target.value
+    }),
+    placeholder: "ねんきん定期便等"
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "その他の老後収入（月額・家賃収入等）"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
+    value: retirementInputs.otherMonthlyIncome || '',
+    onChange: e => updateLpRetirement({
+      otherMonthlyIncome: e.target.value
+    }),
+    placeholder: "任意"
+  })), retirementCalc.yearsInRetirement !== null ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 14,
+      paddingTop: 12,
+      borderTop: '1px dashed var(--border)',
+      fontSize: 12.5,
+      lineHeight: 1.9
+    }
+  }, "老後期間：", /*#__PURE__*/React.createElement("b", null, retirementCalc.yearsInRetirement, "年"), "（", retirementCalc.retirementAge, "歳〜", retirementCalc.lifeExpectancy, "歳）", /*#__PURE__*/React.createElement("br", null), "月あたり", retirementCalc.monthlyShortfall >= 0 ? "不足額" : "黒字額", "：", /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: retirementCalc.monthlyShortfall >= 0 ? 'var(--danger)' : 'var(--success)'
+    }
+  }, Math.abs(Math.round(retirementCalc.monthlyShortfall)).toLocaleString(), "円／月"), /*#__PURE__*/React.createElement("br", null), "老後資金 必要総額：", /*#__PURE__*/React.createElement("b", null, retirementCalc.totalNeededJpy.toLocaleString(), "円"), /*#__PURE__*/React.createElement("br", null), "現在確保できている資産（ポートフォリオ合計）：", /*#__PURE__*/React.createElement("b", null, retirementCalc.currentAssetsJpy.toLocaleString(), "円"), /*#__PURE__*/React.createElement("br", null), "不足額（資産控除後）：", /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: 'var(--danger)'
+    }
+  }, retirementCalc.shortfallAfterAssetsJpy.toLocaleString(), "円"), retirementCalc.yearsToRetirement !== null && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("br", null), "退職まで：", retirementCalc.yearsToRetirement, "年", retirementCalc.requiredMonthlySavings !== null && /*#__PURE__*/React.createElement(React.Fragment, null, "　→　毎月の積立目安：", /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: 'var(--accent)'
+    }
+  }, retirementCalc.requiredMonthlySavings.toLocaleString(), "円／月")))) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--text-sub)',
+      marginTop: 10
+    }
+  }, "退職予定年齢と想定寿命年齢を入力すると自動計算されます"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--text-sub)',
+      marginTop: 8
+    }
+  }, "※「現在確保できている資産」は上のポートフォリオ合計をそのまま使用した概算です（不動産等の流動性は考慮していません）")), /*#__PURE__*/React.createElement("div", {
     className: "section-header"
   }, "分析"), /*#__PURE__*/React.createElement("div", {
     className: "card"
