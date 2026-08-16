@@ -12697,13 +12697,20 @@ function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
     currencyUnconvertible = 0;
   const unconvertibleSavingsContracts = [];
   savingsContracts.forEach(ct => {
-    // 現在の解約返戻金が入力されていればそちらを優先（加入当初の保険金額とはズレるため）。
-    // 資産クラス別・通貨別の両方の集計で同じ金額を使い、数字がズレないようにする。
-    const field = ct.currentSurrenderValue !== undefined && ct.currentSurrenderValue !== '' ? 'currentSurrenderValue' : 'coverageAmount';
+    // 資産クラス別・通貨別の集計には「現在の解約返戻金」を使う（加入当初の保険金額を代わりに
+    // 使ってはいけない）。終身保険の保険金額は死亡保険金額であって現在の解約返戻金ではないし、
+    // 年金保険の保険金額は年金年額（据置後に毎年受け取る金額）であって、現在ある資産の額とは
+    // 全く別の意味の数字のため。未入力の場合は資産額が不明として集計から除外し、下に警告を出す。
+    if (ct.currentSurrenderValue === undefined || ct.currentSurrenderValue === '') {
+      insuranceSavingsUnconvertible++;
+      currencyUnconvertible++;
+      unconvertibleSavingsContracts.push(ct);
+      return;
+    }
     const {
       amount,
       convertible
-    } = nexusContractJpyAmount(ct, field);
+    } = nexusContractJpyAmount(ct, 'currentSurrenderValue');
     if (!convertible) {
       insuranceSavingsUnconvertible++;
       currencyUnconvertible++;
@@ -15978,7 +15985,7 @@ function NexusPlanningSection({
       color: 'var(--text-sub)',
       marginTop: 8
     }
-  }, "※ 保険（貯蓄性）は、契約の「目的」で「年金・貯蓄型」を選んだ既契約から、円建てはそのまま・外貨建ては下の適用レートで円換算して自動集計されます"), /*#__PURE__*/React.createElement("div", {
+  }, "※ 保険（貯蓄性）は、契約の「目的」で「年金・貯蓄型」を選んだ既契約の「現在の解約返戻金」から、円建てはそのまま・外貨建ては下の適用レートで円換算して自動集計されます（保険金額は死亡保険金額や年金年額など別の意味の数字のため使用しません）"), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 10.5,
       color: 'var(--text-sub)',
@@ -15993,14 +16000,14 @@ function NexusPlanningSection({
       padding: '8px 10px',
       marginTop: 8
     }
-  }, "⚠️ 以下の貯蓄性契約は「適用レート」が未入力のため、ポートフォリオに反映されていません：", /*#__PURE__*/React.createElement("ul", {
+  }, "⚠️ 以下の貯蓄性契約は「現在の解約返戻金」が未入力、または外貨建てで「適用レート」が未入力のため、ポートフォリオに反映されていません（保険金額は死亡保険金額や年金年額など解約返戻金とは別の意味の数字のため、代わりに使うことはしていません）：", /*#__PURE__*/React.createElement("ul", {
     style: {
       margin: '4px 0 0',
       paddingLeft: 18
     }
   }, unconvertibleSavingsContracts.map((ct, i) => /*#__PURE__*/React.createElement("li", {
     key: i
-  }, ct.company || '保険会社未記入', "／", ct.type || '種類未記入', "（", ct.currency || '外貨', "建て）"))), "契約編集の「適用レート（1$=）」を入力すると反映されます。")), portfolioTotal > 0 && /*#__PURE__*/React.createElement("div", {
+  }, ct.company || '保険会社未記入', "／", ct.type || '種類未記入', "（", ct.currency || '外貨', "建て）", (ct.currentSurrenderValue === undefined || ct.currentSurrenderValue === '') && "：現在の解約返戻金が未入力"))), "契約編集の「現在の解約返戻金」（外貨建ての場合はあわせて「適用レート（1$=）」）を入力すると反映されます。")), portfolioTotal > 0 && /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     style: {
