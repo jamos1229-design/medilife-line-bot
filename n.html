@@ -528,8 +528,6 @@ const CONTRACT_STATUSES = ['有効', '解約', '失効', '減額'];
 const CONTRACT_PURPOSES = ['死亡保障', '死亡時収入保障', '介護・就労不能保障', '医療保障', '特定疾病（ガン）', '年金・貯蓄型', '事業保障・退職金', '相続対策', 'その他'];
 // 集計上「死亡保険」として合算する目的
 const CONTRACT_PURPOSE_DEATH_GROUP = ['死亡保障', '死亡時収入保障', '事業保障・退職金'];
-// 集計上「医療保険」として合算する目的
-const CONTRACT_PURPOSE_MEDICAL_GROUP = ['医療保障', '介護・就労不能保障', '特定疾病（ガン）'];
 // 契約の目的は複数選択可（例：変額保険が積立と死亡保障を兼ねる場合など）。
 // 旧データ（単一文字列のcontract.purpose）との互換のため、配列に正規化して返す。
 function nexusContractPurposes(ct) {
@@ -13198,16 +13196,18 @@ function nexusPurposeSummary(contracts) {
   });
   let unclassified = 0;
   let deathTotal = 0;
-  let medicalTotal = 0;
   let dailyTotal = 0;
   const unconvertibleContracts = [];
   // 目的は複数選択可（例：変額保険が積立と死亡保障を兼ねる場合、終身保険が死亡保障と貯蓄性を兼ねる場合など）。
   // どの目的が「実際の保障額」を表すかは商品次第でアプリ側からは判断できないため、
   // タグ付けされた目的をそのまま信用して計上する（自動で除外しない）。
-  // 死亡保険金額合計・医療保険金額合計は「1件（主契約または特約1件）につき1回」だけ計上する。
+  // 死亡保険金額合計は「1件（主契約または特約1件）につき1回」だけ計上する。
   // 例えば法人保険で「死亡保障」と「事業保障・退職金」を同時にタグ付けした場合、byPurposeの合計を
   // そのまま足すと同じ保険金額が2回計上されてしまうため、グループに該当するかを判定してから
   // 1回だけ加算する。
+  // 医療保障・介護/就労不能保障・特定疾病（ガン）は、保障の性質（入院給付・就労不能時の収入保障・
+  // 診断一時金）が全く異なるため、まとめて「医療保険金額合計」にはせず、目的ごとに別々の
+  // 合計として扱う（byPurposeの値がそのままその目的単独の合計になる）。
   // 医療特約等の「日額（入院日額など）」は死亡保障の「一時金」と単位が全く異なるため、同じ合計に
   // 混ぜて足さず、別枠の入院日額合計として集計する。
   const addItem = (purposes, amt, isDaily) => {
@@ -13226,7 +13226,6 @@ function nexusPurposeSummary(contracts) {
       unclassified += amt;
     }
     if (purposes.some(p => CONTRACT_PURPOSE_DEATH_GROUP.includes(p))) deathTotal += amt;
-    if (purposes.some(p => CONTRACT_PURPOSE_MEDICAL_GROUP.includes(p))) medicalTotal += amt;
   };
   contracts.forEach(ct => {
     const raw = parseFloat(ct.coverageAmount) || 0;
@@ -13252,7 +13251,9 @@ function nexusPurposeSummary(contracts) {
   return {
     byPurpose,
     deathTotal,
-    medicalTotal,
+    medicalTotal: byPurpose['医療保障'] || 0,
+    criticalIllnessTotal: byPurpose['特定疾病（ガン）'] || 0,
+    disabilityTotal: byPurpose['介護・就労不能保障'] || 0,
     unclassified,
     unconvertibleContracts,
     dailyByPurpose,
@@ -13267,6 +13268,8 @@ function NexusPurposeSummaryTable({
     byPurpose,
     deathTotal,
     medicalTotal,
+    criticalIllnessTotal,
+    disabilityTotal,
     unclassified,
     unconvertibleContracts,
     dailyByPurpose,
@@ -13357,7 +13360,31 @@ function NexusPurposeSummaryTable({
       fontWeight: 700,
       color: '#D97706'
     }
-  }, "医療保険金額合計："), medicalTotal.toLocaleString(), "円"), dailyTotal > 0 && /*#__PURE__*/React.createElement("div", {
+  }, "医療保険金額合計："), medicalTotal.toLocaleString(), "円"), criticalIllnessTotal > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: '#FCE7F3',
+      borderRadius: 8,
+      padding: '6px 12px',
+      fontSize: 12
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 700,
+      color: '#DB2777'
+    }
+  }, "特定疾病（ガン等）保険金額合計："), criticalIllnessTotal.toLocaleString(), "円"), disabilityTotal > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: '#E0F2FE',
+      borderRadius: 8,
+      padding: '6px 12px',
+      fontSize: 12
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 700,
+      color: '#0891B2'
+    }
+  }, "介護・就労不能保障合計："), disabilityTotal.toLocaleString(), "円"), dailyTotal > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       background: '#EDE9FE',
       borderRadius: 8,
@@ -14030,6 +14057,8 @@ function NexusPlanningSection({
       byPurpose,
       deathTotal,
       medicalTotal,
+      criticalIllnessTotal,
+      disabilityTotal,
       dailyByPurpose,
       dailyTotal
     } = nexusPurposeSummary(ownerName ? nexusOwnCoverageContracts(list, ownerName) : list);
@@ -14038,7 +14067,7 @@ function NexusPlanningSection({
     return `<div class="print-section">
       <h3>${escapeHtmlForPrint(title)}</h3>
       <table><tr><th>目的</th><th>保険金額合計</th></tr>${rows || '<tr><td colspan="2">データなし</td></tr>'}</table>
-      <p style="font-size:12px;"><b>死亡保険金額合計：${deathTotal.toLocaleString()}円</b>　／　<b>医療保険金額合計：${medicalTotal.toLocaleString()}円</b>${dailyTotal > 0 ? `　／　<b>入院日額合計：${dailyTotal.toLocaleString()}円／日</b>` : ''}</p>
+      <p style="font-size:12px;"><b>死亡保険金額合計：${deathTotal.toLocaleString()}円</b>　／　<b>医療保険金額合計：${medicalTotal.toLocaleString()}円</b>${criticalIllnessTotal > 0 ? `　／　<b>特定疾病（ガン等）保険金額合計：${criticalIllnessTotal.toLocaleString()}円</b>` : ''}${disabilityTotal > 0 ? `　／　<b>介護・就労不能保障合計：${disabilityTotal.toLocaleString()}円</b>` : ''}${dailyTotal > 0 ? `　／　<b>入院日額合計：${dailyTotal.toLocaleString()}円／日</b>` : ''}</p>
       ${dailyRows.length > 0 ? `<p style="font-size:11px;color:#666;">内訳（日額）：${dailyRows.map(p => `${p} ${dailyByPurpose[p].toLocaleString()}円／日`).join('、')}　※日額は死亡・医療保険金額合計とは単位が異なるため合算していません</p>` : ''}
       </div>`;
   };
@@ -14528,13 +14557,18 @@ function NexusPlanningSection({
         byPurpose,
         deathTotal,
         medicalTotal,
+        criticalIllnessTotal,
+        disabilityTotal,
         dailyByPurpose,
         dailyTotal
       } = nexusPurposeSummary(list);
       const purposeRows = CONTRACT_PURPOSES.filter(p => byPurpose[p] > 0).map(p => [p, byPurpose[p]]);
       row = nexusXlsxHeaderRow(ws, row, ['目的', '保険金額合計']);
       row = nexusXlsxDataRows(ws, row, purposeRows.length ? purposeRows : [['データなし', '']], [2]);
-      row = nexusXlsxDataRows(ws, row, [['死亡保険金額合計', deathTotal], ['医療保険金額合計', medicalTotal]], [2]);
+      const totalsRows = [['死亡保険金額合計', deathTotal], ['医療保険金額合計', medicalTotal]];
+      if (criticalIllnessTotal > 0) totalsRows.push(['特定疾病（ガン等）保険金額合計', criticalIllnessTotal]);
+      if (disabilityTotal > 0) totalsRows.push(['介護・就労不能保障合計', disabilityTotal]);
+      row = nexusXlsxDataRows(ws, row, totalsRows, [2]);
       if (dailyTotal > 0) {
         const dailyRows = CONTRACT_PURPOSES.filter(p => dailyByPurpose[p] > 0).map(p => [p, dailyByPurpose[p]]);
         row = nexusXlsxHeaderRow(ws, row, ['目的（日額）', '日額合計']);
