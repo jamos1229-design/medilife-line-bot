@@ -1960,7 +1960,10 @@ const DISABILITY_NOTES = {
 function buildHouseholdInput(customer, customers) {
   const age = customer.birthdate ? calcAge(customer.birthdate) : calcStoredAge(customer.age, customer.ageYear);
   // サスペクトが既存の顧客と連携（linkedCustomerId）している場合、年齢等はその顧客の登録情報を優先する
-  const householdMembers = (customer.suspects || []).filter(sp => sp.cohabiting).map(sp => {
+  // 名前も生年月日も年齢も未入力の「空の子供枠」（過去バージョンの名残等）は、実在の子として
+  // 世帯判定に混ぜると「子育て世帯」等に誤判定されてしまうため、判定対象から除外する。
+  const isEmptyChildSlot = sp => sp.relation === '子供' && !(sp.name || '').trim() && !sp.birthdate && !sp.age && !sp.ageYear;
+  const householdMembers = (customer.suspects || []).filter(sp => sp.cohabiting && !isEmptyChildSlot(sp)).map(sp => {
     const linked = sp.linkedCustomerId && customers ? customers.find(x => x.id === sp.linkedCustomerId) : null;
     if (linked) {
       return {
@@ -14270,8 +14273,11 @@ function NexusPlanningSection({
   const linkedSpouseCustomer = forwardLinkedSpouseCustomer || reverseSpouseCustomer;
   const ageSpouse = linkedSpouseCustomer ? linkedSpouseCustomer.birthdate ? calcAge(linkedSpouseCustomer.birthdate) : calcStoredAge(linkedSpouseCustomer.age, linkedSpouseCustomer.ageYear) : spouseSp ? spouseSp.birthdate ? calcAge(spouseSp.birthdate) : calcStoredAge(spouseSp.age, spouseSp.ageYear) : null;
   // お子様も、配偶者側の顧客レコードにだけ登録されている場合があるため合算する（名前が同じ子は重複除外）。
-  const ownKids = (customer.suspects || []).filter(sp => sp.relation === '子供');
-  const spouseKids = linkedSpouseCustomer ? (linkedSpouseCustomer.suspects || []).filter(sp => sp.relation === '子供') : [];
+  // 名前も生年月日も年齢も未入力の「空の子供枠」（過去バージョンの名残等）は、実在の子として
+  // 数えると教育資金プランニング等で誤って表示されてしまうため、集計対象から除外する。
+  const hasKidIdentity = sp => (sp.name || '').trim() || sp.birthdate || sp.age || sp.ageYear;
+  const ownKids = (customer.suspects || []).filter(sp => sp.relation === '子供' && hasKidIdentity(sp));
+  const spouseKids = linkedSpouseCustomer ? (linkedSpouseCustomer.suspects || []).filter(sp => sp.relation === '子供' && hasKidIdentity(sp)) : [];
   const kids = [...ownKids, ...spouseKids.filter(sk => !ownKids.some(k => (k.name || '').trim() && (k.name || '').trim() === (sk.name || '').trim()))];
   const kidsSummary = kids.length ? kids.map(k => {
     const a = k.birthdate ? calcAge(k.birthdate) : calcStoredAge(k.age, k.ageYear);
