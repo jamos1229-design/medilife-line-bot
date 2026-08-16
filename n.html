@@ -16283,7 +16283,7 @@ function nexusPieChartSvg(items, size) {
     const large = endAngle - startAngle > 180 ? 1 : 0;
     const [x1, y1] = toXY(startAngle);
     const [x2, y2] = toXY(endAngle);
-    return `<path d="M ${cx} ${cy} L ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${x2.toFixed(2)} ${y2.toFixed(2)} Z" fill="${item.color}" />`;
+    return `<path d="M ${cx} ${cy} L ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${x2.toFixed(2)} ${y2.toFixed(2)} Z" fill="${item.color}" stroke="${item.color}" stroke-width="1" stroke-linejoin="round" />`;
   }).join('');
   return `<svg width="${s}" height="${s}" viewBox="0 0 ${s} ${s}" xmlns="http://www.w3.org/2000/svg">${slices}</svg>`;
 }
