@@ -530,7 +530,9 @@ function NexusSimpleAssetList({
   list,
   ops,
   namePlaceholder,
-  valuePlaceholder
+  valuePlaceholder,
+  showQuantity,
+  quantityPlaceholder
 }) {
   const items = list || [];
   return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
@@ -553,7 +555,8 @@ function NexusSimpleAssetList({
       display: 'flex',
       gap: 6,
       alignItems: 'center',
-      marginBottom: 8
+      marginBottom: 8,
+      flexWrap: 'wrap'
     }
   }, /*#__PURE__*/React.createElement("input", {
     className: "form-input",
@@ -564,6 +567,17 @@ function NexusSimpleAssetList({
     value: item.name || '',
     onChange: e => ops.update(item.id, {
       name: e.target.value
+    })
+  }), showQuantity && /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    className: "form-input",
+    style: {
+      width: 90
+    },
+    placeholder: quantityPlaceholder || '保有数',
+    value: item.quantity || '',
+    onChange: e => ops.update(item.id, {
+      quantity: e.target.value
     })
   }), /*#__PURE__*/React.createElement(AmountInput, {
     prefix: "¥",
@@ -12817,6 +12831,7 @@ function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
   const depositsJpy = parseFloat(portfolioInputs.depositsJpy) || 0;
   const bondsJpy = parseFloat(portfolioInputs.bondsJpy) || 0;
   const fxJpy = parseFloat(portfolioInputs.fxJpy) || 0;
+  const cryptoJpy = parseFloat(portfolioInputs.cryptoJpy) || 0;
   const realEstateJpy = parseFloat(portfolioInputs.realEstateJpy) || 0;
   const retirementJpy = parseFloat(portfolioInputs.retirementJpy) || 0;
   const inheritanceJpy = parseFloat(portfolioInputs.inheritanceJpy) || 0;
@@ -12832,7 +12847,7 @@ function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
   const miscOtherJpy = golfMembershipJpy + carJpy + householdItemsJpy + artJpy + graveJpy + othersJpy;
   // 預貯金・債券・FX・不動産・退職金・相続・自社株・その他は、円建てはそのままの金額として扱う
   // （不動産等は評価額を円で入力する運用のため、外貨建てという概念を想定していない）。
-  const manualJpyAssetsTotal = depositsJpy + bondsJpy + fxJpy + realEstateJpy + retirementJpy + inheritanceJpy + corpOtherJpy + miscOtherJpy;
+  const manualJpyAssetsTotal = depositsJpy + bondsJpy + fxJpy + cryptoJpy + realEstateJpy + retirementJpy + inheritanceJpy + corpOtherJpy + miscOtherJpy;
   const assetClassChart = [{
     label: '現金・預貯金',
     value: Math.round(depositsJpy),
@@ -12849,6 +12864,10 @@ function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
     label: 'FX',
     value: Math.round(fxJpy),
     color: '#F59E0B'
+  }, {
+    label: '仮想通貨',
+    value: Math.round(cryptoJpy),
+    color: '#F97316'
   }, {
     label: '保険（貯蓄性・一般勘定）',
     value: Math.round(insuranceSavingsJpy),
@@ -14151,6 +14170,7 @@ function NexusPlanningSection({
   const depositOps = makePortfolioListOps('deposits');
   const bondOps = makePortfolioListOps('bonds');
   const fxOps = makePortfolioListOps('fx');
+  const cryptoOps = makePortfolioListOps('crypto');
   const realEstateOps = makePortfolioListOps('realEstate');
   const othersOps = makePortfolioListOps('others');
   const addLoan = () => updateLp({
@@ -14371,6 +14391,7 @@ function NexusPlanningSection({
     depositsJpy: nexusPortfolioListTotal(p.deposits),
     bondsJpy: nexusPortfolioListTotal(p.bonds),
     fxJpy: nexusPortfolioListTotal(p.fx),
+    cryptoJpy: nexusPortfolioListTotal(p.crypto),
     realEstateJpy: nexusPortfolioListTotal(p.realEstate),
     retirementJpy: p.retirementJpy,
     inheritanceJpy: p.inheritanceJpy,
@@ -16438,6 +16459,14 @@ function NexusPlanningSection({
     ops: fxOps,
     namePlaceholder: "例：〇〇証券 米ドル",
     valuePlaceholder: "例：500000"
+  }), /*#__PURE__*/React.createElement(NexusSimpleAssetList, {
+    title: "仮想通貨",
+    list: portfolio.crypto,
+    ops: cryptoOps,
+    namePlaceholder: "例：ビットコイン",
+    valuePlaceholder: "例：500000",
+    showQuantity: true,
+    quantityPlaceholder: "保有数"
   }), /*#__PURE__*/React.createElement(NexusSimpleAssetList, {
     title: "不動産",
     list: portfolio.realEstate,
