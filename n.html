@@ -16334,7 +16334,7 @@ function nexusPieChartLegendHtml(items, total) {
 function nexusPieChartBlockHtml(items) {
   const total = items.reduce((sum, i) => sum + i.value, 0);
   if (!items.length || total <= 0) return '';
-  return `<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:8px 0;">${nexusPieChartSvg(items, 140)}${nexusPieChartLegendHtml(items, total)}</div>`;
+  return `<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:8px 0;">${nexusPieChartSvg(items, 100)}${nexusPieChartLegendHtml(items, total)}</div>`;
 }
 
 // ── 人脈ネクサス タブ本体（顧客一覧・提案候補・つながり・サービス・理念）──
