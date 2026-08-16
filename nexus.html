@@ -1088,7 +1088,21 @@ function ContractBlock({
       padding: '8px 12px'
     },
     onClick: addRider
-  }, "＋ 特約を追加")), /*#__PURE__*/React.createElement("div", {
+  }, "＋ 特約を追加"), riders.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label",
+    style: {
+      fontSize: 11
+    }
+  }, "特約合算保険料（証券に特約ごとの内訳が無く、まとめてしか分からない場合はこちら）"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
+    value: contract.ridersPremiumTotal || '',
+    onChange: s('ridersPremiumTotal'),
+    placeholder: "例：4439（入力すると上の特約ごとの保険料の代わりに使用されます）"
+  }))), /*#__PURE__*/React.createElement("div", {
     className: "form-group",
     style: {
       marginBottom: 8
@@ -12471,15 +12485,26 @@ function nexusPremiumTotals(list) {
         monthly += cyc === '年払' ? amount / 12 : amount;
       }
     }
-    (r.riders || []).forEach(rd => {
-      const ramt = parseFloat(rd.premium) || 0;
-      if (!ramt) return;
+    // 証券に特約ごとの保険料内訳が無く、まとめてしか分からない場合は「特約合算保険料」を優先する
+    // （特約ごとの個別保険料と二重計上しないよう、入力されていればそちらだけを使う）。
+    const ridersTotal = parseFloat(r.ridersPremiumTotal) || 0;
+    if (ridersTotal > 0) {
       if (LUMP_LIKE_PAYMENT_CYCLES.includes(cyc)) {
-        lump += ramt;
+        lump += ridersTotal;
       } else {
-        monthly += cyc === '年払' ? ramt / 12 : ramt;
+        monthly += cyc === '年払' ? ridersTotal / 12 : ridersTotal;
       }
-    });
+    } else {
+      (r.riders || []).forEach(rd => {
+        const ramt = parseFloat(rd.premium) || 0;
+        if (!ramt) return;
+        if (LUMP_LIKE_PAYMENT_CYCLES.includes(cyc)) {
+          lump += ramt;
+        } else {
+          monthly += cyc === '年払' ? ramt / 12 : ramt;
+        }
+      });
+    }
   });
   return {
     monthly: Math.round(monthly),
