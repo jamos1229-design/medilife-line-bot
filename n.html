@@ -551,10 +551,30 @@ function nexusOwnCoverageContracts(list, ownerName) {
 }
 // 特別勘定の割合（0〜100）。一般勘定・特別勘定を割合で持てる商品（例：外貨建て混合型）に対応。
 // 未入力の場合は旧仕様のaccountType（'特別勘定'なら100、それ以外は0）にフォールバックする。
+// ※ これは「入金時にどちらへ配分するか」の割合であり、特別勘定は運用実績で変動するため、
+// 現在の解約返戻金にこの割合をそのまま掛けても現在の内訳とは一致しない（あくまで概算）。
 function nexusSeparateAccountRatio(ct) {
   const raw = parseFloat(ct.separateAccountRatio);
   if (!isNaN(raw)) return Math.max(0, Math.min(100, raw));
   return ct.accountType === '特別勘定' ? 100 : 0;
+}
+// 一般勘定・特別勘定の「現在の実際の内訳（円）」が分かる場合はそちらを優先する。
+// 特別勘定は運用実績で変動するため、入金時割合からの概算より実際の内訳の方が正確。
+// 内訳が未入力の場合のみ、入金時割合で現在の解約返戻金を按分した概算値を使う。
+function nexusAccountSplit(ct, totalAmount) {
+  const gen = parseFloat(ct.generalAccountValueJpy);
+  const sep = parseFloat(ct.separateAccountValueJpy);
+  if (!isNaN(gen) || !isNaN(sep)) {
+    return {
+      general: isNaN(gen) ? 0 : gen,
+      separate: isNaN(sep) ? 0 : sep
+    };
+  }
+  const ratio = nexusSeparateAccountRatio(ct) / 100;
+  return {
+    general: totalAmount * (1 - ratio),
+    separate: totalAmount * ratio
+  };
 }
 const csStyle = st => ({
   有効: {
@@ -1087,12 +1107,43 @@ function ContractBlock({
     }
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "運用区分（貯蓄性契約の資産クラス集計に使用）"), /*#__PURE__*/React.createElement("input", {
+  }, "運用区分（貯蓄性契約の資産クラス集計に使用）"), /*#__PURE__*/React.createElement("div", {
+    className: "form-row",
+    style: {
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label",
+    style: {
+      fontSize: 11
+    }
+  }, "現在の一般勘定残高（円・分かる場合）"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
+    value: contract.generalAccountValueJpy || '',
+    onChange: s('generalAccountValueJpy'),
+    placeholder: "証券会社の運用報告書等の金額"
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label",
+    style: {
+      fontSize: 11
+    }
+  }, "現在の特別勘定残高（円・分かる場合）"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
+    value: contract.separateAccountValueJpy || '',
+    onChange: s('separateAccountValueJpy'),
+    placeholder: "運用報告書等の金額"
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--text-sub)',
+      marginBottom: 6
+    }
+  }, "特別勘定は運用実績で変動するため、上の2つの実際の残高が分かる場合はそちらを優先して集計します（分からなければ空欄でOK）。"), /*#__PURE__*/React.createElement("input", {
     type: "number",
     min: 0,
     max: 100,
     className: "form-input",
-    placeholder: "特別勘定の割合（％）例：一般勘定70%・特別勘定30%の混合型なら30",
+    placeholder: "入金時の特別勘定の割合（％）例：一般勘定70%・特別勘定30%の混合型なら30",
     value: contract.separateAccountRatio || '',
     onChange: s('separateAccountRatio')
   }), /*#__PURE__*/React.createElement("div", {
@@ -1101,7 +1152,7 @@ function ContractBlock({
       color: 'var(--text-sub)',
       marginTop: 4
     }
-  }, "一般勘定＝保険会社が運用、日本国債中心で安定。特別勘定＝契約者が運用リスクを負い、実質的に投資信託と同じ値動き。全て一般勘定なら0（未入力可）、全て特別勘定なら100、混合型（アクサ アップサイドプラス等）は割合を入力。ポートフォリオ集計では、株式・投資信託とは別に「保険（貯蓄性・一般勘定）」「保険（特別勘定）」として分けて集計されます。")), /*#__PURE__*/React.createElement("div", {
+  }, "一般勘定＝保険会社が運用、日本国債中心で安定。特別勘定＝契約者が運用リスクを負い、実質的に投資信託と同じ値動き。上の実際の残高が未入力の場合のみ、この割合で現在の解約返戻金を按分した概算値を使います（あくまで入金時の配分割合であり、特別勘定は運用実績で変動するため現在の内訳と一致するとは限りません）。ポートフォリオ集計では、株式・投資信託とは別に「保険（貯蓄性・一般勘定）」「保険（特別勘定）」として分けて集計されます。")), /*#__PURE__*/React.createElement("div", {
     className: "form-group",
     style: {
       marginBottom: 8
@@ -12478,13 +12529,17 @@ function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
       unconvertibleSavingsContracts.push(ct);
       return;
     }
-    // 一般勘定（保険会社が運用、日本国債中心で安定）と特別勘定（契約者が運用リスクを負う）の
-    // 割合で按分する。保険はどちらであっても株式・投資信託そのものではないため、資産クラス別の
-    // 集計では「投資信託・株式等」には含めず、「保険（貯蓄性・一般勘定）」「保険（特別勘定）」に
-    // それぞれ分けて計上する（アクサ アップサイドプラス等、一般勘定・特別勘定を割合で持つ商品にも対応）。
-    const separateRatio = nexusSeparateAccountRatio(ct) / 100;
-    insuranceSavingsSeparateAccountJpy += amount * separateRatio;
-    insuranceSavingsJpy += amount * (1 - separateRatio);
+    // 一般勘定（保険会社が運用、日本国債中心で安定）と特別勘定（契約者が運用リスクを負う）に分けて
+    // 計上する。保険はどちらであっても株式・投資信託そのものではないため、資産クラス別の集計では
+    // 「投資信託・株式等」には含めない（アクサ アップサイドプラス等、一般勘定・特別勘定を割合で
+    // 持つ商品にも対応）。特別勘定は運用実績で変動するため、現在の実際の内訳（円）が入力されて
+    // いればそちらを優先し、無ければ入金時の割合で現在の解約返戻金を按分した概算値を使う。
+    const {
+      general: generalAmt,
+      separate: separateAmt
+    } = nexusAccountSplit(ct, amount);
+    insuranceSavingsSeparateAccountJpy += separateAmt;
+    insuranceSavingsJpy += generalAmt;
     // 通貨別（円建て／外貨建て）は、資産クラスの分類（一般勘定／特別勘定）とは別軸の判定であり、
     // 契約の通貨（円建て契約か、ドル建てなど外貨建て契約か）で決まる。円入金・円換算の解約返戻金
     // であっても、保険会社が外貨に変換して運用している商品（外貨建て契約）は為替リスクを負って
@@ -15686,7 +15741,7 @@ function NexusPlanningSection({
       color: 'var(--text-sub)',
       marginTop: 4
     }
-  }, "※ 契約編集で「特別勘定の割合」を入力した分は、株式・投資信託とは別に「保険（特別勘定）」として分けて集計されます", insuranceSavingsSeparateAccountJpy > 0 && `（現在：${insuranceSavingsSeparateAccountJpy.toLocaleString()}円分）`), unconvertibleSavingsContracts.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, "※ 契約編集の「現在の一般勘定／特別勘定残高」または「特別勘定の割合」を入力した分は、株式・投資信託とは別に「保険（特別勘定）」として分けて集計されます", insuranceSavingsSeparateAccountJpy > 0 && `（現在：${insuranceSavingsSeparateAccountJpy.toLocaleString()}円分）`), unconvertibleSavingsContracts.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11.5,
       color: '#B45309',
