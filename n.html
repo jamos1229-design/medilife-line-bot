@@ -1025,10 +1025,18 @@ function ContractBlock({
       ...data
     } : r)
   });
-  const removeRider = id => onChange({
-    ...contract,
-    riders: riders.filter(r => r.id !== id)
-  });
+  const removeRider = id => {
+    const remaining = riders.filter(r => r.id !== id);
+    onChange({
+      ...contract,
+      riders: remaining,
+      // 特約が0件になったら「特約合算保険料」欄も表示されなくなるため、値を残したままにすると
+      // 保険料集計で古い金額が二重計上されてしまう。特約を全て消したらこの値もクリアする。
+      ...(remaining.length === 0 ? {
+        ridersPremiumTotal: ''
+      } : {})
+    });
+  };
   return /*#__PURE__*/React.createElement("div", {
     className: `contract-block${isInactive ? ' inactive' : ''}`,
     style: {
@@ -13000,7 +13008,9 @@ function nexusPremiumTotals(list) {
     }
     // 証券に特約ごとの保険料内訳が無く、まとめてしか分からない場合は「特約合算保険料」を優先する
     // （特約ごとの個別保険料と二重計上しないよう、入力されていればそちらだけを使う）。
-    const ridersTotal = parseFloat(r.ridersPremiumTotal) || 0;
+    // 特約を全て削除した後も contract.ridersPremiumTotal が古い値のまま残っているケースがあるため、
+    // 現在も特約が1件以上ある契約に限って加算する（無いのに加算すると主契約保険料と二重計上になる）。
+    const ridersTotal = (r.riders || []).length > 0 ? parseFloat(r.ridersPremiumTotal) || 0 : 0;
     if (ridersTotal > 0) {
       if (LUMP_LIKE_PAYMENT_CYCLES.includes(cyc)) {
         lump += ridersTotal;
