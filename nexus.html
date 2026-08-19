@@ -13899,12 +13899,14 @@ function nexusPurposeSummary(contracts, fallbackInsuredAge) {
   // 合計として扱う（byPurposeの値がそのままその目的単独の合計になる）。
   // 医療特約等の「日額（入院日額など）」は死亡保障の「一時金」と単位が全く異なるため、同じ合計に
   // 混ぜて足さず、別枠の入院日額合計として集計する。
-  // 「死亡時収入保障」（収入保障保険）は保険金額が「月額」で登録されるため、そのまま他の死亡保障
-  // （一時金）と合算すると単位が合わない。保険期間終了年齢と被保険者の現在年齢から残り月数を求め、
+  // 収入保障保険は保険金額が「月額」で登録されるため、そのまま他の死亡保障（一時金）と合算すると
+  // 単位が合わない。目的で「死亡時収入保障」がタグ付けされているか、保険種類／特約名に「収入保障」
+  // が含まれる場合は収入保障保険とみなし、保険期間終了年齢と被保険者の現在年齢から残り月数を求め、
   // 月額×残り月数の換算保険金額に置き換えてから合算する（終了年齢・年齢が特定できない場合は
   // 従来通り入力値をそのまま使う）。
   let incomeProtectionConverted = false;
-  const addItem = (purposes, amt, isDaily, overrideAmt, overridePurpose) => {
+  const isIncomeProtectionItem = (item, purposes) => purposes.includes('死亡時収入保障') || /収入保障/.test(item.type || item.name || '');
+  const addItem = (purposes, amt, isDaily) => {
     if (isDaily) {
       purposes.forEach(p => {
         dailyByPurpose[p] += amt;
@@ -13913,13 +13915,10 @@ function nexusPurposeSummary(contracts, fallbackInsuredAge) {
       return;
     }
     if (purposes.length > 0) {
-      let deathAmt = null;
       purposes.forEach(p => {
-        const a = p === overridePurpose && overrideAmt !== null ? overrideAmt : amt;
-        byPurpose[p] += a;
-        if (deathAmt === null && CONTRACT_PURPOSE_DEATH_GROUP.includes(p)) deathAmt = a;
+        byPurpose[p] += amt;
       });
-      if (deathAmt !== null) deathTotal += deathAmt;
+      if (purposes.some(p => CONTRACT_PURPOSE_DEATH_GROUP.includes(p))) deathTotal += amt;
     } else {
       unclassified += amt;
     }
@@ -13928,39 +13927,39 @@ function nexusPurposeSummary(contracts, fallbackInsuredAge) {
     const raw = parseFloat(ct.coverageAmount) || 0;
     if (raw) {
       const {
-        amount: amt,
+        amount: baseAmt,
         convertible
       } = nexusContractJpyAmount(ct, 'coverageAmount');
       if (!convertible) {
         unconvertibleContracts.push(ct);
       } else {
         const purposes = nexusContractPurposes(ct).filter(p => byPurpose[p] !== undefined);
-        let overrideAmt = null;
-        if (purposes.includes('死亡時収入保障') && ct.amountUnit !== '日額') {
+        let amt = baseAmt;
+        if (ct.amountUnit !== '日額' && isIncomeProtectionItem(ct, purposes)) {
           const insuredAge = ct.insuredBirthdate ? calcAge(ct.insuredBirthdate) : fallbackInsuredAge;
           const endAge = nexusTermEndAge(ct.termEnd, ct.termNote, ct.insuredBirthdate);
           if (insuredAge !== null && insuredAge !== undefined && endAge !== null) {
-            overrideAmt = amt * 12 * Math.max(0, endAge - insuredAge);
+            amt = baseAmt * 12 * Math.max(0, endAge - insuredAge);
             incomeProtectionConverted = true;
           }
         }
-        addItem(purposes, amt, ct.amountUnit === '日額', overrideAmt, '死亡時収入保障');
+        addItem(purposes, amt, ct.amountUnit === '日額');
       }
     }
     (ct.riders || []).forEach(r => {
-      const ramt = parseFloat(r.amount) || 0;
-      if (!ramt) return;
+      const ramt0 = parseFloat(r.amount) || 0;
+      if (!ramt0) return;
       const rPurposes = nexusRiderPurposes(r).filter(p => byPurpose[p] !== undefined);
-      let overrideAmt = null;
-      if (rPurposes.includes('死亡時収入保障') && r.amountUnit !== '日額') {
+      let ramt = ramt0;
+      if (r.amountUnit !== '日額' && isIncomeProtectionItem(r, rPurposes)) {
         const insuredAge = ct.insuredBirthdate ? calcAge(ct.insuredBirthdate) : fallbackInsuredAge;
         const endAge = nexusTermEndAge(ct.termEnd, r.termNote || ct.termNote, ct.insuredBirthdate);
         if (insuredAge !== null && insuredAge !== undefined && endAge !== null) {
-          overrideAmt = ramt * 12 * Math.max(0, endAge - insuredAge);
+          ramt = ramt0 * 12 * Math.max(0, endAge - insuredAge);
           incomeProtectionConverted = true;
         }
       }
-      addItem(rPurposes, ramt, r.amountUnit === '日額', overrideAmt, '死亡時収入保障');
+      addItem(rPurposes, ramt, r.amountUnit === '日額');
     });
   });
   return {
