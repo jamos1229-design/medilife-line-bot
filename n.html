@@ -2184,6 +2184,14 @@ const nexusHasRealChildIdentity = sp => {
   if (!name) return false;
   return !/^お子様\d+$/.test(name);
 };
+// サスペクトの年齢は、既存の顧客と連携（linkedCustomerId）している場合はその顧客の登録情報を
+// 優先する（連携している成人した子は、生年月日をサスペクト側ではなく本人の顧客レコードにしか
+// 持っていないことが多く、サスペクト側だけを見ると年齢不明＝未就学児扱いになってしまうため）。
+const nexusResolveMemberAge = (sp, customers) => {
+  const linked = sp.linkedCustomerId ? (customers || []).find(x => x.id === sp.linkedCustomerId) : null;
+  if (linked) return linked.birthdate ? calcAge(linked.birthdate) : calcStoredAge(linked.age, linked.ageYear);
+  return sp.birthdate ? calcAge(sp.birthdate) : calcStoredAge(sp.age, sp.ageYear);
+};
 
 // ── 世帯属性の自動分類ロジック ──────────────────────────────────
 // 入力: 年齢・婚姻状況・同居家族構成（サスペクトの「同居」フラグ付き）
@@ -14795,13 +14803,13 @@ function NexusPlanningSection({
   const spouseKids = linkedSpouseCustomer ? (linkedSpouseCustomer.suspects || []).filter(sp => sp.relation === '子供' && nexusHasRealChildIdentity(sp)) : [];
   const kids = [...ownKids, ...spouseKids.filter(sk => !ownKids.some(k => (k.name || '').trim() && (k.name || '').trim() === (sk.name || '').trim()))];
   const kidsSummary = kids.length ? kids.map(k => {
-    const a = k.birthdate ? calcAge(k.birthdate) : calcStoredAge(k.age, k.ageYear);
+    const a = nexusResolveMemberAge(k, customers);
     return `${k.name || '子'}${a !== null ? a + '歳' : ''}`;
   }).join('、') : '未登録';
   // ── 教育資金プランニング：子供ごとに進学段階の費用を試算 ──
   const educationPlans = lp.education || {};
   const kidsWithEducation = kids.map(k => {
-    const age = k.birthdate ? calcAge(k.birthdate) : calcStoredAge(k.age, k.ageYear);
+    const age = nexusResolveMemberAge(k, customers);
     const plan = educationPlans[k.id] || {};
     const rows = nexusComputeEducationPlan(age, plan.track || {});
     const summary = nexusEducationSummary(rows, plan);
