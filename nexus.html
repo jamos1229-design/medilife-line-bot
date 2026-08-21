@@ -2699,6 +2699,7 @@ function CustomerForm({
     customerType: '個人',
     // 個人 / 法人
     name: '',
+    furigana: '',
     age: '',
     gender: '',
     birthdate: '',
@@ -2988,6 +2989,15 @@ function CustomerForm({
     value: form.name,
     onChange: si('name'),
     autoFocus: true
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "フリガナ"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    placeholder: "例：ヤマダ タロウ",
+    value: form.furigana || '',
+    onChange: si('furigana')
   })), /*#__PURE__*/React.createElement("div", {
     className: "form-row"
   }, /*#__PURE__*/React.createElement("div", {
@@ -3866,7 +3876,13 @@ function CustomerDetail({
       fontWeight: 800,
       letterSpacing: -0.5
     }
-  }, c.customerType === '法人' ? c.corporateName || c.name : c.name), c.customerType === '法人' && c.name && /*#__PURE__*/React.createElement("div", {
+  }, c.customerType === '法人' ? c.corporateName || c.name : c.name), c.customerType !== '法人' && c.furigana && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text-sub)',
+      marginTop: 2
+    }
+  }, c.furigana), c.customerType === '法人' && c.name && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 13,
       color: 'var(--text-sub)',
@@ -10224,6 +10240,94 @@ function importCSV(file, setCustomers) {
   reader.readAsText(file, 'UTF-8');
 }
 
+// ── 画像から顧客情報を取り込む機能 ──────────────────────────────
+// OCRは外部AI/クラウドサービスを使わず、ブラウザ内で完結するTesseract.jsを使う。
+// このアプリはサーバーを持たない静的サイトのため、外部AI OCRを使うにはAPIキーを
+// クライアントコードに埋め込むしかなく、それは第三者に抜き取られ悪用されるリスクがある。
+// 画像・個人情報を外部に送らずに済むブラウザ内OCRを優先し、認識精度の甘さは
+// 「取込内容確認」画面での手修正を前提にした設計で補う。
+// ExcelJSと同じく、実際に使うときだけCDNから読み込む（通常のアプリ動作には不要なため）。
+function nexusEnsureOcrLib(callback) {
+  if (window.Tesseract) {
+    callback();
+    return;
+  }
+  const script = document.createElement('script');
+  script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+  script.onload = () => callback();
+  script.onerror = () => alert('画像認識ライブラリの読み込みに失敗しました。インターネット接続をご確認のうえ、もう一度お試しください。');
+  document.head.appendChild(script);
+}
+const NEXUS_PREFECTURES = ['北海道', '青森県', '岩手県', '宮城県', '秋田県', '山形県', '福島県', '茨城県', '栃木県', '群馬県', '埼玉県', '千葉県', '東京都', '神奈川県', '新潟県', '富山県', '石川県', '福井県', '山梨県', '長野県', '岐阜県', '静岡県', '愛知県', '三重県', '滋賀県', '京都府', '大阪府', '兵庫県', '奈良県', '和歌山県', '鳥取県', '島根県', '岡山県', '広島県', '山口県', '徳島県', '香川県', '愛媛県', '高知県', '福岡県', '佐賀県', '長崎県', '熊本県', '大分県', '宮崎県', '鹿児島県', '沖縄県'];
+// OCRで読み取った1行のテキストから、氏名・フリガナ・生年月日・電話番号・郵便番号・住所・
+// メールアドレスをそれぞれ抜き出す。OCRは表の列構造までは分からず1行のテキストしか
+// 得られないため、パターンが明確な項目（日付・電話番号・郵便番号・メール）から順に
+// 正規表現で拾い、残ったテキストから氏名・フリガナ・住所をヒューリスティックに推定する。
+// 精度を追い求めすぎず、間違っていても「取込内容確認」画面で手修正できる前提でよい。
+function nexusParseOcrLine(line) {
+  let rest = line;
+  const take = re => {
+    const m = rest.match(re);
+    if (!m) return '';
+    rest = rest.slice(0, m.index) + ' ' + rest.slice(m.index + m[0].length);
+    return m;
+  };
+  const emailM = take(/[\w.+-]+@[\w-]+\.[\w.-]+/);
+  const email = emailM ? emailM[0] : '';
+  const postalM = take(/〒?\s*(\d{3})-?(\d{4})/);
+  const postalCode = postalM ? `${postalM[1]}-${postalM[2]}` : '';
+  const birthM = take(/((?:19|20)\d{2})[\/\-年.](\d{1,2})[\/\-月.](\d{1,2})日?/);
+  const birthdate = birthM ? `${birthM[1]}-${String(birthM[2]).padStart(2, '0')}-${String(birthM[3]).padStart(2, '0')}` : '';
+  const phoneM = take(/0\d{1,4}-?\d{1,4}-?\d{3,4}/);
+  const phone = phoneM ? phoneM[0] : '';
+  let address = '';
+  const prefMatch = NEXUS_PREFECTURES.find(p => rest.includes(p));
+  if (prefMatch) {
+    const start = rest.indexOf(prefMatch);
+    address = rest.slice(start).trim();
+    rest = rest.slice(0, start);
+  }
+  const tokens = rest.split(/[\s、,　]+/).map(t => t.trim()).filter(Boolean);
+  const isKatakana = t => /^[ァ-ヶーA-Za-z]+$/.test(t);
+  const furiganaTokens = tokens.filter(isKatakana);
+  const nameTokens = tokens.filter(t => !isKatakana(t));
+  return {
+    name: nameTokens.join(' '),
+    furigana: furiganaTokens.join(' '),
+    birthdate,
+    phone,
+    postalCode,
+    address,
+    email
+  };
+}
+// 生年月日・電話番号のどちらかが読み取れた行だけを「顧客の行」とみなす
+// （表の見出しや罫線などのノイズ行は、どちらも無いことがほとんどのため除外できる）。
+function nexusExtractOcrRows(text) {
+  return text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 1).map(nexusParseOcrLine).filter(r => (r.birthdate || r.phone) && (r.name || r.furigana));
+}
+// 取込候補行が既存顧客と重複していそうかを判定する。完全一致だけでなく
+// 「氏名＋生年月日」「氏名＋フリガナ」の組み合わせ一致、電話番号の完全一致も
+// 重複候補として拾う（電話番号は表記ゆれを避けるため数字だけで比較する）。
+function nexusFindDuplicateCandidates(row, customers) {
+  const rName = (row.name || '').trim();
+  const rKana = (row.furigana || '').trim();
+  const rBirth = (row.birthdate || '').trim();
+  const rPhone = (row.phone || '').replace(/[^\d]/g, '');
+  if (!rName && !rPhone) return [];
+  return (customers || []).filter(c => {
+    const cName = (c.customerType === '法人' ? c.corporateName : c.name) || '';
+    const cKana = c.furigana || '';
+    const cBirth = c.birthdate || '';
+    const cPhone = (c.phone || '').replace(/[^\d]/g, '');
+    const nameMatch = rName && cName && rName === cName.trim();
+    const kanaMatch = rKana && cKana && rKana === cKana.trim();
+    const birthMatch = rBirth && cBirth && rBirth === cBirth;
+    const phoneMatch = rPhone.length >= 8 && rPhone === cPhone;
+    return phoneMatch || nameMatch && birthMatch || nameMatch && kanaMatch;
+  });
+}
+
 // ── RFC4180準拠 CSVパーサー（改行含むフィールド対応）──────────
 function parseCSVFull(text) {
   const rows = [];
@@ -12599,6 +12703,354 @@ function NexusNetworkSection({
   }));
 }
 
+// ── 画像取込：1候補行の確認・手修正カード ──────────────────────
+function NexusImageImportRow({
+  row,
+  onUpdate,
+  onRemove
+}) {
+  const hasDup = row.duplicates && row.duplicates.length > 0;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      padding: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: row.selected,
+    onChange: e => onUpdate({
+      selected: e.target.checked
+    }),
+    style: {
+      width: 18,
+      height: 18,
+      flexShrink: 0
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    style: hasDup ? {
+      background: '#FEF3C7',
+      color: '#B45309'
+    } : {
+      background: '#DCFCE7',
+      color: '#16A34A'
+    }
+  }, hasDup ? '△ 重複候補' : '新規'), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: onRemove,
+    style: {
+      marginLeft: 'auto',
+      background: 'none',
+      border: 'none',
+      color: 'var(--danger)',
+      fontSize: 18,
+      cursor: 'pointer',
+      flexShrink: 0
+    }
+  }, "×")), /*#__PURE__*/React.createElement("div", {
+    className: "form-row",
+    style: {
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "氏名"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    value: row.name || '',
+    onChange: e => onUpdate({
+      name: e.target.value
+    })
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "フリガナ"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    value: row.furigana || '',
+    onChange: e => onUpdate({
+      furigana: e.target.value
+    })
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "form-row",
+    style: {
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "生年月日"), /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    className: "form-input",
+    value: row.birthdate || '',
+    onChange: e => onUpdate({
+      birthdate: e.target.value
+    })
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "電話番号"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    value: row.phone || '',
+    onChange: e => onUpdate({
+      phone: e.target.value
+    })
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "form-row",
+    style: {
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "郵便番号"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    value: row.postalCode || '',
+    onChange: e => onUpdate({
+      postalCode: e.target.value
+    })
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "メールアドレス"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    value: row.email || '',
+    onChange: e => onUpdate({
+      email: e.target.value
+    })
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: hasDup ? 8 : 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "住所"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    value: row.address || '',
+    onChange: e => onUpdate({
+      address: e.target.value
+    })
+  })), hasDup && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "登録方法（既存顧客と重複の可能性があります）"), /*#__PURE__*/React.createElement("select", {
+    className: "form-select",
+    value: row.resolution,
+    onChange: e => onUpdate({
+      resolution: e.target.value
+    })
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "new"
+  }, "新規登録する"), row.duplicates.map(d => /*#__PURE__*/React.createElement("option", {
+    key: d.id,
+    value: d.id
+  }, `既存「${nexusDisplayName(d)}」に統合`)), /*#__PURE__*/React.createElement("option", {
+    value: "skip"
+  }, "今回は登録しない"))));
+}
+// ── 画像取込：写真・スクリーンショット選択 → OCR → 取込内容確認画面 ──
+// 画像はブラウザ内のOCR処理にのみ使い、読み取り結果（テキスト）以外は
+// どこにも保存しない（Fileオブジェクトはこのコンポーネントの一時stateにしか乗らず、
+// 画面を閉じれば破棄される。localStorage等に画像そのものを書き込む処理は行わない）。
+function NexusImageImportScreen({
+  customers,
+  setCustomers,
+  onClose
+}) {
+  const [phase, setPhase] = useState('pick'); // 'pick' | 'processing' | 'review'
+  const [progressText, setProgressText] = useState('');
+  const [rows, setRows] = useState([]);
+  const fileRef = React.useRef(null);
+  const updateRow = (id, patch) => setRows(prev => prev.map(r => r.id === id ? {
+    ...r,
+    ...patch
+  } : r));
+  const removeRow = id => setRows(prev => prev.filter(r => r.id !== id));
+  const handleFiles = fileList => {
+    const files = Array.from(fileList || []);
+    if (files.length === 0) return;
+    setPhase('processing');
+    setProgressText('画像認識ライブラリを準備中…');
+    nexusEnsureOcrLib(() => {
+      (async () => {
+        try {
+          const collected = [];
+          for (let i = 0; i < files.length; i++) {
+            setProgressText(`画像を読み取り中…（${i + 1}/${files.length}）`);
+            const {
+              data
+            } = await window.Tesseract.recognize(files[i], 'jpn');
+            nexusExtractOcrRows(data.text || '').forEach(r => collected.push(r));
+          }
+          const withMeta = collected.map(r => ({
+            id: uid(),
+            ...r,
+            selected: true,
+            resolution: 'new',
+            duplicates: nexusFindDuplicateCandidates(r, customers)
+          }));
+          setRows(prev => [...prev, ...withMeta]);
+          setPhase('review');
+          if (withMeta.length === 0) {
+            alert('画像から顧客らしき行を読み取れませんでした。画像の向き・明るさをご確認のうえ、必要であれば手入力で追加してください。');
+          }
+        } catch (err) {
+          alert('画像の読み取りに失敗しました：' + err.message);
+          setPhase(rows.length > 0 ? 'review' : 'pick');
+        }
+      })();
+    });
+  };
+  const handleCommit = () => {
+    const toRegister = rows.filter(r => r.selected && r.resolution === 'new');
+    const toMerge = rows.filter(r => r.selected && r.resolution !== 'new' && r.resolution !== 'skip');
+    if (toRegister.length === 0 && toMerge.length === 0) {
+      alert('登録する項目がありません（選択・登録方法をご確認ください）');
+      return;
+    }
+    setCustomers(prev => {
+      let next = [...prev, ...toRegister.map(r => ({
+        id: uid(),
+        customerType: '個人',
+        name: r.name || '',
+        furigana: r.furigana || '',
+        age: '',
+        gender: '',
+        birthdate: r.birthdate || '',
+        phone: r.phone || '',
+        email: r.email || '',
+        postalCode: r.postalCode || '',
+        address: r.address || '',
+        occupation: '',
+        workplace: '',
+        maritalStatus: '',
+        dualIncome: false,
+        employmentType: '',
+        status: '未接触',
+        contactMethod: '電話',
+        contactChannel: '',
+        lastContact: '',
+        nextAppt: '',
+        memo: '画像から取込',
+        lineRegistered: false,
+        contracts: [],
+        suspects: [],
+        referredBy: '',
+        referredByName: '',
+        referredTo: [],
+        linkedCorpId: ''
+      }))];
+      // 「既存顧客に統合」は上書きせず、既存側が未入力の項目だけを画像の読み取り結果で埋める
+      toMerge.forEach(r => {
+        next = next.map(c => {
+          if (c.id !== r.resolution) return c;
+          const patch = {};
+          ['name', 'furigana', 'birthdate', 'phone', 'postalCode', 'address', 'email'].forEach(k => {
+            if (!c[k] && r[k]) patch[k] = r[k];
+          });
+          return {
+            ...c,
+            ...patch
+          };
+        });
+      });
+      return next;
+    });
+    alert(`取込完了：新規登録 ${toRegister.length}件／既存顧客に統合 ${toMerge.length}件`);
+    onClose();
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: "full-screen"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "full-header"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn-ghost",
+    onClick: onClose
+  }, "← 閉じる"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 15
+    }
+  }, "画像から顧客を取込")), /*#__PURE__*/React.createElement("div", {
+    className: "full-content"
+  }, phase === 'pick' && /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      marginBottom: 10,
+      lineHeight: 1.6
+    }
+  }, "顧客一覧のスクリーンショットや写真を選んでください（複数選択可）。画像はこの端末内だけで処理され、外部には送信されません。読み取り後、内容を確認・修正してから登録します。"), /*#__PURE__*/React.createElement("input", {
+    ref: fileRef,
+    type: "file",
+    accept: "image/*",
+    multiple: true,
+    style: {
+      display: 'none'
+    },
+    onChange: e => handleFiles(e.target.files)
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-full",
+    onClick: () => fileRef.current?.click()
+  }, "📷 写真・スクリーンショットを選ぶ")), phase === 'processing' && /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      textAlign: 'center',
+      padding: 30
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      marginBottom: 8
+    }
+  }, progressText || '読み取り中…'), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)'
+    }
+  }, "初回は画像認識ライブラリのダウンロードのため少し時間がかかります")), phase === 'review' && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      marginBottom: 10,
+      color: 'var(--text-sub)'
+    }
+  }, rows.length, "件の候補を読み取りました。内容を確認・修正してから登録してください（OCRは誤読することがあります）。"), rows.map(r => /*#__PURE__*/React.createElement(NexusImageImportRow, {
+    key: r.id,
+    row: r,
+    onUpdate: patch => updateRow(r.id, patch),
+    onRemove: () => removeRow(r.id)
+  })), rows.length === 0 && /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--text-sub)'
+    }
+  }, "候補が見つかりませんでした。")), /*#__PURE__*/React.createElement("input", {
+    ref: fileRef,
+    type: "file",
+    accept: "image/*",
+    multiple: true,
+    style: {
+      display: 'none'
+    },
+    onChange: e => handleFiles(e.target.files)
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: {
+      marginBottom: 8
+    },
+    onClick: () => fileRef.current?.click()
+  }, "＋ 画像を追加で読み取る"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-full",
+    onClick: handleCommit
+  }, "選択した項目を登録する"))));
+}
+
 // ── 顧客一覧（人脈ネクサス視点：検索・CSV連携）─────────────────
 function NexusListSection({
   customers,
@@ -12611,6 +13063,7 @@ function NexusListSection({
 }) {
   const filtered = customers.filter(c => nexusMatchesQuery(c, query));
   const csvRef = React.useRef(null);
+  const [showImageImport, setShowImageImport] = useState(false);
   const exportCSV = () => {
     const byId = {};
     customers.forEach(c => byId[c.id] = c);
@@ -12669,7 +13122,13 @@ function NexusListSection({
       flex: 1
     },
     onClick: exportCSV
-  }, "📤 CSV書出")), /*#__PURE__*/React.createElement("div", {
+  }, "📤 CSV書出"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-outline btn-sm",
+    style: {
+      flex: 1
+    },
+    onClick: () => setShowImageImport(true)
+  }, "🖼️ 画像から取込")), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 10.5,
       color: 'var(--text-sub)',
@@ -12750,7 +13209,11 @@ function NexusListSection({
         color: 'var(--warning)'
       }
     }, "提案余地 ", g.gap)));
-  })));
+  })), showImageImport && /*#__PURE__*/React.createElement(NexusImageImportScreen, {
+    customers: customers,
+    setCustomers: setCustomers,
+    onClose: () => setShowImageImport(false)
+  }));
 }
 
 // ── 提案候補（既契約の少ない/紹介力の高い順に並び替え）─────────
