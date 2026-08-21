@@ -2468,14 +2468,16 @@ const calcCustomerRank = (c, allCustomers) => {
 };
 
 // ── Suspect Block ─────────────────────────────────────────────
-const RELATIONS = ['配偶者', '子供', '親', '祖父母', '兄弟姉妹', '従兄弟', '友人', '職場', '知人', 'その他'];
+const RELATIONS = ['配偶者', '元配偶者', '子供', '親', '祖父母', '兄弟姉妹', '従兄弟', '友人', '職場', '知人', 'その他'];
+const CHILD_TYPES = ['実子', '養子・連れ子等'];
 function SuspectBlock({
   suspect,
   onChange,
   onRemove,
   index,
   customers,
-  excludeId
+  excludeId,
+  allSuspects
 }) {
   const s = k => e => onChange({
     ...suspect,
@@ -2626,7 +2628,49 @@ function SuspectBlock({
       ...suspect,
       relation: r
     })
-  }, r)))), /*#__PURE__*/React.createElement("div", {
+  }, r)))), suspect.relation === '子供' && /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "実子／養子（相続分の判定に関わります）"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, CHILD_TYPES.map(ct => /*#__PURE__*/React.createElement("button", {
+    key: ct,
+    type: "button",
+    className: `toggle-btn ${(suspect.childType || '実子') === ct ? 'sel' : ''}`,
+    style: {
+      minWidth: 'unset',
+      flex: 'none',
+      padding: '8px 10px',
+      fontSize: 13
+    },
+    onClick: () => onChange({
+      ...suspect,
+      childType: ct
+    })
+  }, ct)))), suspect.relation === '子供' && (allSuspects || []).filter(sp => sp.id !== suspect.id && (sp.relation === '配偶者' || sp.relation === '元配偶者')).length > 1 && /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "もう一方の親（離婚・再婚で複数の配偶者がいる場合、この子の親を選択）"), /*#__PURE__*/React.createElement("select", {
+    className: "form-select",
+    value: suspect.parentSpouseId || '',
+    onChange: e => onChange({
+      ...suspect,
+      parentSpouseId: e.target.value
+    })
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "現在の配偶者との子（未選択）"), (allSuspects || []).filter(sp => sp.id !== suspect.id && (sp.relation === '配偶者' || sp.relation === '元配偶者')).map(sp => /*#__PURE__*/React.createElement("option", {
+    key: sp.id,
+    value: sp.id
+  }, sp.name || sp.relation, "（", sp.relation, "）")))), /*#__PURE__*/React.createElement("div", {
     className: "form-group",
     style: {
       marginBottom: 8
@@ -3520,7 +3564,8 @@ function CustomerForm({
     onChange: data => updateSuspect(sp.id, data),
     onRemove: () => removeSuspect(sp.id),
     customers: otherCustomers,
-    excludeId: form.id
+    excludeId: form.id,
+    allSuspects: form.suspects
   })), /*#__PURE__*/React.createElement("button", {
     className: "btn btn-outline btn-full",
     style: {
@@ -5898,8 +5943,166 @@ const SORT_OPTIONS = [{
   key: 'status',
   label: 'ステータス順'
 }];
+// 重複顧客の統合：primary（残す方）の空欄をsecondary（削除される方）の値で補い、
+// 契約・サスペクトは両方をそのまま結合する。primaryが既に持っている値は上書きしない。
+function nexusMergeCustomers(primary, secondary) {
+  const merged = {
+    ...primary
+  };
+  Object.keys(secondary).forEach(k => {
+    if (k === 'id') return;
+    const v = secondary[k];
+    if (v === undefined || v === null || v === '') return;
+    if (merged[k] === undefined || merged[k] === null || merged[k] === '') {
+      merged[k] = v;
+    }
+  });
+  merged.contracts = [...(primary.contracts || []), ...(secondary.contracts || [])];
+  merged.suspects = [...(primary.suspects || []), ...(secondary.suspects || [])];
+  const toArr = v => Array.isArray(v) ? v : v ? [v] : [];
+  merged.referredTo = [...new Set([...toArr(primary.referredTo), ...toArr(secondary.referredTo)])];
+  const memoParts = [primary.memo, secondary.memo].filter(Boolean);
+  merged.memo = [...new Set(memoParts)].join('\n');
+  return merged;
+}
+function NexusCustomerMergeScreen({
+  customerA,
+  customerB,
+  customers,
+  setCustomers,
+  onClose
+}) {
+  const [primaryId, setPrimaryId] = useState(customerA.id);
+  const primary = primaryId === customerA.id ? customerA : customerB;
+  const secondary = primaryId === customerA.id ? customerB : customerA;
+  const displayName = c => c.customerType === '法人' ? c.corporateName || c.name : c.name;
+  const summary = c => [c.phone, c.address, (c.contracts || []).length + '件の契約', (c.suspects || []).length + '件のサスペクト'].filter(Boolean).join(' / ');
+  const handleConfirm = () => {
+    if (!window.confirm(`「${displayName(secondary)}」を「${displayName(primary)}」に統合します。統合される側の顧客データは削除されます。この操作は取り消せません。よろしいですか？`)) return;
+    const merged = nexusMergeCustomers(primary, secondary);
+    const next = customers.filter(c => c.id !== secondary.id).map(c => {
+      if (c.id === primary.id) return merged;
+      let patch = null;
+      if (c.referredBy === secondary.id) {
+        patch = {
+          ...(patch || c),
+          referredBy: primary.id
+        };
+      }
+      if (Array.isArray(c.referredTo) && c.referredTo.includes(secondary.id)) {
+        patch = {
+          ...(patch || c),
+          referredTo: (patch && patch.referredTo || c.referredTo).map(id => id === secondary.id ? primary.id : id)
+        };
+      }
+      if ((c.suspects || []).some(sp => sp.linkedCustomerId === secondary.id)) {
+        patch = {
+          ...(patch || c),
+          suspects: (patch && patch.suspects || c.suspects).map(sp => sp.linkedCustomerId === secondary.id ? {
+            ...sp,
+            linkedCustomerId: primary.id
+          } : sp)
+        };
+      }
+      if (c.linkedCorpId === secondary.id) {
+        patch = {
+          ...(patch || c),
+          linkedCorpId: primary.id
+        };
+      }
+      return patch || c;
+    });
+    setCustomers(next);
+    onClose();
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: "full-screen"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "full-header"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    style: {
+      background: 'none',
+      border: 'none',
+      cursor: 'pointer',
+      fontSize: 15,
+      color: 'var(--text-sub)',
+      fontWeight: 600,
+      padding: '4px 8px'
+    }
+  }, "← 戻る"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      fontSize: 18,
+      fontWeight: 800,
+      letterSpacing: -0.4
+    }
+  }, "重複顧客を統合"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 40
+    }
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "full-content"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginBottom: 12,
+      fontSize: 13,
+      color: 'var(--text-sub)'
+    }
+  }, "統合すると、選んだ「残す方」に両方の契約・サスペクト情報がまとめられ、空欄の項目はもう一方の情報で補われます。既に入力済みの項目が上書きされることはありません。もう一方（統合される側）の顧客データは削除されます。"), /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "どちらを残しますか？"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10,
+      marginBottom: 16
+    }
+  }, [customerA, customerB].map(c => /*#__PURE__*/React.createElement("button", {
+    key: c.id,
+    type: "button",
+    onClick: () => setPrimaryId(c.id),
+    className: "card",
+    style: {
+      textAlign: 'left',
+      width: '100%',
+      border: primaryId === c.id ? '2px solid var(--accent)' : '1px solid var(--border)',
+      background: primaryId === c.id ? 'var(--accent-light)' : '#fff',
+      cursor: 'pointer'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 15,
+      marginBottom: 4
+    }
+  }, primaryId === c.id ? '✓ 残す：' : '', displayName(c)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--text-sub)'
+    }
+  }, summary(c) || '（情報少なめ）')))), /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "統合結果プレビュー"), /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginBottom: 16,
+      fontSize: 13,
+      lineHeight: 1.8
+    }
+  }, /*#__PURE__*/React.createElement("div", null, "契約：", (primary.contracts || []).length + (secondary.contracts || []).length, "件（", displayName(primary), (primary.contracts || []).length, "件＋", displayName(secondary), (secondary.contracts || []).length, "件）"), /*#__PURE__*/React.createElement("div", null, "サスペクト：", (primary.suspects || []).length + (secondary.suspects || []).length, "件"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: 'var(--danger)'
+    }
+  }, "削除される側：", displayName(secondary))), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-primary btn-full",
+    onClick: handleConfirm
+  }, "「", displayName(secondary), "」を「", displayName(primary), "」に統合する")));
+}
 function CustomerListTab({
   customers,
+  setCustomers,
   onSelect,
   onAdd
 }) {
@@ -5908,6 +6111,20 @@ function CustomerListTab({
   const [lineFilter, setLineFilter] = useState('すべて');
   const [sortKey, setSortKey] = useState('newer');
   const [showSort, setShowSort] = useState(false);
+  const [mergeMode, setMergeMode] = useState(false);
+  const [mergeSelection, setMergeSelection] = useState([]);
+  const [mergePair, setMergePair] = useState(null);
+  const toggleMergeMode = () => {
+    setMergeMode(v => !v);
+    setMergeSelection([]);
+  };
+  const toggleMergeSelect = id => {
+    setMergeSelection(prev => {
+      if (prev.includes(id)) return prev.filter(x => x !== id);
+      if (prev.length >= 2) return [prev[1], id];
+      return [...prev, id];
+    });
+  };
   const filtered = useMemo(() => {
     const list = customers.filter(c => statusFilter === 'すべて' || (c.status || '未接触') === statusFilter).filter(c => lineFilter === 'すべて' || (lineFilter === 'LINE登録' ? c.lineRegistered : !c.lineRegistered)).filter(c => {
       if (!search) return true;
@@ -5992,6 +6209,24 @@ function CustomerListTab({
     }
   }, filtered.length, "件", search || statusFilter !== 'すべて' || lineFilter !== 'すべて' ? ` / 全${customers.length}件` : ''), /*#__PURE__*/React.createElement("div", {
     style: {
+      display: 'flex',
+      gap: 6,
+      alignItems: 'center'
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: toggleMergeMode,
+    style: {
+      fontSize: 12,
+      padding: '4px 10px',
+      borderRadius: 8,
+      border: mergeMode ? '1.5px solid var(--accent)' : '1.5px solid var(--border)',
+      background: mergeMode ? 'var(--accent-light)' : '#fff',
+      color: mergeMode ? 'var(--accent)' : 'var(--text-sub)',
+      cursor: 'pointer',
+      fontWeight: 600
+    }
+  }, mergeMode ? '✕ 統合をやめる' : '🔀 重複を統合'), /*#__PURE__*/React.createElement("div", {
+    style: {
       position: 'relative'
     }
   }, /*#__PURE__*/React.createElement("button", {
@@ -6039,7 +6274,7 @@ function CustomerListTab({
       textAlign: 'left',
       cursor: 'pointer'
     }
-  }, sortKey === o.key ? '✓ ' : '　', o.label)))))), filtered.length === 0 ? /*#__PURE__*/React.createElement(EmptyState, {
+  }, sortKey === o.key ? '✓ ' : '　', o.label))))))), filtered.length === 0 ? /*#__PURE__*/React.createElement(EmptyState, {
     icon: "👤",
     text: customers.length === 0 ? '顧客を追加してください' : '該当する顧客はいません'
   }) : filtered.map(c => {
@@ -6055,16 +6290,37 @@ function CustomerListTab({
     });
     const rank = calcCustomerRank(c, customers);
     const ri = RANK_INFO[rank];
+    const mergeOrder = mergeSelection.indexOf(c.id);
     return /*#__PURE__*/React.createElement("div", {
       key: c.id,
       className: "customer-card",
-      onClick: () => onSelect(c),
-      style: isBirthMonth || isContractMonth ? {
+      onClick: () => mergeMode ? toggleMergeSelect(c.id) : onSelect(c),
+      style: mergeMode && mergeOrder !== -1 ? {
+        border: '2px solid var(--accent)',
+        background: 'var(--accent-light)',
+        position: 'relative'
+      } : isBirthMonth || isContractMonth ? {
         borderLeft: '3px solid var(--warning)'
       } : rank === 'S' ? {
         borderLeft: '3px solid #D97706'
       } : {}
-    }, /*#__PURE__*/React.createElement("div", {
+    }, mergeMode && mergeOrder !== -1 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: 'absolute',
+        top: 6,
+        right: 6,
+        width: 20,
+        height: 20,
+        borderRadius: '50%',
+        background: 'var(--accent)',
+        color: '#fff',
+        fontSize: 11,
+        fontWeight: 700,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center'
+      }
+    }, mergeOrder + 1), /*#__PURE__*/React.createElement("div", {
       className: "customer-card-top"
     }, /*#__PURE__*/React.createElement("div", {
       style: {
@@ -6166,6 +6422,29 @@ function CustomerListTab({
     }, "最終接触"), /*#__PURE__*/React.createElement("div", {
       className: "info-value"
     }, fmtDate(c.lastContact)))));
+  }), mergeMode && mergeSelection.length === 2 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: 'sticky',
+      bottom: 10,
+      zIndex: 10,
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-primary btn-full",
+    onClick: () => setMergePair({
+      a: customers.find(c => c.id === mergeSelection[0]),
+      b: customers.find(c => c.id === mergeSelection[1])
+    })
+  }, "選択した2件を統合する")), mergePair && /*#__PURE__*/React.createElement(NexusCustomerMergeScreen, {
+    customerA: mergePair.a,
+    customerB: mergePair.b,
+    customers: customers,
+    setCustomers: setCustomers,
+    onClose: () => {
+      setMergePair(null);
+      setMergeMode(false);
+      setMergeSelection([]);
+    }
   }));
 }
 
@@ -15266,15 +15545,34 @@ function NexusFamilyTree({
       suspectId: sp.id
     };
   };
-  const spouseSp = suspects.find(sp => sp.relation === '配偶者');
-  const spouseNode = spouseSp ? resolveMember(spouseSp, '配偶者') : null;
+  // 離婚・再婚で複数の配偶者（現配偶者・元配偶者）を持つケースに対応するため配列で扱う
+  const spouseSuspects = suspects.filter(sp => sp.relation === '配偶者' || sp.relation === '元配偶者');
+  const spouseNodesList = spouseSuspects.map(sp => ({
+    ...resolveMember(sp, sp.relation === '元配偶者' ? '元配偶者' : '配偶者'),
+    isExSpouse: sp.relation === '元配偶者'
+  }));
   const grandparents = suspects.filter(sp => sp.relation === '祖父母').map(sp => resolveMember(sp, '祖父母'));
   const parents = suspects.filter(sp => sp.relation === '親').map(sp => resolveMember(sp, '親'));
   const siblings = suspects.filter(sp => sp.relation === '兄弟姉妹').map(sp => resolveMember(sp, '兄弟姉妹'));
   const cousins = suspects.filter(sp => sp.relation === '従兄弟').map(sp => resolveMember(sp, '従兄弟'));
-  const kids = suspects.filter(sp => sp.relation === '子供').map(sp => resolveMember(sp, '子ども'));
+  // 子はどちらの配偶者との子か（parentSpouseId）でグループ化して表示する。
+  // 未指定（従来データ含む）は最初の配偶者との子として扱う＝これまで通りの見た目を維持
+  const kids = suspects.filter(sp => sp.relation === '子供').map(sp => {
+    const isAdopted = sp.childType === '養子・連れ子等';
+    const node = resolveMember(sp, isAdopted ? '子ども（養子等）' : '子ども');
+    const groupKey = sp.parentSpouseId && spouseSuspects.some(s => s.id === sp.parentSpouseId) ? sp.parentSpouseId : spouseSuspects[0] ? spouseSuspects[0].id : 'self';
+    return {
+      ...node,
+      isAdopted,
+      groupKey
+    };
+  }).sort((a, b) => {
+    const ia = spouseSuspects.findIndex(s => s.id === a.groupKey);
+    const ib = spouseSuspects.findIndex(s => s.id === b.groupKey);
+    return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+  });
   const others = suspects.filter(sp => ['友人', '職場', '知人', 'その他'].includes(sp.relation));
-  const midRow = [...siblings, ...cousins, selfNode, ...(spouseNode ? [spouseNode] : [])];
+  const midRow = [...siblings, ...cousins, selfNode, ...spouseNodesList];
   const ROW_GAP = 78;
   const rowsDef = [{
     items: grandparents,
@@ -15366,23 +15664,36 @@ function NexusFamilyTree({
   busConnect(midX(rowsDef[0].positions), rowsDef[0].y + BOX_H / 2, rowsDef[1].positions, 'gp2p');
   busConnect(midX(rowsDef[1].positions), rowsDef[1].y + BOX_H / 2, rowsDef[2].positions, 'p2m');
   const selfPos = rowsDef[2].positions.find(p => p.member.key === 'self');
-  const spousePos = spouseNode ? rowsDef[2].positions.find(p => p.member.key === spouseNode.key) : null;
-  if (selfPos && spousePos) {
+  // 配偶者・元配偶者ごとに婚姻線を引く（元配偶者は色を変えて区別）
+  spouseNodesList.forEach(spouseNode => {
+    const spousePos = rowsDef[2].positions.find(p => p.member.key === spouseNode.key);
+    if (!selfPos || !spousePos) return;
     const y = selfPos.y + BOX_H / 2;
+    const goingRight = spousePos.x > selfPos.x;
     lines.push(/*#__PURE__*/React.createElement("line", {
-      key: "marriage",
-      x1: selfPos.x + BOX_W / 2,
+      key: "marriage-" + spouseNode.suspectId,
+      x1: goingRight ? selfPos.x + BOX_W / 2 : selfPos.x - BOX_W / 2,
       y1: y,
-      x2: spousePos.x - BOX_W / 2,
+      x2: goingRight ? spousePos.x - BOX_W / 2 : spousePos.x + BOX_W / 2,
       y2: y,
-      stroke: "var(--accent)",
+      stroke: spouseNode.isExSpouse ? 'var(--text-sub)' : 'var(--accent)',
       strokeWidth: "1.4",
-      strokeDasharray: "4,3"
+      strokeDasharray: spouseNode.isExSpouse ? "2,3" : "4,3"
     }));
-  }
+  });
+  // 子は「どちらの配偶者との子か」（groupKey）ごとに束ねて、その夫婦の中点から接続する
   if (rowsDef[3].positions.length) {
-    let originX = selfPos ? spousePos ? (selfPos.x + spousePos.x) / 2 : selfPos.x : midX(rowsDef[2].positions);
-    busConnect(originX, rowsDef[2].y + BOX_H / 2, rowsDef[3].positions, 'm2c');
+    const kidGroups = {};
+    rowsDef[3].positions.forEach(p => {
+      const gk = p.member.groupKey || 'self';
+      (kidGroups[gk] = kidGroups[gk] || []).push(p);
+    });
+    Object.keys(kidGroups).forEach(gk => {
+      const spouseNode = spouseNodesList.find(n => n.suspectId === gk);
+      const spousePos = spouseNode ? rowsDef[2].positions.find(p => p.member.key === spouseNode.key) : null;
+      const originX = selfPos ? spousePos ? (selfPos.x + spousePos.x) / 2 : selfPos.x : midX(kidGroups[gk]);
+      busConnect(originX, rowsDef[2].y + BOX_H / 2, kidGroups[gk], 'm2c-' + gk);
+    });
   }
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -15408,7 +15719,13 @@ function NexusFamilyTree({
       background: FAMILY_INSURANCE_COLOR[k],
       display: 'inline-block'
     }
-  }), FAMILY_INSURANCE_LABEL[k]))), /*#__PURE__*/React.createElement("div", {
+  }), FAMILY_INSURANCE_LABEL[k]))), spouseSuspects.length > 1 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      marginBottom: 8
+    }
+  }, "※ 点線グレーの婚姻線は「元配偶者」。お子様の続柄欄で親を選ぶと、どちらの婚姻関係の子か枝分けして表示されます。「養子等」に設定した子は名前欄に（養子等）と表示されます。"), /*#__PURE__*/React.createElement("div", {
     style: {
       overflowX: 'auto',
       background: 'var(--bg)',
@@ -15473,12 +15790,12 @@ function NexusFamilyTree({
       color: 'var(--text-sub)',
       marginBottom: 6
     }
-  }, "家族の既契約状況（タップで切替）"), [...(spouseNode ? [spouseNode] : []), ...grandparents, ...parents, ...siblings, ...cousins, ...kids].length === 0 ? /*#__PURE__*/React.createElement("div", {
+  }, "家族の既契約状況（タップで切替）"), [...spouseNodesList, ...grandparents, ...parents, ...siblings, ...cousins, ...kids].length === 0 ? /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12,
       color: 'var(--text-sub)'
     }
-  }, "同居家族が未登録です（顧客登録フォームの「サスペクト」から追加できます）") : [...(spouseNode ? [spouseNode] : []), ...grandparents, ...parents, ...siblings, ...cousins, ...kids].map(m => /*#__PURE__*/React.createElement("div", {
+  }, "同居家族が未登録です（顧客登録フォームの「サスペクト」から追加できます）") : [...spouseNodesList, ...grandparents, ...parents, ...siblings, ...cousins, ...kids].map(m => /*#__PURE__*/React.createElement("div", {
     key: m.key,
     style: {
       display: 'flex',
@@ -19592,6 +19909,7 @@ function App() {
     }
   }), tab === 'list' && /*#__PURE__*/React.createElement(CustomerListTab, {
     customers: customers,
+    setCustomers: setCustomers,
     onSelect: setSelectedCustomer,
     onAdd: openNewCustomer
   }), tab === 'memo' && /*#__PURE__*/React.createElement(NegotiationTab, {
