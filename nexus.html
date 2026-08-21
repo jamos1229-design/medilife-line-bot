@@ -10382,6 +10382,198 @@ function parseCSVFull(text) {
   return rows;
 }
 
+// ── 既契約一覧 Excel/CSV 取込機能 ──────────────────────────────
+// NEXUS側の契約項目と、それぞれに対応しそうなExcel列見出しの候補（自動判定用）。
+// 特定のフォーマットに固定せず、列名から自動判定できないものは列マッピング画面で
+// ユーザーに選んでもらう。
+const NEXUS_CONTRACT_IMPORT_FIELDS = [{
+  key: 'contractorName',
+  label: '契約者名（必須・NEXUSの顧客と照合）',
+  aliases: ['契約者氏名', '契約者名', '契約者', '顧客名', '顧客氏名', '氏名']
+}, {
+  key: 'insuredName',
+  label: '被保険者名',
+  aliases: ['被保険者氏名', '被保険者名', '被保険者']
+}, {
+  key: 'company',
+  label: '保険会社',
+  aliases: ['保険会社', '会社名', '取扱会社', '生保会社', '損保会社']
+}, {
+  key: 'type',
+  label: '商品名',
+  aliases: ['商品名', '商品', '保険商品', 'プラン名']
+}, {
+  key: 'insType',
+  label: '保険種類',
+  aliases: ['保険種類', '種類', '保険種別']
+}, {
+  key: 'policyNum',
+  label: '証券番号',
+  aliases: ['証券番号', '証券No', '証券no', '契約番号', '証書番号']
+}, {
+  key: 'date',
+  label: '契約日',
+  aliases: ['契約日', '契約年月日', '締結日', '始期日']
+}, {
+  key: 'termNote',
+  label: '保険期間',
+  aliases: ['保険期間', '契約期間']
+}, {
+  key: 'paymentCycle',
+  label: '払込方法',
+  aliases: ['払込方法', '払込区分', '払方', '払込']
+}, {
+  key: 'premium',
+  label: '保険料',
+  aliases: ['保険料', '保険料（月額）', '月額保険料', '保険料額']
+}, {
+  key: 'coverageAmount',
+  label: '保険金額',
+  aliases: ['保険金額', '保障額', '契約金額']
+}, {
+  key: 'paymentTermNote',
+  label: '払込期間',
+  aliases: ['払込期間', '保険料払込期間']
+}, {
+  key: 'contractStatus',
+  label: '契約状態',
+  aliases: ['契約状態', 'ステータス', '状態']
+}, {
+  key: 'memo',
+  label: '備考',
+  aliases: ['備考', 'メモ', '特記事項']
+}];
+// 見出し行から、各NEXUS項目に対応していそうな列を自動判定する（完全一致優先、部分一致で補完）。
+function nexusGuessColumnMapping(headers) {
+  const norm = h => (h || '').replace(/[\s　]/g, '');
+  const mapping = {};
+  NEXUS_CONTRACT_IMPORT_FIELDS.forEach(f => {
+    let idx = headers.findIndex(h => f.aliases.some(a => norm(h) === norm(a)));
+    if (idx < 0) idx = headers.findIndex(h => f.aliases.some(a => norm(h).includes(norm(a))));
+    mapping[f.key] = idx;
+  });
+  return mapping;
+}
+// ExcelJSのセル値（日付はDateオブジェクト、数式はresultプロパティを持つオブジェクト、
+// リッチテキストはrichプロパティを持つオブジェクトになる）を、そのままNEXUSの各項目に
+// 使える文字列に変換する。日付は契約日等にそのまま使えるよう YYYY-MM-DD 形式にする。
+function nexusExcelCellToString(v) {
+  if (v === null || v === undefined) return '';
+  if (v instanceof Date) return `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, '0')}-${String(v.getDate()).padStart(2, '0')}`;
+  if (typeof v === 'object') {
+    if (v.result !== undefined) return nexusExcelCellToString(v.result);
+    if (v.text !== undefined) return String(v.text);
+    if (Array.isArray(v.richText)) return v.richText.map(t => t.text).join('');
+    return '';
+  }
+  return String(v).trim();
+}
+// ファイル拡張子に応じて .xlsx（ExcelJS）／.csv（既存のRFC4180パーサー）を読み分け、
+// { headers, rows }（rowsは文字列の配列の配列）の形にそろえてcallbackへ渡す。
+// .xls（旧バイナリ形式）はExcelJSが対応していないため、その場合はエラーで知らせて
+// 「.xlsxで保存し直してください」と案内する（新しいライブラリを追加せず、既存のExcelJSを
+// 読み込み用途にも流用する方針のため）。
+function nexusParseWorkbookFile(file, callback) {
+  const name = (file.name || '').toLowerCase();
+  const toHeaderRows = rows => {
+    const filled = rows.filter(r => r.some(c => (c || '').toString().trim()));
+    if (filled.length < 1) {
+      alert('データがありません');
+      return;
+    }
+    const headers = filled[0].map(h => (h || '').toString().trim());
+    callback({
+      headers,
+      rows: filled.slice(1)
+    });
+  };
+  if (name.endsWith('.csv')) {
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        toHeaderRows(parseCSVFull(e.target.result));
+      } catch (err) {
+        alert('CSVの読み込みに失敗しました：' + err.message);
+      }
+    };
+    reader.readAsText(file, 'UTF-8');
+    return;
+  }
+  nexusEnsureExcelLib(() => {
+    file.arrayBuffer().then(buf => {
+      const wb = new window.ExcelJS.Workbook();
+      return wb.xlsx.load(buf).then(() => wb);
+    }).then(wb => {
+      const ws = wb.worksheets[0];
+      if (!ws) {
+        alert('シートが見つかりませんでした');
+        return;
+      }
+      const rows = [];
+      ws.eachRow(row => {
+        const vals = Array.isArray(row.values) ? row.values.slice(1) : [];
+        rows.push(vals.map(nexusExcelCellToString));
+      });
+      toHeaderRows(rows);
+    }).catch(() => {
+      alert(name.endsWith('.xls') ? '.xls形式は読み込めません。Excelで開いて「.xlsx」形式で保存し直してから、もう一度お試しください。' : 'ファイルの読み込みに失敗しました。ファイル形式をご確認ください。');
+    });
+  });
+}
+// 払込方法・契約状態は既存のContractBlockが固定の選択肢（PAYMENT_CYCLES／CONTRACT_STATUSES）の
+// <select>で表示するため、そこに無い文字列のまま保存すると編集画面で選択肢と一致せず
+// 表示が崩れる。取込時にできるだけ既存の選択肢へ正規化し、判定できないものは空欄のままにする
+// （空欄なら<select>は単に未選択状態になるだけで、崩れない）。
+function nexusNormalizePaymentCycle(raw) {
+  const s = (raw || '').trim();
+  if (!s) return '';
+  if (s.includes('一時')) return '一時払';
+  if (s.includes('全期')) return '全期前納';
+  if (s.includes('前期') || s.includes('前納')) return '前期前納';
+  if (s.includes('年')) return '年払';
+  if (s.includes('月')) return '月払';
+  return '';
+}
+function nexusNormalizeContractStatus(raw) {
+  const s = (raw || '').trim();
+  const found = CONTRACT_STATUSES.find(v => s.includes(v));
+  return found || '';
+}
+function nexusGuessCategory(typeText, insTypeText) {
+  const s = `${typeText || ''}${insTypeText || ''}`;
+  return /火災|自動車|傷害|損保|地震|賠償/.test(s) ? '損保' : '生保';
+}
+// 列マッピング設定の保存・再利用（同じ形式のExcelなら次回から選ぶだけで済むように）。
+// リアクティブなアプリ状態には含めず、localStorageに直接読み書きする軽量な設定値として扱う。
+const NEXUS_CONTRACT_MAPPING_KEY = 'nexus_contract_import_mappings_v1';
+function nexusLoadContractMappingPresets() {
+  try {
+    return JSON.parse(localStorage.getItem(NEXUS_CONTRACT_MAPPING_KEY) || '{}');
+  } catch {
+    return {};
+  }
+}
+function nexusSaveContractMappingPreset(name, headers, mapping) {
+  const presets = nexusLoadContractMappingPresets();
+  presets[name] = {
+    headers,
+    mapping
+  };
+  try {
+    localStorage.setItem(NEXUS_CONTRACT_MAPPING_KEY, JSON.stringify(presets));
+  } catch {}
+}
+// 契約の重複チェック：証券番号が一致すれば原則同一契約候補とみなす。証券番号が
+// どちらかに無い場合は、保険会社・商品名・契約日の組み合わせで判定する。
+function nexusFindDuplicateContract(candidate, existingContracts) {
+  return (existingContracts || []).find(ex => {
+    if (candidate.policyNum && ex.policyNum) {
+      return candidate.policyNum.trim() === ex.policyNum.trim();
+    }
+    return (candidate.company || '') === (ex.company || '') && (candidate.type || '') === (ex.type || '') && (candidate.date || '') === (ex.date || '') && !!(candidate.company || candidate.type);
+  });
+}
+
 // ── 商談メモCSVインポート（shodan3.html形式）─────────────────
 function importShodanCSV(file, setMemos) {
   const reader = new FileReader();
@@ -13051,6 +13243,407 @@ function NexusImageImportScreen({
   }, "選択した項目を登録する"))));
 }
 
+// ── 既契約Excel/CSV取込：プレビュー画面の1契約行 ────────────────
+function NexusContractImportRow({
+  row,
+  onUpdate
+}) {
+  const badge = row.status === 'duplicate' ? {
+    label: '既存契約あり',
+    bg: '#FEF3C7',
+    color: '#B45309'
+  } : row.status === 'needs_review' ? {
+    label: '確認が必要',
+    bg: '#FEE2E2',
+    color: '#DC2626'
+  } : {
+    label: '新規',
+    bg: '#DCFCE7',
+    color: '#16A34A'
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      padding: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: row.include,
+    onChange: e => onUpdate({
+      include: e.target.checked
+    }),
+    style: {
+      width: 18,
+      height: 18,
+      flexShrink: 0
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    style: {
+      background: badge.bg,
+      color: badge.color
+    }
+  }, badge.label), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 13,
+      fontWeight: 700,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
+    }
+  }, row.contractorName || '（契約者名なし）')), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--text-sub)',
+      marginBottom: 8,
+      lineHeight: 1.7
+    }
+  }, row.contract.company || '保険会社未記入', "／", row.contract.type || '商品名未記入', row.contract.policyNum && ` ／証券番号：${row.contract.policyNum}`, /*#__PURE__*/React.createElement("br", null), row.contract.date && `契約日：${row.contract.date}　`, row.contract.premium && `保険料：${Number(row.contract.premium).toLocaleString ? Number(row.contract.premium).toLocaleString() : row.contract.premium}円`), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "登録先"), /*#__PURE__*/React.createElement("select", {
+    className: "form-select",
+    value: row.resolution,
+    onChange: e => onUpdate({
+      resolution: e.target.value
+    })
+  }, row.matches.map(c => /*#__PURE__*/React.createElement("option", {
+    key: c.id,
+    value: c.id
+  }, `既存「${nexusDisplayName(c)}」に登録`)), /*#__PURE__*/React.createElement("option", {
+    value: "new_customer"
+  }, "新しい顧客として登録"), /*#__PURE__*/React.createElement("option", {
+    value: "skip"
+  }, "今回は取り込まない")), row.matches.length > 1 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: '#DC2626',
+      marginTop: 4
+    }
+  }, "「", row.contractorName, "」という顧客が", row.matches.length, "名います。どちらに登録するか選んでください。")));
+}
+// ── 既契約Excel/CSV取込：ファイル選択 → 列マッピング → プレビュー確認画面 ──
+function NexusContractImportScreen({
+  customers,
+  setCustomers,
+  onClose
+}) {
+  const [phase, setPhase] = useState('pick'); // 'pick' | 'mapping' | 'preview'
+  const [headers, setHeaders] = useState([]);
+  const [rawRows, setRawRows] = useState([]);
+  const [mapping, setMapping] = useState({});
+  const [presetName, setPresetName] = useState('');
+  const [previewRows, setPreviewRows] = useState([]);
+  const fileRef = React.useRef(null);
+  const presets = nexusLoadContractMappingPresets();
+  const handleFile = file => {
+    if (!file) return;
+    nexusParseWorkbookFile(file, ({
+      headers: h,
+      rows
+    }) => {
+      setHeaders(h);
+      setRawRows(rows);
+      setMapping(nexusGuessColumnMapping(h));
+      setPhase('mapping');
+    });
+  };
+  const applyPreset = name => {
+    const preset = presets[name];
+    if (!preset) return;
+    const newMapping = {};
+    NEXUS_CONTRACT_IMPORT_FIELDS.forEach(f => {
+      const idx = preset.mapping[f.key];
+      const headerName = idx !== undefined && idx >= 0 ? preset.headers[idx] : null;
+      newMapping[f.key] = headerName ? headers.indexOf(headerName) : -1;
+    });
+    setMapping(newMapping);
+  };
+  const handleSavePreset = () => {
+    const name = (presetName || '').trim();
+    if (!name) {
+      alert('マッピング設定の名前を入力してください');
+      return;
+    }
+    nexusSaveContractMappingPreset(name, headers, mapping);
+    alert(`「${name}」として保存しました`);
+  };
+  const buildPreview = () => {
+    const get = (row, key) => {
+      const idx = mapping[key];
+      return idx !== undefined && idx >= 0 ? (row[idx] || '').toString().trim() : '';
+    };
+    const rows = rawRows.map(row => {
+      const contractorName = get(row, 'contractorName');
+      const company = get(row, 'company');
+      const type = get(row, 'type');
+      const insType = get(row, 'insType');
+      const policyNum = get(row, 'policyNum');
+      if (!contractorName && !company && !policyNum) return null;
+      const contract = {
+        id: uid(),
+        contractStatus: nexusNormalizeContractStatus(get(row, 'contractStatus')) || '有効',
+        category: nexusGuessCategory(type, insType),
+        type: type || insType || '',
+        company,
+        policyNum,
+        insuredName: get(row, 'insuredName'),
+        premium: get(row, 'premium').replace(/[,円¥\s]/g, ''),
+        paymentCycle: nexusNormalizePaymentCycle(get(row, 'paymentCycle')),
+        date: get(row, 'date'),
+        termNote: get(row, 'termNote'),
+        paymentTermNote: get(row, 'paymentTermNote'),
+        coverageAmount: get(row, 'coverageAmount').replace(/[,円¥\s]/g, ''),
+        memo: get(row, 'memo')
+      };
+      const normName = s => (s || '').replace(/[\s　]/g, '');
+      const matches = contractorName ? customers.filter(c => normName(nexusDisplayName(c)) === normName(contractorName)) : [];
+      let resolution, status;
+      if (!contractorName) {
+        resolution = 'skip';
+        status = 'needs_review';
+      } else if (matches.length === 1) {
+        resolution = matches[0].id;
+        status = nexusFindDuplicateContract(contract, matches[0].contracts || []) ? 'duplicate' : 'new';
+      } else if (matches.length === 0) {
+        resolution = 'new_customer';
+        status = 'needs_review';
+      } else {
+        resolution = matches[0].id;
+        status = 'needs_review';
+      }
+      return {
+        id: uid(),
+        contractorName,
+        contract,
+        matches,
+        resolution,
+        status,
+        include: status !== 'duplicate'
+      };
+    }).filter(Boolean);
+    setPreviewRows(rows);
+    setPhase('preview');
+  };
+  const updatePreviewRow = (id, patch) => setPreviewRows(prev => prev.map(r => r.id === id ? {
+    ...r,
+    ...patch
+  } : r));
+  const handleCommit = () => {
+    const toCommit = previewRows.filter(r => r.include && r.resolution !== 'skip');
+    if (toCommit.length === 0) {
+      alert('登録する契約がありません');
+      return;
+    }
+    let newCustomerCount = 0;
+    setCustomers(prev => {
+      let next = [...prev];
+      const newlyCreatedByName = {};
+      toCommit.forEach(r => {
+        if (r.resolution === 'new_customer') {
+          let custId = newlyCreatedByName[r.contractorName];
+          if (!custId) {
+            custId = uid();
+            newlyCreatedByName[r.contractorName] = custId;
+            newCustomerCount++;
+            next = [...next, {
+              id: custId,
+              customerType: '個人',
+              name: r.contractorName,
+              furigana: '',
+              age: '',
+              gender: '',
+              birthdate: '',
+              phone: '',
+              email: '',
+              postalCode: '',
+              address: '',
+              occupation: '',
+              workplace: '',
+              maritalStatus: '',
+              dualIncome: false,
+              employmentType: '',
+              status: '未接触',
+              contactMethod: '電話',
+              contactChannel: '',
+              lastContact: '',
+              nextAppt: '',
+              memo: 'Excel取込で自動作成',
+              lineRegistered: false,
+              contracts: [],
+              suspects: [],
+              referredBy: '',
+              referredByName: '',
+              referredTo: [],
+              linkedCorpId: ''
+            }];
+          }
+          next = next.map(c => c.id === custId ? {
+            ...c,
+            contracts: [...(c.contracts || []), r.contract]
+          } : c);
+        } else {
+          next = next.map(c => c.id === r.resolution ? {
+            ...c,
+            contracts: [...(c.contracts || []), r.contract]
+          } : c);
+        }
+      });
+      return next;
+    });
+    alert(`取込完了：契約 ${toCommit.length}件を登録しました（新しく作成した顧客：${newCustomerCount}件）`);
+    onClose();
+  };
+  const counts = {
+    total: previewRows.length,
+    fresh: previewRows.filter(r => r.status === 'new').length,
+    duplicate: previewRows.filter(r => r.status === 'duplicate').length,
+    review: previewRows.filter(r => r.status === 'needs_review').length
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: "full-screen"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "full-header"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn-ghost",
+    onClick: onClose
+  }, "← 閉じる"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 15
+    }
+  }, "既契約Excel/CSV取込")), /*#__PURE__*/React.createElement("div", {
+    className: "full-content"
+  }, phase === 'pick' && /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      marginBottom: 10,
+      lineHeight: 1.6
+    }
+  }, "既契約一覧のファイル（.xlsx / .csv）を選んでください。列の見出しが違っていても、次の画面で対応する項目を選べます。"), /*#__PURE__*/React.createElement("input", {
+    ref: fileRef,
+    type: "file",
+    accept: ".xlsx,.xls,.csv",
+    style: {
+      display: 'none'
+    },
+    onChange: e => handleFile(e.target.files[0])
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-full",
+    onClick: () => fileRef.current?.click()
+  }, "📑 ファイルを選ぶ")), phase === 'mapping' && /*#__PURE__*/React.createElement(React.Fragment, null, Object.keys(presets).length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "form-label"
+  }, "保存済みのマッピング設定を使う"), /*#__PURE__*/React.createElement("select", {
+    className: "form-select",
+    defaultValue: "",
+    onChange: e => {
+      if (e.target.value) applyPreset(e.target.value);
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "選択してください"), Object.keys(presets).map(name => /*#__PURE__*/React.createElement("option", {
+    key: name,
+    value: name
+  }, name)))), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 13,
+      marginBottom: 10
+    }
+  }, "Excelのこの列を、NEXUSのどの項目に対応させますか？"), NEXUS_CONTRACT_IMPORT_FIELDS.map(f => /*#__PURE__*/React.createElement("div", {
+    key: f.key,
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, f.label), /*#__PURE__*/React.createElement("select", {
+    className: "form-select",
+    value: mapping[f.key] !== undefined ? mapping[f.key] : -1,
+    onChange: e => setMapping(m => ({
+      ...m,
+      [f.key]: parseInt(e.target.value, 10)
+    }))
+  }, /*#__PURE__*/React.createElement("option", {
+    value: -1
+  }, "（使用しない）"), headers.map((h, i) => /*#__PURE__*/React.createElement("option", {
+    key: i,
+    value: i
+  }, h))))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      alignItems: 'center',
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    placeholder: "例：CSB既契約一覧",
+    value: presetName,
+    onChange: e => setPresetName(e.target.value),
+    style: {
+      flex: 1
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-sm",
+    onClick: handleSavePreset
+  }, "設定を保存"))), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-full",
+    onClick: buildPreview
+  }, "次へ（取込内容を確認）")), phase === 'preview' && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      fontSize: 12.5,
+      lineHeight: 1.9
+    }
+  }, "読み込み件数：", /*#__PURE__*/React.createElement("b", null, counts.total, "件"), /*#__PURE__*/React.createElement("br", null), "新規契約：", /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: 'var(--success)'
+    }
+  }, counts.fresh, "件"), "　／　既存契約（重複候補）：", /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: '#B45309'
+    }
+  }, counts.duplicate, "件"), "　／　確認が必要：", /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: '#DC2626'
+    }
+  }, counts.review, "件")), previewRows.map(r => /*#__PURE__*/React.createElement(NexusContractImportRow, {
+    key: r.id,
+    row: r,
+    onUpdate: patch => updatePreviewRow(r.id, patch)
+  })), previewRows.length === 0 && /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--text-sub)'
+    }
+  }, "取り込める行がありませんでした。列マッピングをご確認ください。")), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-full",
+    onClick: handleCommit
+  }, "選択した契約を登録する"))));
+}
+
 // ── 顧客一覧（人脈ネクサス視点：検索・CSV連携）─────────────────
 function NexusListSection({
   customers,
@@ -13064,6 +13657,7 @@ function NexusListSection({
   const filtered = customers.filter(c => nexusMatchesQuery(c, query));
   const csvRef = React.useRef(null);
   const [showImageImport, setShowImageImport] = useState(false);
+  const [showContractImport, setShowContractImport] = useState(false);
   const exportCSV = () => {
     const byId = {};
     customers.forEach(c => byId[c.id] = c);
@@ -13094,13 +13688,14 @@ function NexusListSection({
   }, "×")), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
+      flexWrap: 'wrap',
       gap: 8,
       marginBottom: 10
     }
   }, /*#__PURE__*/React.createElement("button", {
     className: "btn btn-outline btn-sm",
     style: {
-      flex: 1
+      flex: '1 1 45%'
     },
     onClick: () => csvRef.current?.click()
   }, "📥 CSV取込"), /*#__PURE__*/React.createElement("input", {
@@ -13119,16 +13714,22 @@ function NexusListSection({
   }), /*#__PURE__*/React.createElement("button", {
     className: "btn btn-outline btn-sm",
     style: {
-      flex: 1
+      flex: '1 1 45%'
     },
     onClick: exportCSV
   }, "📤 CSV書出"), /*#__PURE__*/React.createElement("button", {
     className: "btn btn-outline btn-sm",
     style: {
-      flex: 1
+      flex: '1 1 45%'
     },
     onClick: () => setShowImageImport(true)
-  }, "🖼️ 画像から取込")), /*#__PURE__*/React.createElement("div", {
+  }, "🖼️ 画像から取込"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-outline btn-sm",
+    style: {
+      flex: '1 1 45%'
+    },
+    onClick: () => setShowContractImport(true)
+  }, "📑 既契約Excel取込")), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 10.5,
       color: 'var(--text-sub)',
@@ -13213,6 +13814,10 @@ function NexusListSection({
     customers: customers,
     setCustomers: setCustomers,
     onClose: () => setShowImageImport(false)
+  }), showContractImport && /*#__PURE__*/React.createElement(NexusContractImportScreen, {
+    customers: customers,
+    setCustomers: setCustomers,
+    onClose: () => setShowContractImport(false)
   }));
 }
 
