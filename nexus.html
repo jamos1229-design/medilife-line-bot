@@ -10570,6 +10570,46 @@ function nexusEnsureOcrLib(callback) {
   script.onerror = () => alert('画像認識ライブラリの読み込みに失敗しました。インターネット接続をご確認のうえ、もう一度お試しください。');
   document.head.appendChild(script);
 }
+// モニターをスマホで撮影した写真は、カメラのセンサーと画面の格子が干渉して虹色の縞模様
+// （モアレ）が出やすく、そのままだと文字認識の精度が大きく落ちる。モアレは主に色の
+// ズレとして現れるため、輝度だけを使ってグレースケール化するとかなり軽減できる。
+// あわせてコントラストを強調し、文字が小さい写真は拡大して読み取りやすくする。
+function nexusPreprocessImageForOcr(file, callback) {
+  try {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      try {
+        const scale = img.width < 1800 ? Math.min(2.2, 1800 / img.width) : 1;
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const d = imgData.data;
+        for (let i = 0; i < d.length; i += 4) {
+          const gray = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+          const contrasted = Math.max(0, Math.min(255, (gray - 128) * 1.35 + 128));
+          d[i] = d[i + 1] = d[i + 2] = contrasted;
+        }
+        ctx.putImageData(imgData, 0, 0);
+        URL.revokeObjectURL(url);
+        canvas.toBlob(blob => callback(blob || file), 'image/png');
+      } catch (e) {
+        URL.revokeObjectURL(url);
+        callback(file);
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      callback(file);
+    };
+    img.src = url;
+  } catch (e) {
+    callback(file);
+  }
+}
 const NEXUS_PREFECTURES = ['北海道', '青森県', '岩手県', '宮城県', '秋田県', '山形県', '福島県', '茨城県', '栃木県', '群馬県', '埼玉県', '千葉県', '東京都', '神奈川県', '新潟県', '富山県', '石川県', '福井県', '山梨県', '長野県', '岐阜県', '静岡県', '愛知県', '三重県', '滋賀県', '京都府', '大阪府', '兵庫県', '奈良県', '和歌山県', '鳥取県', '島根県', '岡山県', '広島県', '山口県', '徳島県', '香川県', '愛媛県', '高知県', '福岡県', '佐賀県', '長崎県', '熊本県', '大分県', '宮崎県', '鹿児島県', '沖縄県'];
 // OCRで読み取った1行のテキストから、氏名・フリガナ・生年月日・電話番号・郵便番号・住所・
 // メールアドレスをそれぞれ抜き出す。OCRは表の列構造までは分からず1行のテキストしか
@@ -10599,8 +10639,12 @@ function nexusParseOcrLine(line) {
     address = rest.slice(start).trim();
     rest = rest.slice(0, start);
   }
-  const tokens = rest.split(/[\s、,　]+/).map(t => t.trim()).filter(Boolean);
-  const isKatakana = t => /^[ァ-ヶーA-Za-z]+$/.test(t);
+  // 表のラベル・記号など、氏名・フリガナとして混入しやすいノイズ語を除外する
+  // （「本人」は被保険者欄などで「契約者と同一」を表す定型語として現れることが多い）
+  const NOISE_TOKENS = ['本人', '個人', '法人', '不明', '男性', '女性', '未登録'];
+  const isGarbage = t => NOISE_TOKENS.includes(t) || t.length <= 1 || /^[a-z]+$/.test(t) || /^[|＊*ー\-＿_.。、,]+$/.test(t);
+  const tokens = rest.split(/[\s、,　]+/).map(t => t.trim()).filter(Boolean).filter(t => !isGarbage(t));
+  const isKatakana = t => /^[ァ-ヶー]+$/.test(t);
   const furiganaTokens = tokens.filter(isKatakana);
   const nameTokens = tokens.filter(t => !isKatakana(t));
   return {
@@ -13381,9 +13425,10 @@ function NexusImageImportScreen({
           const collected = [];
           for (let i = 0; i < files.length; i++) {
             setProgressText(`画像を読み取り中…（${i + 1}/${files.length}）`);
+            const processed = await new Promise(resolve => nexusPreprocessImageForOcr(files[i], resolve));
             const {
               data
-            } = await window.Tesseract.recognize(files[i], 'jpn');
+            } = await window.Tesseract.recognize(processed || files[i], 'jpn');
             nexusExtractOcrRows(data.text || '').forEach(r => collected.push(r));
           }
           const withMeta = collected.map(r => ({
@@ -13485,7 +13530,17 @@ function NexusImageImportScreen({
       marginBottom: 10,
       lineHeight: 1.6
     }
-  }, "顧客一覧のスクリーンショットや写真を選んでください（複数選択可）。画像はこの端末内だけで処理され、外部には送信されません。読み取り後、内容を確認・修正してから登録します。"), /*#__PURE__*/React.createElement("input", {
+  }, "顧客一覧のスクリーンショットや写真を選んでください（複数選択可）。画像はこの端末内だけで処理され、外部には送信されません。読み取り後、内容を確認・修正してから登録します。"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: 'var(--accent-light)',
+      borderRadius: 10,
+      padding: '10px 12px',
+      marginBottom: 10,
+      fontSize: 12,
+      lineHeight: 1.7,
+      color: 'var(--text)'
+    }
+  }, /*#__PURE__*/React.createElement("b", null, "📸 精度を上げるコツ（モニターを撮影する場合）"), /*#__PURE__*/React.createElement("div", null, "・画面から少し離れて、ズームで寄って撮ると虹色の縞模様（モアレ）が出にくくなります"), /*#__PURE__*/React.createElement("div", null, "・列が多い表は1枚に収めず、5〜6列ずつに分けて大きく写すと読み取り精度が上がります"), /*#__PURE__*/React.createElement("div", null, "・真正面より少し斜めから、画面の明るさは中〜低めにすると縞模様が減ります"), /*#__PURE__*/React.createElement("div", null, "・「…」で省略表示されている列（フリガナ等）は、画像上でも読めないため取り込めません")), /*#__PURE__*/React.createElement("input", {
     ref: fileRef,
     type: "file",
     accept: "image/*",
