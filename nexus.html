@@ -10659,9 +10659,9 @@ function nexusMatchInsuranceCompany(text) {
 // 精度を追い求めすぎず、間違っていても「取込内容確認」画面で手修正できる前提でよい。
 function nexusParseOcrLine(line) {
   // 電話番号の先頭「0」が、字形の似ているアルファベット「o」「O」に誤読される
-  // ケースが非常に多いため、電話番号らしい並び（o+数字-数字-数字）に限定して
+  // ケースが非常に多いため、電話番号らしい並び（o+数字/区切りの並び）に限定して
   // 先頭だけ「0」に補正しておく（無関係な単語まで書き換えないよう範囲を絞る）。
-  let rest = line.replace(/\b[oO](\d{1,4}[-.]\d{1,4}[-.]\d{3,4})/g, '0$1');
+  let rest = line.replace(/\b[oO]([\d.-]{7,12}\d)/g, '0$1');
   const take = re => {
     const m = rest.match(re);
     if (!m) return '';
@@ -10670,17 +10670,38 @@ function nexusParseOcrLine(line) {
   };
   const emailM = take(/[\w.+-]+@[\w-]+\.[\w.-]+/);
   const email = emailM ? emailM[0] : '';
-  // 電話番号（3グループ・区切り必須）を先に抜き出してから郵便番号（2グループ・
-  // 区切り必須）を探す。区切りを省略可にすると、電話番号の一部（例：
-  // 「090-5745」）や証券番号の数字の一部を郵便番号として誤って拾ってしまうため、
-  // どちらも区切り文字を必須にして誤爆を防ぐ。区切りはハイフンだけでなく、細い
-  // ハイフンがOCRでピリオドと誤認識されるケースが非常に多いため「.」も許容する。
-  const phoneM = take(/0\d{1,4}[-.]\d{1,4}[-.]\d{3,4}/);
-  const phone = phoneM ? phoneM[0].replace(/\./g, '-') : '';
-  const postalM = take(/〒?\s*(\d{3})[-.](\d{4})/);
-  const postalCode = postalM ? `${postalM[1]}-${postalM[2]}` : '';
-  const birthM = take(/((?:19|20)\d{2})[\/\-年.](\d{1,2})[\/\-月.](\d{1,2})日?/);
-  const birthdate = birthM ? `${birthM[1]}-${String(birthM[2]).padStart(2, '0')}-${String(birthM[3]).padStart(2, '0')}` : '';
+  // 電話番号・郵便番号の区切り文字（ハイフン）は、OCRでは「.」に誤読されたり、
+  // 完全に消えてしまうことが非常に多い。そのため区切りの有無・種類に頼らず、
+  // 「前後が数字で挟まれていない、指定の桁数の数字（区切り文字混じり可）」という
+  // 境界条件だけで判定する（前後読み境界（lookaround）を使うことで、証券番号等の
+  // より長い数字列の一部を誤って拾うことを防ぐ）。ただし電話番号は、区切りが
+  // 完全に0個だと「証券番号（0始まりの数字だけのもの）」と区別がつかなくなるため、
+  // 少なくとも1個は区切り文字（-か.）が含まれることを条件にする。
+  const phoneM = rest.match(/(?<!\d)0(?=[\d.-]*[.-])[\d.-]{8,12}\d(?!\d)/);
+  let phone = '';
+  if (phoneM) {
+    const digits = phoneM[0].replace(/\D/g, '');
+    if (digits.length === 10 || digits.length === 11) {
+      phone = phoneM[0].replace(/\./g, '-');
+      rest = rest.slice(0, phoneM.index) + ' ' + rest.slice(phoneM.index + phoneM[0].length);
+    }
+  }
+  const postalM = rest.match(/(?<!\d)(\d{3})[-.]?(\d{4})(?!\d)/);
+  let postalCode = '';
+  if (postalM) {
+    postalCode = `${postalM[1]}-${postalM[2]}`;
+    rest = rest.slice(0, postalM.index) + ' ' + rest.slice(postalM.index + postalM[0].length);
+  }
+  // 生年月日の区切り文字は、年-月の間だけ消えていたり、月-日の間だけ消えていたりと
+  // 消え方が一定しないため、区切りを個別に必須/省略にするのではなく年・月・日の
+  // 3グループそれぞれで区切りを任意（0個でも可）にする。その代わり月(01-12)・
+  // 日(01-31)として妥当な範囲かを厳密にチェックし、無関係な数字列への誤爆を防ぐ。
+  let birthdate = '';
+  const birthM = rest.match(/(?<!\d)((?:19|20)\d{2})[\/\-年.]?(0?[1-9]|1[0-2])[\/\-月.]?(0?[1-9]|[12]\d|3[01])日?(?!\d)/);
+  if (birthM) {
+    birthdate = `${birthM[1]}-${birthM[2].padStart(2, '0')}-${birthM[3].padStart(2, '0')}`;
+    rest = rest.slice(0, birthM.index) + ' ' + rest.slice(birthM.index + birthM[0].length);
+  }
   const genderM = rest.match(/男性|女性/);
   const gender = genderM ? genderM[0] : '';
   if (genderM) rest = rest.slice(0, genderM.index) + ' ' + rest.slice(genderM.index + genderM[0].length);
