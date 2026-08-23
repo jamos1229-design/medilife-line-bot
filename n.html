@@ -12129,25 +12129,116 @@ function nexusGuessColumnMapping(headers) {
   });
   return mapping;
 }
-// ExcelJSのセル値（日付はDateオブジェクト、数式はresultプロパティを持つオブジェクト、
-// リッチテキストはrichプロパティを持つオブジェクトになる）を、そのままNEXUSの各項目に
-// 使える文字列に変換する。日付は契約日等にそのまま使えるよう YYYY-MM-DD 形式にする。
-function nexusExcelCellToString(v) {
-  if (v === null || v === undefined) return '';
-  if (v instanceof Date) return `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, '0')}-${String(v.getDate()).padStart(2, '0')}`;
-  if (typeof v === 'object') {
-    if (v.result !== undefined) return nexusExcelCellToString(v.result);
-    if (v.text !== undefined) return String(v.text);
-    if (Array.isArray(v.richText)) return v.richText.map(t => t.text).join('');
-    return '';
-  }
-  return String(v).trim();
+// ── 「契約内容のご案内」形式（1顧客・複数契約の通知書レイアウト）の解析 ──
+// 保険代理店システムが出力する既契約一覧の中には、1行=1契約の単純な表ではなく、
+// 見出し行の後に「1契約が4行前後（会社名・証券番号/カナ/商品名・生年月日・年齢/特約）」
+// という形で並ぶ「通知書」形式のものがある。列マッピング画面では対応できない構造の
+// ため、専用の解析関数を用意し、見出し行が見つかった場合は自動的にこちらを使う。
+const NEXUS_NOTICE_REPORT_HEADER = ['保険会社/証番', '契約者'];
+function nexusLooksLikeInsuranceNoticeReport(rows) {
+  return rows.some(r => (r[0] || '').toString().trim() === NEXUS_NOTICE_REPORT_HEADER[0] && (r[1] || '').toString().trim() === NEXUS_NOTICE_REPORT_HEADER[1]);
 }
-// ファイル拡張子に応じて .xlsx（ExcelJS）／.csv（既存のRFC4180パーサー）を読み分け、
-// { headers, rows }（rowsは文字列の配列の配列）の形にそろえてcallbackへ渡す。
-// .xls（旧バイナリ形式）はExcelJSが対応していないため、その場合はエラーで知らせて
-// 「.xlsxで保存し直してください」と案内する（新しいライブラリを追加せず、既存のExcelJSを
-// 読み込み用途にも流用する方針のため）。
+// 契約の先頭行（1件目の行）かどうかを判定する。空行での区切りに頼ると、実データで
+// 契約と契約の間に空行が無いケースがあり（同じ保険会社の契約が連続する場合等）、
+// 1件まるごと読み落として次の契約の内容と混ざってしまう実バグがあった。
+// そのため「col0が日本語（会社名）で、col1（契約者名）も入っている」という、
+// 契約の先頭行だけに現れる形をアンカーとして使う（証券番号の行はcol0が数字のみ、
+// 末尾の署名行はcol1が空、のため誤検出しない）。
+function nexusIsNoticeContractStartRow(row) {
+  const col0 = (row[0] || '').toString().trim();
+  const col1 = (row[1] || '').toString().trim();
+  return /[一-龠々ぁ-んァ-ヶー]/.test(col0) && !!col1;
+}
+// 「満期日 :」のようにラベルだけで値が空のセルを、ラベル文字列のままデータとして
+// 誤って採用しないよう、値が無ければ空文字を返す。
+function nexusStripNoticeLabel(s, prefixRe) {
+  const m = (s || '').toString().match(prefixRe);
+  return m ? (m[1] || '').trim() : '';
+}
+function nexusFindNoticeCustomerName(rows, headerRowIdx) {
+  for (let i = 0; i < headerRowIdx; i++) {
+    const cell = (rows[i][0] || '').toString().trim();
+    const m = cell.match(/^(.+?)\s*様$/);
+    if (m) return m[1].trim();
+  }
+  return '';
+}
+function nexusParseInsuranceNoticeReport(rows) {
+  const headerRowIdx = rows.findIndex(r => (r[0] || '').toString().trim() === NEXUS_NOTICE_REPORT_HEADER[0] && (r[1] || '').toString().trim() === NEXUS_NOTICE_REPORT_HEADER[1]);
+  if (headerRowIdx === -1) return {
+    customerName: '',
+    contracts: []
+  };
+  const customerName = nexusFindNoticeCustomerName(rows, headerRowIdx);
+  const dataRows = rows.slice(headerRowIdx + 1);
+  const startIndexes = [];
+  dataRows.forEach((r, i) => {
+    if (nexusIsNoticeContractStartRow(r)) startIndexes.push(i);
+  });
+  const blocks = startIndexes.map((startIdx, i) => dataRows.slice(startIdx, i + 1 < startIndexes.length ? startIndexes[i + 1] : dataRows.length));
+  const contracts = blocks.map(block => {
+    const row0 = block[0] || [];
+    const row1 = block[1] || [];
+    const row2 = block[2] || [];
+    const cell = (r, i) => ((r || [])[i] || '').toString().trim();
+    const riders = [];
+    for (let i = 3; i < block.length; i++) {
+      const riderName = cell(block[i], 3);
+      const riderAmount = cell(block[i], 4);
+      if (riderName) riders.push({
+        name: riderName,
+        amount: riderAmount
+      });
+    }
+    return {
+      company: cell(row0, 0),
+      policyNum: cell(row1, 0),
+      contractorName: cell(row0, 1),
+      insuredName: cell(row0, 2),
+      contractorKana: cell(row1, 1),
+      insuredKana: cell(row1, 2),
+      contractorBirthdate: cell(row2, 1),
+      insuredBirthdate: cell(row2, 2),
+      productType: cell(row1, 3),
+      coverageAmount: cell(row0, 4),
+      premiumMonthly: cell(row0, 5),
+      premiumTotal: cell(row0, 6),
+      paymentCycle: nexusStripNoticeLabel(row0[7], /払込方法[:：]\s*(.+)/),
+      contractDate: nexusStripNoticeLabel(row0[8], /契約日[:：]\s*(.+)/),
+      insurancePeriod: nexusStripNoticeLabel(row1[7], /保険期間[:：]\s*(.+)/),
+      maturityDate: nexusStripNoticeLabel(row1[8], /満期日\s*[:：]\s*(.+)/),
+      paymentTermNote: nexusStripNoticeLabel(row2[7], /払込期間[:：]\s*(.+)/),
+      status: cell(row0, 9),
+      riders
+    };
+  }).filter(c => c.company || c.policyNum);
+  return {
+    customerName,
+    contracts
+  };
+}
+// ファイル拡張子に応じて .xlsx/.xls（SheetJS）／.csv（既存のRFC4180パーサー）を読み分け、
+// callbackへ結果を渡す。SheetJSは新しいOOXML形式(.xlsx)と旧バイナリ形式(.xls)の
+// どちらも同じAPIで読めるため、旧形式でも「シートが見つかりませんでした」等の
+// 分かりにくいエラーにならず、そのまま取り込める（ExcelJSは.xlsxのみ対応で、.xlsを
+// 渡すとエラーを出さずにワークシート0件のまま処理が進んでしまう問題があった）。
+// 通常の「1行=1見出し＋1行=1契約」の表は{kind:'flat', headers, rows}を、
+// 「契約内容のご案内」のような1契約=複数行の通知書形式は見出し行を自動検出して
+// {kind:'noticeReport', customerName, contracts}を返す。
+// 契約書き出し（印刷・Excel出力）用のExcelJSとは別に、契約一覧の読み込み専用で
+// SheetJSを遅延読み込みする。SheetJSはセル装飾の書き出しには向かないが、旧形式
+// (.xls)を含む読み込み耐性がExcelJSより高く、読み込み専用の用途に向いている。
+function nexusEnsureXlsxLib(callback) {
+  if (window.XLSX) {
+    callback();
+    return;
+  }
+  const script = document.createElement('script');
+  script.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+  script.onload = callback;
+  script.onerror = () => alert('Excel読み込みライブラリの取得に失敗しました。通信環境をご確認のうえ、もう一度お試しください。');
+  document.head.appendChild(script);
+}
 function nexusParseWorkbookFile(file, callback) {
   const name = (file.name || '').toLowerCase();
   const toHeaderRows = rows => {
@@ -12158,6 +12249,7 @@ function nexusParseWorkbookFile(file, callback) {
     }
     const headers = filled[0].map(h => (h || '').toString().trim());
     callback({
+      kind: 'flat',
       headers,
       rows: filled.slice(1)
     });
@@ -12174,24 +12266,37 @@ function nexusParseWorkbookFile(file, callback) {
     reader.readAsText(file, 'UTF-8');
     return;
   }
-  nexusEnsureExcelLib(() => {
+  nexusEnsureXlsxLib(() => {
     file.arrayBuffer().then(buf => {
-      const wb = new window.ExcelJS.Workbook();
-      return wb.xlsx.load(buf).then(() => wb);
-    }).then(wb => {
-      const ws = wb.worksheets[0];
-      if (!ws) {
+      const wb = window.XLSX.read(new Uint8Array(buf), {
+        type: 'array'
+      });
+      const sheetName = wb.SheetNames[0];
+      if (!sheetName) {
         alert('シートが見つかりませんでした');
         return;
       }
-      const rows = [];
-      ws.eachRow(row => {
-        const vals = Array.isArray(row.values) ? row.values.slice(1) : [];
-        rows.push(vals.map(nexusExcelCellToString));
+      const ws = wb.Sheets[sheetName];
+      const rows = window.XLSX.utils.sheet_to_json(ws, {
+        header: 1,
+        raw: false,
+        defval: ''
       });
+      if (nexusLooksLikeInsuranceNoticeReport(rows)) {
+        const {
+          customerName,
+          contracts
+        } = nexusParseInsuranceNoticeReport(rows);
+        callback({
+          kind: 'noticeReport',
+          customerName,
+          contracts
+        });
+        return;
+      }
       toHeaderRows(rows);
-    }).catch(() => {
-      alert(name.endsWith('.xls') ? '.xls形式は読み込めません。Excelで開いて「.xlsx」形式で保存し直してから、もう一度お試しください。' : 'ファイルの読み込みに失敗しました。ファイル形式をご確認ください。');
+    }).catch(err => {
+      alert('ファイルの読み込みに失敗しました。ファイル形式をご確認のうえ、もう一度お試しください（' + (err && err.message || '') + '）');
     });
   });
 }
@@ -16493,7 +16598,7 @@ function NexusContractImportRow({
       marginBottom: 8,
       lineHeight: 1.7
     }
-  }, row.contract.company || '保険会社未記入', "／", row.contract.type || '商品名未記入', row.contract.policyNum && ` ／証券番号：${row.contract.policyNum}`, /*#__PURE__*/React.createElement("br", null), row.contract.date && `契約日：${row.contract.date}　`, row.contract.premium && `保険料：${Number(row.contract.premium).toLocaleString ? Number(row.contract.premium).toLocaleString() : row.contract.premium}円`), /*#__PURE__*/React.createElement("div", {
+  }, row.contract.company || '保険会社未記入', "／", row.contract.type || '商品名未記入', row.contract.policyNum && ` ／証券番号：${row.contract.policyNum}`, row.contract.insuredName && row.contract.insuredName !== row.contractorName && ` ／被保険者：${row.contract.insuredName}`, row.contract.riders && row.contract.riders.length > 0 && ` ／特約${row.contract.riders.length}件`, /*#__PURE__*/React.createElement("br", null), row.contract.date && `契約日：${row.contract.date}　`, row.contract.premium && `保険料：${Number(row.contract.premium).toLocaleString ? Number(row.contract.premium).toLocaleString() : row.contract.premium}円`), /*#__PURE__*/React.createElement("div", {
     className: "form-group",
     style: {
       marginBottom: 0
@@ -16535,15 +16640,91 @@ function NexusContractImportScreen({
   const [previewRows, setPreviewRows] = useState([]);
   const fileRef = React.useRef(null);
   const presets = nexusLoadContractMappingPresets();
+  // 「契約内容のご案内」形式は列マッピングでは対応できない構造のため、検出できた
+  // 場合は列マッピング画面を飛ばし、そのままプレビューを組み立てて確認画面へ進む。
+  const buildPreviewFromNoticeReport = ({
+    customerName,
+    contracts
+  }) => {
+    const normName = s => (s || '').replace(/[\s　]/g, '');
+    return contracts.map(c => {
+      const riders = (c.riders || []).map(r => ({
+        id: uid(),
+        purposes: [],
+        name: r.name,
+        amount: (r.amount || '').replace(/[,円¥\s]/g, ''),
+        amountUnit: '一時金',
+        premium: '',
+        termNote: '',
+        paymentTermNote: '',
+        nextRenewalTerm: '',
+        renewalLimit: ''
+      }));
+      const memoNotes = [];
+      if (c.status && !CONTRACT_STATUSES.includes(c.status)) memoNotes.push(`現状：${c.status}`);
+      const contract = {
+        id: uid(),
+        contractStatus: nexusNormalizeContractStatus(c.status) || '有効',
+        category: nexusGuessCategory(c.productType, ''),
+        type: c.productType || '',
+        company: c.company,
+        policyNum: c.policyNum,
+        insuredName: c.insuredName,
+        insuredBirthdate: c.insuredBirthdate || '',
+        premium: (c.premiumMonthly || c.premiumTotal || '').replace(/[,円¥\s]/g, ''),
+        paymentCycle: nexusNormalizePaymentCycle(c.paymentCycle),
+        date: c.contractDate,
+        termNote: c.insurancePeriod,
+        termEnd: c.maturityDate || '',
+        paymentTermNote: c.paymentTermNote,
+        coverageAmount: (c.coverageAmount || '').replace(/[,円¥\s]/g, ''),
+        riders,
+        memo: memoNotes.join('　')
+      };
+      const contractorName = c.contractorName || customerName;
+      const matches = contractorName ? customers.filter(cu => normName(nexusDisplayName(cu)) === normName(contractorName)) : [];
+      let resolution, status;
+      if (!contractorName) {
+        resolution = 'skip';
+        status = 'needs_review';
+      } else if (matches.length === 1) {
+        resolution = matches[0].id;
+        status = nexusFindDuplicateContract(contract, matches[0].contracts || []) ? 'duplicate' : 'new';
+      } else if (matches.length === 0) {
+        resolution = 'new_customer';
+        status = 'needs_review';
+      } else {
+        resolution = matches[0].id;
+        status = 'needs_review';
+      }
+      return {
+        id: uid(),
+        contractorName,
+        contractorKana: c.contractorKana,
+        contractorBirthdate: c.contractorBirthdate,
+        contract,
+        matches,
+        resolution,
+        status,
+        include: status !== 'duplicate'
+      };
+    });
+  };
   const handleFile = file => {
     if (!file) return;
-    nexusParseWorkbookFile(file, ({
-      headers: h,
-      rows
-    }) => {
-      setHeaders(h);
-      setRawRows(rows);
-      setMapping(nexusGuessColumnMapping(h));
+    nexusParseWorkbookFile(file, result => {
+      if (result.kind === 'noticeReport') {
+        if (result.contracts.length === 0) {
+          alert('契約データを検出できませんでした。ファイルの内容をご確認ください。');
+          return;
+        }
+        setPreviewRows(buildPreviewFromNoticeReport(result));
+        setPhase('preview');
+        return;
+      }
+      setHeaders(result.headers);
+      setRawRows(result.rows);
+      setMapping(nexusGuessColumnMapping(result.headers));
       setPhase('mapping');
     });
   };
@@ -16649,10 +16830,10 @@ function NexusContractImportScreen({
               id: custId,
               customerType: '個人',
               name: r.contractorName,
-              furigana: '',
+              furigana: r.contractorKana || '',
               age: '',
               gender: '',
-              birthdate: '',
+              birthdate: r.contractorBirthdate || '',
               phone: '',
               email: '',
               postalCode: '',
@@ -16682,10 +16863,18 @@ function NexusContractImportScreen({
             contracts: [...(c.contracts || []), r.contract]
           } : c);
         } else {
-          next = next.map(c => c.id === r.resolution ? {
-            ...c,
-            contracts: [...(c.contracts || []), r.contract]
-          } : c);
+          next = next.map(c => {
+            if (c.id !== r.resolution) return c;
+            const patch = {
+              contracts: [...(c.contracts || []), r.contract]
+            };
+            if (!c.furigana && r.contractorKana) patch.furigana = r.contractorKana;
+            if (!c.birthdate && r.contractorBirthdate) patch.birthdate = r.contractorBirthdate;
+            return {
+              ...c,
+              ...patch
+            };
+          });
         }
       });
       return next;
