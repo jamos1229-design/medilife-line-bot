@@ -11268,38 +11268,6 @@ function nexusGenerateUniformRows(startY, rowHeight, count) {
   }
   return rows;
 }
-// 列位置の割合設定（localStorage保存分）に対する健全性チェック。範囲が
-// 極端に狭い（例：ドラッグの取り違え等で開始・終了がほぼ同じ位置になった）
-// 設定を、そうと気づかないまま次回以降も使い続けてしまうと、氏名ROIが
-// 「幅数pxの縦線」になる不具合が再発し続けるため、読み込み時に弾く。
-function nexusIsCalibrationSane(cal) {
-  if (!cal) return false;
-  const minWidth = 0.03;
-  return cal.policyNumEnd - cal.policyNumStart >= minWidth && cal.nameEnd - cal.nameStart >= minWidth;
-}
-// 列の位置（証券番号・氏名それぞれの開始/終了）は「表全体の横幅に対する割合」で
-// 保持する。固定pxだと画面解像度・撮影距離が変わるたびにズレるため。
-const NEXUS_CSB_COLUMN_CALIBRATION_KEY = 'nexus_csb_column_calibration_v1';
-const NEXUS_CSB_DEFAULT_COLUMN_CALIBRATION = {
-  policyNumStart: 0,
-  policyNumEnd: 0.11,
-  nameStart: 0.2,
-  nameEnd: 0.32
-};
-function nexusLoadCsbColumnCalibration() {
-  try {
-    const raw = localStorage.getItem(NEXUS_CSB_COLUMN_CALIBRATION_KEY);
-    if (!raw) return null;
-    const v = JSON.parse(raw);
-    if (v && typeof v.policyNumStart === 'number' && typeof v.nameStart === 'number' && nexusIsCalibrationSane(v)) return v;
-  } catch (e) {}
-  return null;
-}
-function nexusSaveCsbColumnCalibration(cal) {
-  try {
-    localStorage.setItem(NEXUS_CSB_COLUMN_CALIBRATION_KEY, JSON.stringify(cal));
-  } catch (e) {}
-}
 // 補正後の表画像から、1行分・1列分の領域だけを切り出す（割合→ピクセル変換）。
 function nexusCropCellImageData(imageData, row, xStartPct, xEndPct) {
   const {
@@ -11460,6 +11428,198 @@ function nexusValidateNameCell(text) {
     text: t,
     valid: true
   };
+}
+// カナ氏名セルの検証：カタカナ以外の文字（漢字・記号等の誤読）が多い場合は
+// 失敗扱いにする。CSB画面側で「タグチ…」のように省略表示されている場合、
+// 見えている分だけを採用し、続きを推測で補完することはしない。
+function nexusValidateKanaCell(text) {
+  const t = (text || '').replace(/[|｜_＿]/g, '').trim();
+  if (!t || t.length > 12) return {
+    text: t,
+    valid: false
+  };
+  // 漢字が1文字でも混ざっている場合は、隣の漢字氏名列からのはみ出し等
+  // 列ズレを疑い、無効として要確認に回す（黙って漢字部分だけ捨てない）。
+  if (/[一-龠々]/.test(t)) return {
+    text: t,
+    valid: false
+  };
+  const kanaOnly = t.replace(/[^ァ-ヶー\s]/g, '');
+  const ratio = kanaOnly.replace(/\s/g, '').length / t.replace(/\s/g, '').length;
+  if (ratio < 0.6) return {
+    text: t,
+    valid: false
+  };
+  return {
+    text: kanaOnly.trim(),
+    valid: true
+  };
+}
+// 郵便番号の検証：数字とハイフンのみを対象に、NNN-NNNN形式かを確認する。
+// ハイフンが消えて7桁の数字だけになっているケースは、それ自体を誤りとはせず
+// 「NNN-NNNN形式の候補」として提示する（自動確定はしない＝呼び出し側で
+// 必ずneedsReview扱いにすること）。
+function nexusValidatePostalCode(text) {
+  const t = (text || '').replace(/[^0-9-]/g, '');
+  if (/^\d{3}-\d{4}$/.test(t)) return {
+    text: t,
+    valid: true,
+    isCandidate: false
+  };
+  const digitsOnly = t.replace(/-/g, '');
+  if (digitsOnly.length === 7) return {
+    text: `${digitsOnly.slice(0, 3)}-${digitsOnly.slice(3)}`,
+    valid: true,
+    isCandidate: true
+  };
+  return {
+    text: t,
+    valid: false,
+    isCandidate: false
+  };
+}
+// 生年月日の検証：数字専用列という前提を利用し、字形の似た英字I/lを1に
+// 補正したうえでYYYY-MM-DD形式かを確認し、さらに実在する日付かどうかも
+// （2月30日等を弾くため）Dateオブジェクトの往復で確認する。補正前後の値は
+// どちらもデバッグに残せるよう両方返す。
+function nexusValidateBirthDate(text) {
+  const raw = (text || '').trim();
+  // 数字しか無い列という前提でのみ、字形が紛らわしい英字を1に読み替える
+  const corrected = raw.replace(/[Il|]/g, '1').replace(/[^0-9-]/g, '');
+  const m = corrected.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return {
+    text: corrected,
+    rawText: raw,
+    valid: false
+  };
+  const y = Number(m[1]),
+    mo = Number(m[2]),
+    d = Number(m[3]);
+  const dt = new Date(y, mo - 1, d);
+  const isRealDate = dt.getFullYear() === y && dt.getMonth() === mo - 1 && dt.getDate() === d;
+  const inPlausibleRange = y >= 1900 && y <= new Date().getFullYear();
+  return {
+    text: corrected,
+    rawText: raw,
+    valid: isRealDate && inPlausibleRange
+  };
+}
+// 性別の検証：氏名等から推測することは一切せず、性別列のセルに実際に
+// 書かれている文字（男/女/男性/女性）だけを見る。列自体が画像に無い場合は
+// 呼び出し側でこの関数自体を呼ばない（空欄のまま）。
+function nexusValidateGenderCell(text) {
+  const t = (text || '').trim();
+  if (/女/.test(t)) return {
+    text: '女性',
+    valid: true
+  };
+  if (/男/.test(t)) return {
+    text: '男性',
+    valid: true
+  };
+  return {
+    text: t,
+    valid: false
+  };
+}
+// CSB専用取込で扱う列の定義。keyはOCR設定・確認画面での並び順に使う。
+// 性別は画像に列が存在する場合のみ使う任意項目。
+const NEXUS_CSB_COLUMNS = [{
+  key: 'policyNum',
+  label: '証券番号',
+  color: '#DC2626',
+  kind: 'alnum',
+  optional: false
+}, {
+  key: 'customerNameKanji',
+  label: '顧客氏名（漢字）',
+  color: '#2563EB',
+  kind: 'kanji',
+  optional: false
+}, {
+  key: 'customerNameKana',
+  label: '顧客氏名（カナ）',
+  color: '#7C3AED',
+  kind: 'kana',
+  optional: false
+}, {
+  key: 'policyholderNameKanji',
+  label: '契約者氏名（漢字）',
+  color: '#059669',
+  kind: 'kanji',
+  optional: false
+}, {
+  key: 'postalCode',
+  label: '郵便番号',
+  color: '#D97706',
+  kind: 'digits',
+  optional: false
+}, {
+  key: 'birthDate',
+  label: '生年月日',
+  color: '#DB2777',
+  kind: 'digits',
+  optional: false
+}, {
+  key: 'gender',
+  label: '性別（列が画像に無ければスキップ可）',
+  color: '#0891B2',
+  kind: 'shortJpn',
+  optional: true
+}];
+const NEXUS_CSB_DEFAULT_COLUMN_CALIBRATION = {
+  policyNum: {
+    start: 0,
+    end: 0.11
+  },
+  customerNameKanji: {
+    start: 0.16,
+    end: 0.24
+  },
+  customerNameKana: {
+    start: 0.24,
+    end: 0.31
+  },
+  policyholderNameKanji: {
+    start: 0.31,
+    end: 0.39
+  },
+  postalCode: {
+    start: 0.63,
+    end: 0.7
+  },
+  birthDate: {
+    start: 0.75,
+    end: 0.85
+  },
+  gender: {
+    start: 0.88,
+    end: 0.93
+  }
+};
+const NEXUS_CSB_COLUMN_CALIBRATION_KEY = 'nexus_csb_column_calibration_v2';
+function nexusIsCalibrationSane(cal) {
+  if (!cal) return false;
+  const minWidth = 0.02;
+  return NEXUS_CSB_COLUMNS.every(c => {
+    if (c.optional && (!cal[c.key] || cal[c.key].disabled)) return true;
+    const range = cal[c.key];
+    return range && typeof range.start === 'number' && typeof range.end === 'number' && Math.abs(range.end - range.start) >= minWidth;
+  });
+}
+function nexusLoadCsbColumnCalibration() {
+  try {
+    const raw = localStorage.getItem(NEXUS_CSB_COLUMN_CALIBRATION_KEY);
+    if (!raw) return null;
+    const v = JSON.parse(raw);
+    if (nexusIsCalibrationSane(v)) return v;
+  } catch (e) {}
+  return null;
+}
+function nexusSaveCsbColumnCalibration(cal) {
+  try {
+    localStorage.setItem(NEXUS_CSB_COLUMN_CALIBRATION_KEY, JSON.stringify(cal));
+  } catch (e) {}
 }
 
 // 取込候補行が既存顧客と重複していそうかを判定する。完全一致だけでなく
@@ -14675,24 +14835,24 @@ function nexusImageDataToDataUrl(imageData) {
   canvas.getContext('2d').putImageData(new ImageData(imageData.data, imageData.width, imageData.height), 0, 0);
   return canvas.toDataURL();
 }
-// デバッグ用：実際にOCRへ渡すROI（証券番号＝赤、氏名＝青）を表全体の画像に
-// 矩形で重ねて表示する。座標のズレを一目で確認できるようにするため。
-function nexusBuildRoiOverlayUrl(imageData, rows, cal) {
+// デバッグ用：実際にOCRへ渡すROIを列ごとの色で表全体の画像に矩形で重ねて
+// 表示する。座標のズレを一目で確認できるようにするため。
+function nexusBuildRoiOverlayUrl(imageData, rows, cal, columns) {
   const canvas = document.createElement('canvas');
   canvas.width = imageData.width;
   canvas.height = imageData.height;
   const ctx = canvas.getContext('2d');
   ctx.putImageData(new ImageData(imageData.data, imageData.width, imageData.height), 0, 0);
-  const px1 = Math.round(imageData.width * Math.min(cal.policyNumStart, cal.policyNumEnd));
-  const px2 = Math.round(imageData.width * Math.max(cal.policyNumStart, cal.policyNumEnd));
-  const nx1 = Math.round(imageData.width * Math.min(cal.nameStart, cal.nameEnd));
-  const nx2 = Math.round(imageData.width * Math.max(cal.nameStart, cal.nameEnd));
   ctx.lineWidth = 2;
+  const cols = (columns || NEXUS_CSB_COLUMNS).filter(c => cal[c.key] && !cal[c.key].disabled);
   rows.forEach(r => {
-    ctx.strokeStyle = '#DC2626';
-    ctx.strokeRect(px1, r.y0, px2 - px1, r.y1 - r.y0);
-    ctx.strokeStyle = '#2563EB';
-    ctx.strokeRect(nx1, r.y0, nx2 - nx1, r.y1 - r.y0);
+    cols.forEach(c => {
+      const range = cal[c.key];
+      const x1 = Math.round(imageData.width * Math.min(range.start, range.end));
+      const x2 = Math.round(imageData.width * Math.max(range.start, range.end));
+      ctx.strokeStyle = c.color;
+      ctx.strokeRect(x1, r.y0, x2 - x1, r.y1 - r.y0);
+    });
   });
   return canvas.toDataURL();
 }
@@ -14848,46 +15008,39 @@ function NexusCsbCalibrateStep({
   onConfirm,
   onBack
 }) {
+  const [subPhase, setSubPhase] = useState('rows'); // 'rows' | 'columns'
+  const [columnIndex, setColumnIndex] = useState(0);
   const [rowSetup, setRowSetup] = useState(initialRowSetup);
   const [cal, setCal] = useState(initialCalibration);
   const containerRef = React.useRef(null);
-  const [dragKey, setDragKey] = useState(null);
+  const [dragKey, setDragKey] = useState(null); // 'start' | 'end'
   const displayWidth = Math.min(warpedWidth, 380);
   const displayHeight = displayWidth / warpedWidth * warpedHeight;
   const scale = displayWidth / warpedWidth;
   const rows = nexusGenerateUniformRows(rowSetup.startY, rowSetup.rowHeight, rowSetup.rowCount);
+  const currentCol = NEXUS_CSB_COLUMNS[columnIndex];
+  const curRange = cal[currentCol.key] || NEXUS_CSB_DEFAULT_COLUMN_CALIBRATION[currentCol.key];
+  const curDisabled = !!(cal[currentCol.key] && cal[currentCol.key].disabled);
   const handleMove = e => {
-    if (!dragKey || !containerRef.current) return;
+    if (!dragKey || !containerRef.current || subPhase !== 'columns') return;
     const p = nexusPointFromEvent(e, containerRef.current);
     setCal(prev => ({
       ...prev,
-      [dragKey]: Math.max(0, Math.min(1, p.xPct))
+      [currentCol.key]: {
+        ...(prev[currentCol.key] || curRange),
+        [dragKey]: Math.max(0, Math.min(1, p.xPct)),
+        disabled: false
+      }
     }));
   };
-  const LINES = [{
-    key: 'policyNumStart',
-    color: '#DC2626',
-    label: '証券番号：開始'
-  }, {
-    key: 'policyNumEnd',
-    color: '#DC2626',
-    label: '証券番号：終了'
-  }, {
-    key: 'nameStart',
-    color: '#2563EB',
-    label: '氏名：開始'
-  }, {
-    key: 'nameEnd',
-    color: '#2563EB',
-    label: '氏名：終了'
-  }];
+  const referenceCols = subPhase === 'columns' ? NEXUS_CSB_COLUMNS.slice(0, columnIndex).filter(c => cal[c.key] && !cal[c.key].disabled) : [];
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12.5,
       marginBottom: 10,
       color: 'var(--text-sub)'
     }
-  }, "赤枠が証券番号、青枠が氏名として実際にOCRへ渡される範囲です。下のボタンで「開始位置」「行の高さ」「行数」を調整し、赤枠・青枠が1人分ずつ正しく1行を囲むようにしてください（罫線の自動検出だけに頼らず、行の高さを一定として機械的に区切っています）。縦線をドラッグすると列の左右位置を調整できます。"), /*#__PURE__*/React.createElement("div", {
+  }, subPhase === 'rows' ? "緑の横線が1行の区切りです。「開始位置」「1行の高さ」「行数」を調整し、1本ずつが1人分の行の区切りになるようにしてください（罫線の自動検出だけに頼らず、行の高さを一定として機械的に区切っています）。" : `「${currentCol.label}」の範囲をハンドルでドラッグして合わせてください（${columnIndex + 1}/${NEXUS_CSB_COLUMNS.length}列目）。薄い枠は既に設定済みの列です。`), /*#__PURE__*/React.createElement("div", {
     ref: containerRef,
     style: {
       position: 'relative',
@@ -14919,51 +15072,60 @@ function NexusCsbCalibrateStep({
       height: '100%',
       pointerEvents: 'none'
     }
-  }, rows.map((r, i) => /*#__PURE__*/React.createElement(React.Fragment, {
-    key: 'row' + i
-  }, /*#__PURE__*/React.createElement("rect", {
-    x: Math.min(cal.policyNumStart, cal.policyNumEnd) * displayWidth,
+  }, rows.map((r, i) => /*#__PURE__*/React.createElement("line", {
+    key: 'rl' + i,
+    x1: 0,
+    x2: displayWidth,
+    y1: r.y0 * scale,
+    y2: r.y0 * scale,
+    stroke: "#16A34A",
+    strokeWidth: "1"
+  })), subPhase === 'columns' && referenceCols.flatMap(c => rows.map((r, i) => /*#__PURE__*/React.createElement("rect", {
+    key: c.key + '-' + i,
+    x: Math.min(cal[c.key].start, cal[c.key].end) * displayWidth,
     y: r.y0 * scale,
-    width: Math.abs(cal.policyNumEnd - cal.policyNumStart) * displayWidth,
+    width: Math.abs(cal[c.key].end - cal[c.key].start) * displayWidth,
     height: (r.y1 - r.y0) * scale,
     fill: "none",
-    stroke: "#DC2626",
-    strokeWidth: "1.5"
-  }), /*#__PURE__*/React.createElement("rect", {
-    x: Math.min(cal.nameStart, cal.nameEnd) * displayWidth,
+    stroke: c.color,
+    strokeOpacity: "0.55",
+    strokeWidth: "1"
+  }))), subPhase === 'columns' && !curDisabled && rows.map((r, i) => /*#__PURE__*/React.createElement("rect", {
+    key: 'cur' + i,
+    x: Math.min(curRange.start, curRange.end) * displayWidth,
     y: r.y0 * scale,
-    width: Math.abs(cal.nameEnd - cal.nameStart) * displayWidth,
+    width: Math.abs(curRange.end - curRange.start) * displayWidth,
     height: (r.y1 - r.y0) * scale,
     fill: "none",
-    stroke: "#2563EB",
-    strokeWidth: "1.5"
-  }))), LINES.map(l => /*#__PURE__*/React.createElement("line", {
-    key: l.key,
-    x1: cal[l.key] * displayWidth,
-    x2: cal[l.key] * displayWidth,
+    stroke: currentCol.color,
+    strokeWidth: "2"
+  })), subPhase === 'columns' && ['start', 'end'].map(k => /*#__PURE__*/React.createElement("line", {
+    key: 'guide' + k,
+    x1: curRange[k] * displayWidth,
+    x2: curRange[k] * displayWidth,
     y1: 0,
     y2: displayHeight,
-    stroke: l.color,
+    stroke: currentCol.color,
     strokeWidth: "1",
     strokeDasharray: "2,2"
-  }))), LINES.map(l => /*#__PURE__*/React.createElement("div", {
-    key: l.key,
+  }))), subPhase === 'columns' && ['start', 'end'].map(k => /*#__PURE__*/React.createElement("div", {
+    key: 'handle' + k,
     onPointerDown: e => {
       e.preventDefault();
-      setDragKey(l.key);
+      setDragKey(k);
     },
     style: {
       position: 'absolute',
-      left: cal[l.key] * displayWidth - 11,
+      left: curRange[k] * displayWidth - 11,
       top: displayHeight / 2 - 16,
       width: 22,
       height: 32,
-      background: l.color,
+      background: currentCol.color,
       borderRadius: 6,
       touchAction: 'none',
       boxShadow: '0 1px 4px rgba(0,0,0,0.4)'
     }
-  }))), /*#__PURE__*/React.createElement("div", {
+  }))), subPhase === 'rows' && /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       flexDirection: 'column',
@@ -15014,18 +15176,41 @@ function NexusCsbCalibrateStep({
       startY: v.startY + v.rowHeight,
       rowCount: Math.max(1, v.rowCount - 1)
     }))
-  }, "▼ 見出し行を1行スキップ")), /*#__PURE__*/React.createElement("button", {
+  }, "▼ 見出し行を1行スキップ"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-full",
+    style: {
+      marginTop: 6
+    },
+    onClick: () => setSubPhase('columns')
+  }, "次へ：列の位置を設定")), subPhase === 'columns' && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 13,
+      marginBottom: 6,
+      color: currentCol.color
+    }
+  }, currentCol.label, curDisabled && "（スキップ中）"), currentCol.optional && /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "btn btn-outline btn-sm btn-full",
     style: {
-      marginTop: 10
+      marginBottom: 8
     },
-    onClick: () => setCal(NEXUS_CSB_DEFAULT_COLUMN_CALIBRATION)
-  }, "列位置をデフォルトに戻す"), /*#__PURE__*/React.createElement("div", {
+    onClick: () => setCal(prev => ({
+      ...prev,
+      [currentCol.key]: {
+        ...curRange,
+        disabled: !curDisabled
+      }
+    }))
+  }, curDisabled ? "この列を使う" : "この列は画像に無い（スキップ）"), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
-      gap: 8,
-      marginTop: 12
+      gap: 8
     }
   }, /*#__PURE__*/React.createElement("button", {
     type: "button",
@@ -15033,26 +15218,69 @@ function NexusCsbCalibrateStep({
     style: {
       flex: 1
     },
-    onClick: onBack
-  }, "← 撮り直す"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      if (columnIndex === 0) setSubPhase('rows');else setColumnIndex(v => v - 1);
+    }
+  }, "← 戻る"), /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "btn btn-primary",
     style: {
       flex: 1
     },
-    onClick: () => onConfirm({
-      cal,
-      rowSetup
-    })
-  }, "この設定でOCR開始")));
+    onClick: () => {
+      if (columnIndex < NEXUS_CSB_COLUMNS.length - 1) setColumnIndex(v => v + 1);else onConfirm({
+        cal,
+        rowSetup
+      });
+    }
+  }, columnIndex < NEXUS_CSB_COLUMNS.length - 1 ? "次の列へ →" : "この設定でOCR開始"))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-sm",
+    style: {
+      flex: 1
+    },
+    onClick: () => setCal(NEXUS_CSB_DEFAULT_COLUMN_CALIBRATION)
+  }, "列位置を全てデフォルトに戻す"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-sm",
+    style: {
+      flex: 1
+    },
+    onClick: onBack
+  }, "← 撮り直す")));
 }
 // 1セル分の画像を、2パターンの前処理（グレースケール／二値化）でそれぞれOCRし、
 // confidenceが高い方を採用する（1回だけの読み取りに頼らないため）。
+// 列の種類ごとにTesseractへ渡すパラメータを決める。氏名系（漢字・カナ）は
+// 強い二値化がかえって誤読を増やすため二値化バリアントそのものを使わない。
+function nexusCsbOcrParamsForKind(kind) {
+  if (kind === 'alnum') return {
+    tessedit_pageseg_mode: '8',
+    tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ-'
+  };
+  if (kind === 'digits') return {
+    tessedit_pageseg_mode: '7',
+    tessedit_char_whitelist: '0123456789-'
+  };
+  return {
+    tessedit_pageseg_mode: '7',
+    tessedit_char_whitelist: ''
+  };
+}
 async function nexusOcrCsbCell(worker, cellImageData, kind) {
   const gray = nexusGrayscaleContrastImageData(cellImageData);
-  const threshold = nexusOtsuThreshold(gray);
-  const bin = nexusBinarizeImageData(gray, threshold);
-  const variants = [gray, bin];
+  const skipBinarize = kind === 'kanji' || kind === 'kana';
+  const variants = [gray];
+  if (!skipBinarize) {
+    const threshold = nexusOtsuThreshold(gray);
+    variants.push(nexusBinarizeImageData(gray, threshold));
+  }
   let best = null;
   for (const v of variants) {
     const scale = v.width < 300 ? 3 : 1;
@@ -15087,7 +15315,38 @@ function nexusCsbConfColor(c) {
   if (c >= 60) return '#B45309';
   return 'var(--danger)';
 }
-// STEP7：確認画面の1行（状態／証券番号／氏名。タップで元画像の切り抜きを表示）
+// STEP7の確認カードで使う、1項目分の「ラベル＋信頼度＋入力欄」ボックス。
+function NexusCsbFieldBox({
+  label,
+  value,
+  confidence,
+  onChange,
+  wide
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    style: wide ? {
+      flex: '1 1 100%'
+    } : {
+      flex: '1 1 45%'
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, label, typeof confidence === 'number' && /*#__PURE__*/React.createElement("span", {
+    style: {
+      marginLeft: 6,
+      fontSize: 10,
+      fontWeight: 700,
+      color: nexusCsbConfColor(confidence)
+    }
+  }, Math.round(confidence), "%")), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    value: value || '',
+    onChange: e => onChange(e.target.value)
+  }));
+}
+// STEP7：確認画面の1件分カード（証券番号・顧客氏名（漢字/カナ）・生年月日・
+// 性別・郵便番号の6項目。契約者氏名が顧客氏名と異なる場合は、郵便番号・
+// 生年月日を顧客本人の情報として誤って登録しないよう、専用の警告を出す）
 function NexusCsbReviewRow({
   row,
   onUpdate,
@@ -15095,6 +15354,7 @@ function NexusCsbReviewRow({
 }) {
   const [showImg, setShowImg] = useState(false);
   const hasDup = row.duplicates && row.duplicates.length > 0;
+  const mismatch = row.hasPolicyholderCol && !row.customerEqualsPolicyholder;
   const statusInfo = row.status === 'ok' ? {
     label: 'OK',
     bg: '#DCFCE7',
@@ -15114,7 +15374,8 @@ function NexusCsbReviewRow({
     style: {
       display: 'flex',
       alignItems: 'center',
-      gap: 8
+      gap: 8,
+      flexWrap: 'wrap'
     }
   }, /*#__PURE__*/React.createElement("input", {
     type: "checkbox",
@@ -15141,7 +15402,14 @@ function NexusCsbReviewRow({
       color: '#B45309',
       flexShrink: 0
     }
-  }, "△重複候補"), /*#__PURE__*/React.createElement("button", {
+  }, "△重複候補"), mismatch && /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    style: {
+      background: '#FEE2E2',
+      color: '#DC2626',
+      flexShrink: 0
+    }
+  }, "⚠契約者情報です"), /*#__PURE__*/React.createElement("button", {
     type: "button",
     onClick: () => setShowImg(v => !v),
     style: {
@@ -15172,42 +15440,86 @@ function NexusCsbReviewRow({
       borderRadius: 6,
       border: '1px solid var(--border)'
     }
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "form-row",
+  }), mismatch && /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: 8,
+      padding: 8,
+      borderRadius: 6,
+      background: '#FEF2F2',
+      color: 'var(--danger)',
+      fontSize: 11.5,
+      lineHeight: 1.6
+    }
+  }, "契約者氏名「", row.policyholderName || '(未読取)', "」が顧客氏名と一致しません。郵便番号・生年月日は契約者本人のものである可能性があるため、自動反映していません。内容を確認のうえ、必要であれば手動で入力してください。"), row.reviewReasons && row.reviewReasons.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8,
+      padding: 8,
+      borderRadius: 6,
+      background: '#FFFBEB',
+      color: '#B45309',
+      fontSize: 11,
+      lineHeight: 1.6
+    }
+  }, row.reviewReasons.map((r, i) => /*#__PURE__*/React.createElement("div", {
+    key: i
+  }, "・", r))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 8,
       marginTop: 8
     }
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
-    className: "form-label"
-  }, "証券番号", row.confidence && /*#__PURE__*/React.createElement("span", {
-    style: {
-      marginLeft: 6,
-      fontSize: 10,
-      fontWeight: 700,
-      color: nexusCsbConfColor(row.confidence.policyNum)
-    }
-  }, Math.round(row.confidence.policyNum), "%")), /*#__PURE__*/React.createElement("input", {
-    className: "form-input",
-    value: row.policyNum || '',
-    onChange: e => onUpdate({
-      policyNum: e.target.value
+  }, /*#__PURE__*/React.createElement(NexusCsbFieldBox, {
+    label: "証券番号",
+    value: row.policyNum,
+    confidence: row.confidence && row.confidence.policyNum,
+    onChange: v => onUpdate({
+      policyNum: v
     })
-  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
-    className: "form-label"
-  }, "顧客氏名（漢字）", row.confidence && /*#__PURE__*/React.createElement("span", {
-    style: {
-      marginLeft: 6,
-      fontSize: 10,
-      fontWeight: 700,
-      color: nexusCsbConfColor(row.confidence.name)
-    }
-  }, Math.round(row.confidence.name), "%")), /*#__PURE__*/React.createElement("input", {
-    className: "form-input",
-    value: row.name || '',
-    onChange: e => onUpdate({
-      name: e.target.value
+  }), /*#__PURE__*/React.createElement(NexusCsbFieldBox, {
+    label: "顧客氏名（漢字）",
+    value: row.name,
+    confidence: row.confidence && row.confidence.name,
+    onChange: v => onUpdate({
+      name: v
     })
-  }))), hasDup && /*#__PURE__*/React.createElement("div", {
+  }), /*#__PURE__*/React.createElement(NexusCsbFieldBox, {
+    label: "顧客氏名（カナ）",
+    value: row.nameKana,
+    confidence: row.confidence && row.confidence.nameKana,
+    onChange: v => onUpdate({
+      nameKana: v
+    })
+  }), /*#__PURE__*/React.createElement(NexusCsbFieldBox, {
+    label: "生年月日",
+    value: row.birthDate,
+    confidence: row.confidence && row.confidence.birthDate,
+    onChange: v => onUpdate({
+      birthDate: v
+    })
+  }), /*#__PURE__*/React.createElement(NexusCsbFieldBox, {
+    label: "性別",
+    value: row.gender,
+    confidence: row.confidence && row.confidence.gender,
+    onChange: v => onUpdate({
+      gender: v
+    })
+  }), /*#__PURE__*/React.createElement(NexusCsbFieldBox, {
+    label: row.postalIsCandidate ? '郵便番号（ハイフン無し候補）' : '郵便番号',
+    value: row.postalCode,
+    confidence: row.confidence && row.confidence.postalCode,
+    onChange: v => onUpdate({
+      postalCode: v
+    })
+  }), row.hasPolicyholderCol && /*#__PURE__*/React.createElement(NexusCsbFieldBox, {
+    label: "契約者氏名（漢字）",
+    value: row.policyholderName,
+    confidence: row.confidence && row.confidence.policyholderName,
+    onChange: v => onUpdate({
+      policyholderName: v
+    }),
+    wide: true
+  })), hasDup && /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 8
     }
@@ -15341,92 +15653,139 @@ function NexusCsbImportScreen({
     setRowSetup(confirmedRowSetup);
     setPhase('processing');
     setErrorNote('');
-    let workerNum = null,
-      workerName = null;
+    let workerEng = null,
+      workerJpn = null;
     try {
       setProgressText('OCRライブラリを準備中…');
       await new Promise(resolve => nexusEnsureOcrLib(resolve));
-      workerNum = await window.Tesseract.createWorker('eng');
-      await workerNum.setParameters({
-        tessedit_pageseg_mode: '8',
-        tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ-'
-      });
-      workerName = await window.Tesseract.createWorker('jpn');
-      await workerName.setParameters({
-        tessedit_pageseg_mode: '7'
-      });
+      workerEng = await window.Tesseract.createWorker('eng');
+      workerJpn = await window.Tesseract.createWorker('jpn');
+      const activeCols = NEXUS_CSB_COLUMNS.filter(c => cal[c.key] && !cal[c.key].disabled);
       const dataRows = nexusGenerateUniformRows(confirmedRowSetup.startY, confirmedRowSetup.rowHeight, confirmedRowSetup.rowCount);
       setDetectedRows(dataRows);
       const newRows = [];
       const newDebug = [];
       // 座標のズレを一目で確認できるよう、実際にOCRへ渡すROIを表全体の上に
-      // 矩形で重ねた画像を最初に1枚作っておく（証券番号＝赤、氏名＝青）。
-      const overlayUrl = nexusBuildRoiOverlayUrl(warped.imageData, dataRows, cal);
+      // 列ごとに色分けした矩形で重ねた画像を最初に1枚作っておく。
+      const overlayUrl = nexusBuildRoiOverlayUrl(warped.imageData, dataRows, cal, activeCols);
       newDebug.push({
-        label: `ROI重ね表示（赤＝証券番号、青＝氏名／全${dataRows.length}行）`,
+        label: `ROI重ね表示（列ごとに色分け／全${dataRows.length}行）`,
         url: overlayUrl
       });
-      // 表示は縦横比を保って縮小しているだけなので、scaleX・scaleYは常に同じ値になる
       const displayWidth = Math.min(warped.width, 380);
       const scale = displayWidth / warped.width;
-      const scaleX = scale,
-        scaleY = scale;
       let okCount = 0,
         reviewCount = 0;
       for (let i = 0; i < dataRows.length; i++) {
         setProgressText(`行を読み取り中…（${i + 1}/${dataRows.length}）`);
         const row = dataRows[i];
-        const policyCell = nexusCropCellImageData(warped.imageData, row, cal.policyNumStart, cal.policyNumEnd);
-        const nameCell = nexusCropCellImageData(warped.imageData, row, cal.nameStart, cal.nameEnd);
-        // eslint-disable-next-line no-await-in-loop
-        const policyResult = await nexusOcrCsbCell(workerNum, policyCell, 'policyNum');
-        // eslint-disable-next-line no-await-in-loop
-        const nameResult = await nexusOcrCsbCell(workerName, nameCell, 'name');
-        const policyValid = nexusValidatePolicyNumCell(policyResult.text);
-        const nameValid = nexusValidateNameCell(nameResult.text);
-        // 文字種・長さ等のパターン検証だけでは、「間串間間剛川上」のような一見
-        // それらしい長さのデタラメな漢字列は弾ききれない（実在の名前かどうかは
-        // 文字種だけでは判定不能なため）。そこでTesseract自身のconfidenceも
-        // 合わせて見る：本当に読み取れていない文字はconfidenceも低く出ることが
-        // 多いため、両方の検証を組み合わせて「OK」と「要確認」を分ける。
-        const status = policyValid.valid && nameValid.valid && policyResult.confidence >= 60 && nameResult.confidence >= 50 ? 'ok' : 'review';
+        const cellResults = {};
+        for (const col of activeCols) {
+          const range = cal[col.key];
+          const cellImage = nexusCropCellImageData(warped.imageData, row, range.start, range.end);
+          const worker = col.kind === 'alnum' || col.kind === 'digits' ? workerEng : workerJpn;
+          // eslint-disable-next-line no-await-in-loop
+          await worker.setParameters(nexusCsbOcrParamsForKind(col.kind));
+          // eslint-disable-next-line no-await-in-loop
+          cellResults[col.key] = await nexusOcrCsbCell(worker, cellImage, col.kind);
+        }
+        const policyValid = nexusValidatePolicyNumCell(cellResults.policyNum ? cellResults.policyNum.text : '');
+        const custKanjiValid = nexusValidateNameCell(cellResults.customerNameKanji ? cellResults.customerNameKanji.text : '');
+        const custKanaValid = cellResults.customerNameKana ? nexusValidateKanaCell(cellResults.customerNameKana.text) : {
+          text: '',
+          valid: true
+        };
+        const polKanjiValid = cellResults.policyholderNameKanji ? nexusValidateNameCell(cellResults.policyholderNameKanji.text) : {
+          text: '',
+          valid: true
+        };
+        const postalValid = cellResults.postalCode ? nexusValidatePostalCode(cellResults.postalCode.text) : {
+          text: '',
+          valid: true,
+          isCandidate: false
+        };
+        const birthValid = cellResults.birthDate ? nexusValidateBirthDate(cellResults.birthDate.text) : {
+          text: '',
+          valid: true
+        };
+        const genderValid = cellResults.gender ? nexusValidateGenderCell(cellResults.gender.text) : {
+          text: '',
+          valid: true
+        };
+        // 顧客氏名と契約者氏名が一致するかどうかで、郵便番号・生年月日欄が
+        // 「顧客本人の情報」なのか「契約者（別人の可能性がある）の情報」なのかを
+        // 区別する。列自体が無い場合は判定不能として一致扱いにはしない。
+        const hasPolicyholderCol = !!cellResults.policyholderNameKanji;
+        const customerEqualsPolicyholder = hasPolicyholderCol ? !!custKanjiValid.text && !!polKanjiValid.text && custKanjiValid.text.replace(/\s+/g, '') === polKanjiValid.text.replace(/\s+/g, '') : true;
+        const reasons = [];
+        if (!policyValid.valid || !policyValid.text) reasons.push('証券番号が読み取れませんでした');
+        if (!custKanjiValid.valid || !custKanjiValid.text) reasons.push('顧客氏名（漢字）が読み取れませんでした');
+        if (cellResults.customerNameKana && !custKanaValid.valid) reasons.push('顧客氏名（カナ）の形式が不正です');
+        if (hasPolicyholderCol && custKanjiValid.text && polKanjiValid.text && !customerEqualsPolicyholder) reasons.push('顧客氏名と契約者氏名が一致しません（契約者情報です）');
+        if (cellResults.postalCode && postalValid.text && !postalValid.valid) reasons.push('郵便番号の形式が不正です');
+        if (cellResults.postalCode && postalValid.isCandidate) reasons.push('郵便番号はハイフンなし7桁のため候補扱いです');
+        if (cellResults.birthDate && birthValid.text && !birthValid.valid) reasons.push('生年月日の形式または日付が不正です');
+        if (cellResults.gender && cellResults.gender.text && !genderValid.valid) reasons.push('性別欄の文字を認識できませんでした');
+        activeCols.forEach(c => {
+          if (c.key === 'gender') return;
+          const r = cellResults[c.key];
+          const threshold = c.key === 'policyNum' ? 60 : c.key === 'customerNameKanji' || c.key === 'policyholderNameKanji' ? 50 : 60;
+          if (r && r.confidence < threshold) reasons.push(`「${c.label}」のOCR信頼度が低いです（${Math.round(r.confidence)}%）`);
+        });
+        const status = reasons.length === 0 ? 'ok' : 'review';
         if (status === 'ok') okCount++;else reviewCount++;
         const rowImageUrl = nexusImageDataToDataUrl(nexusCropCellImageData(warped.imageData, row, 0, 1));
         newRows.push({
           id: uid(),
           policyNum: policyValid.text,
-          name: nameValid.text,
+          name: custKanjiValid.text,
+          nameKana: custKanaValid.text,
+          policyholderName: polKanjiValid.text,
+          customerEqualsPolicyholder,
+          hasPolicyholderCol,
+          birthDate: birthValid.text,
+          gender: genderValid.text,
+          postalCode: postalValid.text,
+          postalIsCandidate: !!postalValid.isCandidate,
           status,
+          reviewReasons: reasons,
           confidence: {
-            policyNum: policyResult.confidence,
-            name: nameResult.confidence
+            policyNum: cellResults.policyNum ? cellResults.policyNum.confidence : 0,
+            name: cellResults.customerNameKanji ? cellResults.customerNameKanji.confidence : 0,
+            nameKana: cellResults.customerNameKana ? cellResults.customerNameKana.confidence : 0,
+            policyholderName: cellResults.policyholderNameKanji ? cellResults.policyholderNameKanji.confidence : 0,
+            postalCode: cellResults.postalCode ? cellResults.postalCode.confidence : 0,
+            birthDate: cellResults.birthDate ? cellResults.birthDate.confidence : 0,
+            gender: cellResults.gender ? cellResults.gender.confidence : 0
           },
           rowImageUrl,
           selected: true,
           resolution: 'new',
           duplicates: nexusFindDuplicateCandidates({
-            name: nameValid.text
+            name: custKanjiValid.text,
+            furigana: custKanaValid.text,
+            birthdate: birthValid.text
           }, customers)
         });
-        const policyX1 = Math.round(warped.width * Math.min(cal.policyNumStart, cal.policyNumEnd));
-        const policyX2 = Math.round(warped.width * Math.max(cal.policyNumStart, cal.policyNumEnd));
-        const nameX1 = Math.round(warped.width * Math.min(cal.nameStart, cal.nameEnd));
-        const nameX2 = Math.round(warped.width * Math.max(cal.nameStart, cal.nameEnd));
         newDebug.push({
           label: `行${i + 1}：座標詳細`,
-          text: [`rowTop: ${Math.round(row.y0)}`, `rowBottom: ${Math.round(row.y1)}`, `rowHeight: ${Math.round(row.y1 - row.y0)}`, `policyX1: ${policyX1}`, `policyX2: ${policyX2}`, `policyWidth: ${policyX2 - policyX1}`, `nameX1: ${nameX1}`, `nameX2: ${nameX2}`, `nameWidth: ${nameX2 - nameX1}`, `sourceWidth: ${warped.width}`, `displayWidth: ${Math.round(displayWidth)}`, `scaleX: ${scaleX.toFixed(3)}`, `sourceHeight: ${warped.height}`, `displayHeight: ${Math.round(displayWidth / warped.width * warped.height)}`, `scaleY: ${scaleY.toFixed(3)}`].join('\n')
+          text: [`rowTop: ${Math.round(row.y0)}`, `rowBottom: ${Math.round(row.y1)}`, `rowHeight: ${Math.round(row.y1 - row.y0)}`, ...activeCols.map(c => {
+            const range = cal[c.key];
+            const x1 = Math.round(warped.width * Math.min(range.start, range.end));
+            const x2 = Math.round(warped.width * Math.max(range.start, range.end));
+            return `${c.label}: x1=${x1} x2=${x2} width=${x2 - x1}`;
+          }), `sourceWidth: ${warped.width}`, `displayWidth: ${Math.round(displayWidth)}`, `scale: ${scale.toFixed(3)}`].join('\n')
         });
-        newDebug.push({
-          label: `行${i + 1}：証券番号ROI（採用値「${policyResult.text}」conf${Math.round(policyResult.confidence)}）`,
-          url: policyResult.dataUrl
-        });
-        newDebug.push({
-          label: `行${i + 1}：氏名ROI（採用値「${nameResult.text}」conf${Math.round(nameResult.confidence)}）`,
-          url: nameResult.dataUrl
+        activeCols.forEach(c => {
+          const r = cellResults[c.key];
+          newDebug.push({
+            label: `行${i + 1}：${c.label}ROI（採用値「${r.text}」conf${Math.round(r.confidence)}）`,
+            url: r.dataUrl
+          });
         });
       }
-      await workerNum.terminate();
-      await workerName.terminate();
+      await workerEng.terminate();
+      await workerJpn.terminate();
       setRows(prev => [...prev, ...newRows]);
       setDebugStages(prev => [...prev, ...newDebug]);
       setLastSummary({
@@ -15436,14 +15795,14 @@ function NexusCsbImportScreen({
       });
       setPhase('review');
     } catch (err) {
-      if (workerNum) {
+      if (workerEng) {
         try {
-          await workerNum.terminate();
+          await workerEng.terminate();
         } catch (e) {}
       }
-      if (workerName) {
+      if (workerJpn) {
         try {
-          await workerName.terminate();
+          await workerJpn.terminate();
         } catch (e) {}
       }
       setErrorNote('OCR処理中にエラーが発生しました：' + err.message);
@@ -15466,18 +15825,28 @@ function NexusCsbImportScreen({
       premium: '',
       date: ''
     }] : [];
+    // 郵便番号・生年月日は「顧客氏名＝契約者氏名」の場合のみ顧客本人の情報として
+    // 自動反映する。契約者列が別人を示している場合は、取り違えを防ぐため
+    // 自動反映せず、メモに要確認として残すだけにする。
+    const buildMemo = r => {
+      const notes = ['CSB画像取込'];
+      if (r.hasPolicyholderCol && !r.customerEqualsPolicyholder) {
+        notes.push(`契約者情報です：契約者氏名「${r.policyholderName || '(未読取)'}」／郵便番号「${r.postalCode || '(未読取)'}」／生年月日「${r.birthDate || '(未読取)'}」は要確認`);
+      }
+      return notes.join('　');
+    };
     setCustomers(prev => {
       let next = [...prev, ...toRegister.map(r => ({
         id: uid(),
         customerType: '個人',
         name: r.name || '',
-        furigana: '',
+        furigana: r.nameKana || '',
         age: '',
-        gender: '',
-        birthdate: '',
+        gender: r.gender || '',
+        birthdate: r.customerEqualsPolicyholder ? r.birthDate || '' : '',
         phone: '',
         email: '',
-        postalCode: '',
+        postalCode: r.customerEqualsPolicyholder ? r.postalCode || '' : '',
         address: '',
         occupation: '',
         workplace: '',
@@ -15489,7 +15858,7 @@ function NexusCsbImportScreen({
         contactChannel: '',
         lastContact: '',
         nextAppt: '',
-        memo: 'CSB画像取込',
+        memo: buildMemo(r),
         lineRegistered: false,
         contracts: buildContract(r),
         suspects: [],
@@ -15503,6 +15872,12 @@ function NexusCsbImportScreen({
           if (c.id !== r.resolution) return c;
           const patch = {};
           if (!c.name && r.name) patch.name = r.name;
+          if (!c.furigana && r.nameKana) patch.furigana = r.nameKana;
+          if (!c.gender && r.gender) patch.gender = r.gender;
+          if (r.customerEqualsPolicyholder) {
+            if (!c.birthdate && r.birthDate) patch.birthdate = r.birthDate;
+            if (!c.postalCode && r.postalCode) patch.postalCode = r.postalCode;
+          }
           const starter = buildContract(r);
           if (starter.length > 0 && !(c.contracts || []).some(ct => ct.policyNum && ct.policyNum === r.policyNum)) {
             patch.contracts = [...(c.contracts || []), ...starter];
@@ -15533,7 +15908,7 @@ function NexusCsbImportScreen({
       fontWeight: 700,
       fontSize: 15
     }
-  }, "CSB専用取込（証券番号・氏名）")), /*#__PURE__*/React.createElement("div", {
+  }, "CSB専用取込（証券番号・氏名・生年月日・性別・郵便番号）")), /*#__PURE__*/React.createElement("div", {
     className: "full-content"
   }, errorNote && /*#__PURE__*/React.createElement("div", {
     className: "card",
@@ -15551,7 +15926,7 @@ function NexusCsbImportScreen({
       marginBottom: 10,
       lineHeight: 1.6
     }
-  }, "CSBの顧客一覧を撮影した写真を選んでください。証券番号と顧客氏名（漢字）だけを読み取ります。画像はこの端末内だけで処理され、外部には送信されません。", rows.length > 0 ? `　（これまでに${rows.length}件読み取り済み）` : ''), /*#__PURE__*/React.createElement("input", {
+  }, "CSBの顧客一覧を撮影した写真を選んでください。証券番号・顧客氏名（漢字/カナ）・生年月日・性別・郵便番号を読み取ります（列の位置は撮影のたびに調整できます）。画像はこの端末内だけで処理され、外部には送信されません。", rows.length > 0 ? `　（これまでに${rows.length}件読み取り済み）` : ''), /*#__PURE__*/React.createElement("input", {
     ref: fileRef,
     type: "file",
     accept: "image/*",
@@ -16190,7 +16565,7 @@ function NexusListSection({
       flex: '1 1 100%'
     },
     onClick: () => setShowCsbImport(true)
-  }, "📋 CSB専用取込（証券番号・氏名）")), /*#__PURE__*/React.createElement("div", {
+  }, "📋 CSB専用取込（証券番号・氏名・生年月日・性別・郵便番号）")), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 10.5,
       color: 'var(--text-sub)',
