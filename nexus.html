@@ -10817,6 +10817,264 @@ function nexusExtractOcrRows(text) {
   const rows = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 1).map(nexusParseOcrLine).filter(r => (r.birthdate || r.phone) && (r.name || r.furigana || r.policyNum));
   return nexusDedupeRepeatedNames(nexusStripRepeatedNameTokens(rows));
 }
+
+// ── 画像取込：表構造を理解したOCR（座標ベースの行・列復元）─────────────
+// CSB等の顧客一覧のような列の多い密な表は、画像全体を1つの文章として読む方式だと
+// 列の読み取り順序が入れ替わってしまい、無関係な列の文字が混ざる（これが「間串」
+// 「上上上」のような意味不明な文字列の正体）。これを避けるため、Tesseractの
+// 単語ごとの座標（bbox）を使い、①単語をY座標で「行」にまとめる→②先頭の見出し行
+// （証券番号・氏名・カナ…）からX座標ごとの「列」を検出する→③データ行の各単語を
+// 一番近い列に割り当てる、という表としての復元を行う。
+// 見出しを検出できなかった場合は呼び出し側で従来の行ベース処理にフォールバックする。
+function nexusFlattenOcrWords(blocks) {
+  const words = [];
+  (blocks || []).forEach(b => (b.paragraphs || []).forEach(p => (p.lines || []).forEach(l => (l.words || []).forEach(w => {
+    const t = w && w.text ? w.text.trim() : '';
+    if (!t || !w.bbox) return;
+    words.push({
+      text: t,
+      confidence: typeof w.confidence === 'number' ? w.confidence : 0,
+      x0: w.bbox.x0,
+      x1: w.bbox.x1,
+      y0: w.bbox.y0,
+      y1: w.bbox.y1,
+      xc: (w.bbox.x0 + w.bbox.x1) / 2,
+      yc: (w.bbox.y0 + w.bbox.y1) / 2,
+      h: w.bbox.y1 - w.bbox.y0
+    });
+  }))));
+  return words;
+}
+// 単語をY座標（中心）でグルーピングして「行」にする。行の高さの中央値の7割以内の
+// ズレなら同じ行とみなす（多少の傾き・歪みを吸収するため、厳密な水平ラインでなく
+// 近さで判定する）。
+function nexusClusterOcrRows(words) {
+  if (words.length === 0) return [];
+  const sorted = [...words].sort((a, b) => a.yc - b.yc);
+  const heights = sorted.map(w => w.h).filter(h => h > 0).sort((a, b) => a - b);
+  const medianH = heights.length ? heights[Math.floor(heights.length / 2)] : 14;
+  const tolerance = Math.max(medianH * 0.7, 6);
+  const rows = [];
+  let current = [sorted[0]];
+  let currentY = sorted[0].yc;
+  for (let i = 1; i < sorted.length; i++) {
+    const w = sorted[i];
+    if (Math.abs(w.yc - currentY) <= tolerance) {
+      current.push(w);
+      currentY = current.reduce((s, x) => s + x.yc, 0) / current.length;
+    } else {
+      rows.push(current);
+      current = [w];
+      currentY = w.yc;
+    }
+  }
+  rows.push(current);
+  return rows.map(r => [...r].sort((a, b) => a.x0 - b.x0));
+}
+// 生年月日らしき並び・電話番号らしき並びを含む最初の行を「データ行の始まり」とみなし、
+// それより上の行をまとめて見出し領域とする（証券番号・担当者氏名・顧客氏名などの
+// 見出しは2段に分かれて表示されるため、複数行になっていても構わずまとめて扱う）。
+const NEXUS_DATA_ROW_HINT = /(?:19|20)\d{2}[\/\-年.]?\d{1,2}[\/\-月.]?\d{1,2}|0[\d.\-]{8,12}\d/;
+function nexusSplitOcrHeaderRows(rows) {
+  let headerEnd = rows.length;
+  for (let i = 0; i < Math.min(rows.length, 6); i++) {
+    const rowText = rows[i].map(w => w.text).join('');
+    if (NEXUS_DATA_ROW_HINT.test(rowText)) {
+      headerEnd = i;
+      break;
+    }
+  }
+  return {
+    headerRows: rows.slice(0, headerEnd),
+    dataRows: rows.slice(headerEnd)
+  };
+}
+const NEXUS_HEADER_COLUMN_MAP = [[/証券/, 'policyNum'], [/担当/, 'staffName'], [/電話/, 'phone'], [/郵便/, 'postal'], [/住所/, 'address'], [/生年/, 'birthdate'], [/年令|年齢/, 'age'], [/性別/, 'gender'], [/保険会社/, 'company'], [/保険分類/, 'insType'], [/主契約/, 'mainContract'], [/法.?個/, 'houjinKojin']];
+// 見出し領域の単語をX座標順に走査し、列の位置（アンカー）を作る。「顧客」「契約者」
+// 「被保険者」は見出しセルそのものが2列（漢字・カナ）にまたがるラベルのため、それ自体は
+// 列にせず「これ以降の漢字・カナ列は誰の氏名か」という文脈として記憶する。
+function nexusBuildOcrColumnAnchors(headerRows) {
+  const headerWords = headerRows.flat().sort((a, b) => a.xc - b.xc);
+  let context = 'customer';
+  const anchors = [];
+  headerWords.forEach(w => {
+    if (/被保険者/.test(w.text)) {
+      context = 'insured';
+      return;
+    }
+    if (/契約者/.test(w.text)) {
+      context = 'contractor';
+      return;
+    }
+    if (/顧客/.test(w.text)) {
+      context = 'customer';
+      return;
+    }
+    if (/漢字/.test(w.text)) {
+      anchors.push({
+        x: w.xc,
+        type: 'nameKanji_' + context
+      });
+      return;
+    }
+    if (/カナ/.test(w.text)) {
+      anchors.push({
+        x: w.xc,
+        type: 'nameKana_' + context
+      });
+      return;
+    }
+    for (const [re, type] of NEXUS_HEADER_COLUMN_MAP) {
+      if (re.test(w.text)) {
+        anchors.push({
+          x: w.xc,
+          type
+        });
+        return;
+      }
+    }
+  });
+  return anchors;
+}
+// データ行の各単語を、X座標が一番近い列アンカーに割り当てる（厳密な列境界を使わない
+// ことで、多少の台形歪み・傾きがあっても近い方に寄せられる）。
+const NEXUS_JOIN_WITH_SPACE_TYPES = ['nameKanji_customer', 'nameKanji_contractor', 'nameKanji_insured', 'nameKanji_staff'];
+function nexusAssignOcrRowToColumns(rowWords, anchors) {
+  const buckets = {};
+  rowWords.forEach(w => {
+    let best = null,
+      bestDist = Infinity;
+    anchors.forEach(a => {
+      const d = Math.abs(w.xc - a.x);
+      if (d < bestDist) {
+        bestDist = d;
+        best = a;
+      }
+    });
+    if (!best) return;
+    (buckets[best.type] = buckets[best.type] || []).push(w);
+  });
+  const cells = {};
+  Object.keys(buckets).forEach(type => {
+    const ws = buckets[type].sort((a, b) => a.x0 - b.x0);
+    const sep = NEXUS_JOIN_WITH_SPACE_TYPES.includes(type) ? ' ' : '';
+    cells[type] = {
+      text: ws.map(w => w.text).join(sep),
+      confidence: Math.round(ws.reduce((s, w) => s + w.confidence, 0) / ws.length)
+    };
+  });
+  return cells;
+}
+// 列ごとに妥当な文字種か検証し、明らかな誤読（記号だらけ・文字種違い等）は
+// 空欄にして「読み取れなかった」ことが分かるようにする（誤ったデータをそのまま
+// 登録してしまわないため）。
+function nexusCleanOcrCellByType(type, cell) {
+  if (!cell || !cell.text) return {
+    text: '',
+    confidence: 0
+  };
+  let text = cell.text.replace(/[|｜]/g, '').trim();
+  let confidence = cell.confidence;
+  if (type.startsWith('nameKana_')) {
+    const kanaOnly = text.replace(/[^ァ-ヶー\s]/g, '').trim();
+    const ratio = text.length ? kanaOnly.replace(/\s/g, '').length / text.replace(/\s/g, '').length : 0;
+    if (ratio < 0.5) return {
+      text: '',
+      confidence: Math.min(confidence, 40)
+    };
+    text = kanaOnly;
+  } else if (type === 'policyNum') {
+    text = text.replace(/[^0-9A-Za-z-]/g, '');
+    if (text.length < 5 || !/\d/.test(text)) return {
+      text: '',
+      confidence: Math.min(confidence, 40)
+    };
+  } else if (type === 'gender') {
+    const m = text.match(/男性|女性|不明/);
+    text = m ? m[0] : '';
+    if (!text) confidence = Math.min(confidence, 40);
+  } else if (type.startsWith('nameKanji_')) {
+    const symbolRatio = (text.match(/[^一-龠々ぁ-んァ-ヶー\sA-Za-z]/g) || []).length / Math.max(text.length, 1);
+    if (text.length > 12 || symbolRatio > 0.3) return {
+      text: '',
+      confidence: Math.min(confidence, 40)
+    };
+  }
+  return {
+    text,
+    confidence
+  };
+}
+// 表全体をOCRの単語データから復元し、顧客取込画面が使えるrow形式に変換する。
+// 見出し（列アンカー）が十分に検出できなかった場合はok:falseを返し、
+// 呼び出し側で従来の行ベース処理（nexusExtractOcrRows）へフォールバックさせる。
+function nexusBuildOcrTable(blocks) {
+  const words = nexusFlattenOcrWords(blocks);
+  if (words.length === 0) return {
+    ok: false,
+    rows: []
+  };
+  const allRows = nexusClusterOcrRows(words);
+  const {
+    headerRows,
+    dataRows
+  } = nexusSplitOcrHeaderRows(allRows);
+  const anchors = nexusBuildOcrColumnAnchors(headerRows);
+  if (anchors.length < 4 || dataRows.length === 0) return {
+    ok: false,
+    rows: []
+  };
+  const rows = dataRows.map(rowWords => {
+    const rawCells = nexusAssignOcrRowToColumns(rowWords, anchors);
+    const cells = {};
+    Object.keys(rawCells).forEach(type => {
+      cells[type] = nexusCleanOcrCellByType(type, rawCells[type]);
+    });
+    const pick = (...types) => types.map(t => cells[t]).find(c => c && c.text) || {
+      text: '',
+      confidence: 0
+    };
+    const nameCell = pick('nameKanji_customer', 'nameKanji_contractor', 'nameKanji_insured');
+    const kanaCell = pick('nameKana_customer', 'nameKana_contractor', 'nameKana_insured');
+    const genderCell = cells.gender || {
+      text: '',
+      confidence: 0
+    };
+    const companyMatch = nexusMatchInsuranceCompany(cells.company ? cells.company.text : '');
+    const phoneRaw = cells.phone ? cells.phone.text : '';
+    const phoneParsed = nexusParseOcrLine(phoneRaw);
+    const postalRaw = cells.postal ? cells.postal.text : '';
+    const postalParsed = nexusParseOcrLine(postalRaw);
+    const birthRaw = cells.birthdate ? cells.birthdate.text : '';
+    const birthParsed = nexusParseOcrLine(birthRaw);
+    return {
+      name: nameCell.text,
+      furigana: kanaCell.text,
+      birthdate: birthParsed.birthdate,
+      phone: phoneParsed.phone,
+      postalCode: postalParsed.postalCode,
+      address: cells.address ? cells.address.text : '',
+      email: '',
+      gender: genderCell.text,
+      company: companyMatch.company,
+      policyNum: cells.policyNum ? cells.policyNum.text : '',
+      confidence: {
+        name: nameCell.confidence,
+        furigana: kanaCell.confidence,
+        birthdate: cells.birthdate ? cells.birthdate.confidence : 0,
+        phone: cells.phone ? cells.phone.confidence : 0,
+        postalCode: cells.postal ? cells.postal.confidence : 0,
+        gender: genderCell.confidence,
+        company: cells.company ? cells.company.confidence : 0,
+        policyNum: cells.policyNum ? cells.policyNum.confidence : 0
+      }
+    };
+  }).filter(r => (r.birthdate || r.phone || r.policyNum) && (r.name || r.furigana || r.policyNum));
+  return {
+    ok: rows.length > 0,
+    rows: nexusDedupeRepeatedNames(nexusStripRepeatedNameTokens(rows))
+  };
+}
 // 取込候補行が既存顧客と重複していそうかを判定する。完全一致だけでなく
 // 「氏名＋生年月日」「氏名＋フリガナ」の組み合わせ一致、電話番号の完全一致も
 // 重複候補として拾う（電話番号は表記ゆれを避けるため数字だけで比較する）。
@@ -13407,6 +13665,37 @@ function NexusNetworkSection({
 }
 
 // ── 画像取込：1候補行の確認・手修正カード ──────────────────────
+// 表構造OCR（nexusBuildOcrTable）で読み取った項目には信頼度が付くため、
+// 90%以上は緑、70〜89%は黄、70%未満は赤で表示する（信頼度が無い＝従来の
+// 行ベース読み取りの項目にはバッジを出さない）。
+function nexusConfColor(c) {
+  if (c >= 90) return 'var(--success)';
+  if (c >= 70) return '#B45309';
+  return 'var(--danger)';
+}
+function NexusConfBadge({
+  row,
+  field
+}) {
+  const c = row.confidence && row.confidence[field];
+  if (c === undefined || c === null) return null;
+  return /*#__PURE__*/React.createElement("span", {
+    style: {
+      marginLeft: 6,
+      fontSize: 10,
+      fontWeight: 700,
+      color: nexusConfColor(c)
+    }
+  }, c, "%");
+}
+function nexusConfInputStyle(row, field) {
+  const c = row.confidence && row.confidence[field];
+  if (c === undefined || c === null || c >= 70) return {};
+  return {
+    borderColor: 'var(--danger)',
+    background: '#FEF2F2'
+  };
+}
 function NexusImageImportRow({
   row,
   onUpdate,
@@ -13464,16 +13753,24 @@ function NexusImageImportRow({
     }
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "氏名"), /*#__PURE__*/React.createElement("input", {
+  }, "氏名", /*#__PURE__*/React.createElement(NexusConfBadge, {
+    row: row,
+    field: "name"
+  })), /*#__PURE__*/React.createElement("input", {
     className: "form-input",
+    style: nexusConfInputStyle(row, 'name'),
     value: row.name || '',
     onChange: e => onUpdate({
       name: e.target.value
     })
   })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "フリガナ"), /*#__PURE__*/React.createElement("input", {
+  }, "フリガナ", /*#__PURE__*/React.createElement(NexusConfBadge, {
+    row: row,
+    field: "furigana"
+  })), /*#__PURE__*/React.createElement("input", {
     className: "form-input",
+    style: nexusConfInputStyle(row, 'furigana'),
     value: row.furigana || '',
     onChange: e => onUpdate({
       furigana: e.target.value
@@ -13485,17 +13782,25 @@ function NexusImageImportRow({
     }
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "生年月日"), /*#__PURE__*/React.createElement("input", {
+  }, "生年月日", /*#__PURE__*/React.createElement(NexusConfBadge, {
+    row: row,
+    field: "birthdate"
+  })), /*#__PURE__*/React.createElement("input", {
     type: "date",
     className: "form-input",
+    style: nexusConfInputStyle(row, 'birthdate'),
     value: row.birthdate || '',
     onChange: e => onUpdate({
       birthdate: e.target.value
     })
   })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "電話番号"), /*#__PURE__*/React.createElement("input", {
+  }, "電話番号", /*#__PURE__*/React.createElement(NexusConfBadge, {
+    row: row,
+    field: "phone"
+  })), /*#__PURE__*/React.createElement("input", {
     className: "form-input",
+    style: nexusConfInputStyle(row, 'phone'),
     value: row.phone || '',
     onChange: e => onUpdate({
       phone: e.target.value
@@ -13507,8 +13812,12 @@ function NexusImageImportRow({
     }
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "郵便番号"), /*#__PURE__*/React.createElement("input", {
+  }, "郵便番号", /*#__PURE__*/React.createElement(NexusConfBadge, {
+    row: row,
+    field: "postalCode"
+  })), /*#__PURE__*/React.createElement("input", {
     className: "form-input",
+    style: nexusConfInputStyle(row, 'postalCode'),
     value: row.postalCode || '',
     onChange: e => onUpdate({
       postalCode: e.target.value
@@ -13541,7 +13850,10 @@ function NexusImageImportRow({
     }
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "性別"), /*#__PURE__*/React.createElement("div", {
+  }, "性別", /*#__PURE__*/React.createElement(NexusConfBadge, {
+    row: row,
+    field: "gender"
+  })), /*#__PURE__*/React.createElement("div", {
     className: "toggle-group"
   }, ['男性', '女性', '不明'].map(g => /*#__PURE__*/React.createElement("button", {
     key: g,
@@ -13558,8 +13870,12 @@ function NexusImageImportRow({
     })
   }, g)))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "証券番号"), /*#__PURE__*/React.createElement("input", {
+  }, "証券番号", /*#__PURE__*/React.createElement(NexusConfBadge, {
+    row: row,
+    field: "policyNum"
+  })), /*#__PURE__*/React.createElement("input", {
     className: "form-input",
+    style: nexusConfInputStyle(row, 'policyNum'),
     value: row.policyNum || '',
     onChange: e => onUpdate({
       policyNum: e.target.value
@@ -13571,8 +13887,12 @@ function NexusImageImportRow({
     }
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "保険会社"), /*#__PURE__*/React.createElement("input", {
+  }, "保険会社", /*#__PURE__*/React.createElement(NexusConfBadge, {
+    row: row,
+    field: "company"
+  })), /*#__PURE__*/React.createElement("input", {
     className: "form-input",
+    style: nexusConfInputStyle(row, 'company'),
     value: row.company || '',
     onChange: e => onUpdate({
       company: e.target.value
@@ -13607,6 +13927,7 @@ function NexusImageImportScreen({
   const [progressText, setProgressText] = useState('');
   const [rows, setRows] = useState([]);
   const [rawTexts, setRawTexts] = useState([]);
+  const [rawModes, setRawModes] = useState([]);
   const [showRaw, setShowRaw] = useState(false);
   const fileRef = React.useRef(null);
   const updateRow = (id, patch) => setRows(prev => prev.map(r => r.id === id ? {
@@ -13625,6 +13946,9 @@ function NexusImageImportScreen({
         try {
           const collected = [];
           const newRawTexts = [];
+          const newRawModes = [];
+          let tableModeCount = 0;
+          let lineModeCount = 0;
           // 証券番号・氏名・カナ・電話番号…と列が多い表は、自動レイアウト解析（デフォルト）だと
           // 列の順序を誤認識しやすいため、「単一の均質なテキストブロック」として上から順に
           // 読ませるモード（PSM 6）に固定し、列間の空白もできるだけ保持させる。
@@ -13636,13 +13960,29 @@ function NexusImageImportScreen({
           for (let i = 0; i < files.length; i++) {
             setProgressText(`画像を読み取り中…（${i + 1}/${files.length}）`);
             const processed = await new Promise(resolve => nexusPreprocessImageForOcr(files[i], resolve));
+            // blocks:trueで単語ごとの座標を取得し、表として復元できるか試す。
+            // 復元できた場合は列位置に基づく高精度な結果を使い、できなかった場合
+            // （見出しを検出できない等）は従来の行ベースの読み取りにフォールバックする。
             const {
               data
-            } = await worker.recognize(processed || files[i]);
+            } = await worker.recognize(processed || files[i], {}, {
+              blocks: true,
+              text: true
+            });
             newRawTexts.push(data.text || '');
-            nexusExtractOcrRows(data.text || '').forEach(r => collected.push(r));
+            const table = nexusBuildOcrTable(data.blocks);
+            if (table.ok) {
+              tableModeCount++;
+              newRawModes.push('表構造モード（列を認識）');
+              table.rows.forEach(r => collected.push(r));
+            } else {
+              lineModeCount++;
+              newRawModes.push('通常モード（見出し検出失敗によるフォールバック）');
+              nexusExtractOcrRows(data.text || '').forEach(r => collected.push(r));
+            }
           }
           setRawTexts(prev => [...prev, ...newRawTexts]);
+          setRawModes(prev => [...prev, ...newRawModes]);
           await worker.terminate();
           worker = null;
           const withMeta = collected.map(r => ({
@@ -13655,7 +13995,13 @@ function NexusImageImportScreen({
           setRows(prev => [...prev, ...withMeta]);
           setPhase('review');
           if (withMeta.length === 0) {
-            alert('画像から顧客らしき行を読み取れませんでした。画像の向き・明るさをご確認のうえ、必要であれば手入力で追加してください。');
+            if (tableModeCount === 0 && lineModeCount > 0) {
+              alert('表の見出し（証券番号・氏名・カナ等）を検出できなかったため、通常の読み取りを試しましたが顧客らしき行が見つかりませんでした。表がまっすぐ・大きく写るよう撮り直してください。');
+            } else {
+              alert('画像から顧客らしき行を読み取れませんでした。画像の向き・明るさをご確認のうえ、必要であれば手入力で追加してください。');
+            }
+          } else if (lineModeCount > 0) {
+            alert(`一部の画像（${lineModeCount}枚）は表の見出しを検出できず、精度の落ちる通常読み取りを使用しました。読み取り結果は入念にご確認ください。`);
           }
         } catch (err) {
           if (worker) {
@@ -13842,7 +14188,7 @@ function NexusImageImportScreen({
       fontSize: 11,
       color: 'var(--text-sub)'
     }
-  }, "画像 ", i + 1), /*#__PURE__*/React.createElement("button", {
+  }, "画像 ", i + 1, "　", rawModes[i] || ''), /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "btn btn-outline btn-sm",
     onClick: () => {
