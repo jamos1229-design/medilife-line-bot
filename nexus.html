@@ -10642,7 +10642,7 @@ function nexusParseOcrLine(line) {
   // 表のラベル・記号など、氏名・フリガナとして混入しやすいノイズ語を除外する
   // （「本人」は被保険者欄などで「契約者と同一」を表す定型語として現れることが多い）
   const NOISE_TOKENS = ['本人', '個人', '法人', '不明', '男性', '女性', '未登録'];
-  const isGarbage = t => NOISE_TOKENS.includes(t) || t.length <= 1 || /^[a-z]+$/.test(t) || /^[|＊*ー\-＿_.。、,]+$/.test(t);
+  const isGarbage = t => NOISE_TOKENS.includes(t) || t.length <= 1 || /^[a-z]+$/.test(t) || /^[|＊*ー\-＿_.。、,]+$/.test(t) || /\d/.test(t);
   const tokens = rest.split(/[\s、,　]+/).map(t => t.trim()).filter(Boolean).filter(t => !isGarbage(t));
   const isKatakana = t => /^[ァ-ヶー]+$/.test(t);
   const furiganaTokens = tokens.filter(isKatakana);
@@ -13421,16 +13421,27 @@ function NexusImageImportScreen({
     setProgressText('画像認識ライブラリを準備中…');
     nexusEnsureOcrLib(() => {
       (async () => {
+        let worker = null;
         try {
           const collected = [];
+          // 証券番号・氏名・カナ・電話番号…と列が多い表は、自動レイアウト解析（デフォルト）だと
+          // 列の順序を誤認識しやすいため、「単一の均質なテキストブロック」として上から順に
+          // 読ませるモード（PSM 6）に固定し、列間の空白もできるだけ保持させる。
+          worker = await window.Tesseract.createWorker('jpn');
+          await worker.setParameters({
+            tessedit_pageseg_mode: '6',
+            preserve_interword_spaces: '1'
+          });
           for (let i = 0; i < files.length; i++) {
             setProgressText(`画像を読み取り中…（${i + 1}/${files.length}）`);
             const processed = await new Promise(resolve => nexusPreprocessImageForOcr(files[i], resolve));
             const {
               data
-            } = await window.Tesseract.recognize(processed || files[i], 'jpn');
+            } = await worker.recognize(processed || files[i]);
             nexusExtractOcrRows(data.text || '').forEach(r => collected.push(r));
           }
+          await worker.terminate();
+          worker = null;
           const withMeta = collected.map(r => ({
             id: uid(),
             ...r,
@@ -13444,6 +13455,11 @@ function NexusImageImportScreen({
             alert('画像から顧客らしき行を読み取れませんでした。画像の向き・明るさをご確認のうえ、必要であれば手入力で追加してください。');
           }
         } catch (err) {
+          if (worker) {
+            try {
+              await worker.terminate();
+            } catch (e) {}
+          }
           alert('画像の読み取りに失敗しました：' + err.message);
           setPhase(rows.length > 0 ? 'review' : 'pick');
         }
@@ -13540,7 +13556,7 @@ function NexusImageImportScreen({
       lineHeight: 1.7,
       color: 'var(--text)'
     }
-  }, /*#__PURE__*/React.createElement("b", null, "📸 精度を上げるコツ（モニターを撮影する場合）"), /*#__PURE__*/React.createElement("div", null, "・画面から少し離れて、ズームで寄って撮ると虹色の縞模様（モアレ）が出にくくなります"), /*#__PURE__*/React.createElement("div", null, "・列が多い表は1枚に収めず、5〜6列ずつに分けて大きく写すと読み取り精度が上がります"), /*#__PURE__*/React.createElement("div", null, "・真正面より少し斜めから、画面の明るさは中〜低めにすると縞模様が減ります"), /*#__PURE__*/React.createElement("div", null, "・「…」で省略表示されている列（フリガナ等）は、画像上でも読めないため取り込めません")), /*#__PURE__*/React.createElement("input", {
+  }, /*#__PURE__*/React.createElement("b", null, "📸 精度を上げるコツ（列が多い表は特に重要です）"), /*#__PURE__*/React.createElement("div", null, "・撮る前にブラウザの拡大表示（Ctrlキーと＋を数回）でページを150〜200%に拡大すると、文字が大きく写り精度が大きく上がります"), /*#__PURE__*/React.createElement("div", null, "・列がたくさんある表は、必要な列（氏名・カナ・生年月日・電話番号など）だけが画面に入るよう横スクロールし、2〜3回に分けて撮ってください。列が多いほど誤読が増えます"), /*#__PURE__*/React.createElement("div", null, "・スマホは画面の真正面・同じ高さで、なるべく傾けずに構えてください（斜めからだと文字が歪んで読み取れません）"), /*#__PURE__*/React.createElement("div", null, "・画面から少し離れてズームで寄ると、虹色の縞模様（モアレ）が出にくくなります"), /*#__PURE__*/React.createElement("div", null, "・「…」で省略表示されている列は、画像上でも読めないため取り込めません")), /*#__PURE__*/React.createElement("input", {
     ref: fileRef,
     type: "file",
     accept: "image/*",
