@@ -2795,6 +2795,15 @@ function CustomerForm({
     representative: '',
     industry: '',
     employeeCount: '',
+    corpNumber: '',
+    establishedDate: '',
+    fiscalYearEndMonth: '',
+    officerCount: '',
+    capitalJpy: '',
+    issuedShares: '',
+    shareholderStructureNote: '',
+    representativeShareRatio: '',
+    businessDescription: '',
     status: '未接触',
     contactMethod: '電話',
     contactChannel: '',
@@ -3019,6 +3028,134 @@ function CustomerForm({
     value: form.employeeCount || '',
     onChange: si('employeeCount')
   }))), /*#__PURE__*/React.createElement("div", {
+    className: "form-row",
+    style: {
+      marginTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "法人番号"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    placeholder: "13桁",
+    value: form.corpNumber || '',
+    onChange: si('corpNumber')
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "設立年月日"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    type: "date",
+    value: form.establishedDate || '',
+    onChange: si('establishedDate')
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "form-row",
+    style: {
+      marginTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "決算月"), /*#__PURE__*/React.createElement("select", {
+    className: "form-select",
+    value: form.fiscalYearEndMonth || '',
+    onChange: si('fiscalYearEndMonth')
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "未設定"), Array.from({
+    length: 12
+  }, (_, i) => i + 1).map(m => /*#__PURE__*/React.createElement("option", {
+    key: m,
+    value: m
+  }, m, "月")))), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "役員数"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    type: "number",
+    placeholder: "例：3",
+    value: form.officerCount || '',
+    onChange: si('officerCount')
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "form-row",
+    style: {
+      marginTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "資本金"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "￥",
+    value: form.capitalJpy || '',
+    onChange: si('capitalJpy'),
+    placeholder: "例：10000000"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "発行済株式数"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    type: "number",
+    placeholder: "例：200",
+    value: form.issuedShares || '',
+    onChange: si('issuedShares')
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "代表者持株比率（%）"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    type: "number",
+    placeholder: "例：100",
+    value: form.representativeShareRatio || '',
+    onChange: si('representativeShareRatio')
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "株主構成（メモ）"), /*#__PURE__*/React.createElement("textarea", {
+    className: "form-textarea",
+    placeholder: "例：代表者100%、または 代表者60%・配偶者40% など",
+    value: form.shareholderStructureNote || '',
+    onChange: si('shareholderStructureNote'),
+    rows: 2
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "事業内容"), /*#__PURE__*/React.createElement("textarea", {
+    className: "form-textarea",
+    placeholder: "主な事業内容を記入",
+    value: form.businessDescription || '',
+    onChange: si('businessDescription'),
+    rows: 2
+  })), /*#__PURE__*/React.createElement("div", {
     className: "form-row",
     style: {
       marginTop: 14
@@ -3883,7 +4020,8 @@ function CustomerDetail({
   onClose,
   onRegisterSuspect,
   onRegisterReferrer,
-  onOpenCustomer
+  onOpenCustomer,
+  onOpenCorpPlanning
 }) {
   const [confirmDel, setConfirmDel] = useState(false);
   const c = customer;
@@ -4085,7 +4223,14 @@ function CustomerDetail({
         fontWeight: 400
       }
     }, (x.name || '').trim() === (c.representative || '').trim() ? '（代表者）' : '（関連法人設定）')))));
-  })(), /*#__PURE__*/React.createElement("div", {
+  })(), c.customerType === '法人' && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: {
+      marginBottom: 10
+    },
+    onClick: () => onOpenCorpPlanning(c.id)
+  }, "📊 法人プランニングを開く"), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       flexDirection: 'column',
@@ -19569,6 +19714,1479 @@ function NexusFamilyTree({
     onClick: () => onSetInsurance(m.suspectId, k)
   }, FAMILY_INSURANCE_LABEL[k])))))));
 }
+// ── 法人プランニング：制度マスタ（ハードコード禁止のための設定値管理） ──────
+// 倒産防止共済の積立上限額など、制度改正で変わり得る数値はここに集約し、
+// 計算関数には引数として渡す（関数内で直接参照しない）。
+const NEXUS_REGIME_MASTER_KEY = 'nexus_regime_master_v1';
+const NEXUS_REGIME_DEFAULTS = {
+  safetyMutualCap: {
+    value: 8000000,
+    effectiveFrom: '2011-01-01',
+    effectiveTo: '',
+    source: '中小企業基盤整備機構（経営セーフティ共済）',
+    sourceUrl: '',
+    lastChecked: '2026-08-24',
+    note: '積立限度額。制度改正があればここを更新する'
+  }
+};
+function nexusIsRegimeMasterSane(m) {
+  return !!(m && m.safetyMutualCap && typeof m.safetyMutualCap.value === 'number' && m.safetyMutualCap.value > 0);
+}
+function nexusLoadRegimeMaster() {
+  try {
+    const raw = localStorage.getItem(NEXUS_REGIME_MASTER_KEY);
+    if (!raw) return NEXUS_REGIME_DEFAULTS;
+    const parsed = JSON.parse(raw);
+    const merged = { ...NEXUS_REGIME_DEFAULTS, ...parsed };
+    return nexusIsRegimeMasterSane(merged) ? merged : NEXUS_REGIME_DEFAULTS;
+  } catch (e) {
+    return NEXUS_REGIME_DEFAULTS;
+  }
+}
+function nexusSaveRegimeMaster(master) {
+  try {
+    localStorage.setItem(NEXUS_REGIME_MASTER_KEY, JSON.stringify(master));
+  } catch (e) {}
+}
+
+// ── 法人プランニング：純粋計算関数 ─────────────────────────────
+function nexusCorpNum(v) {
+  const n = parseFloat(v);
+  return isNaN(n) ? 0 : n;
+}
+// 貸借対照表の自動計算（総資産・総負債・純資産）。保存はせず表示のたびに計算することで
+// 入力値との食い違いを防ぐ。
+function nexusCorpFinancialTotals(bs) {
+  const b = bs || {};
+  const totalAssets = nexusCorpNum(b.cash) + nexusCorpNum(b.accountsReceivable) + nexusCorpNum(b.inventory) + nexusCorpNum(b.otherCurrentAssets) + nexusCorpNum(b.fixedAssets) + nexusCorpNum(b.investmentsOther);
+  const totalLiabilities = nexusCorpNum(b.accountsPayable) + nexusCorpNum(b.shortTermDebt) + nexusCorpNum(b.longTermDebt) + nexusCorpNum(b.otherLiabilities);
+  const netAssets = nexusCorpNum(b.capitalStock) + nexusCorpNum(b.retainedEarnings);
+  return {
+    totalAssets,
+    totalLiabilities,
+    netAssets
+  };
+}
+// 主要financial ratiosを算出し、それぞれに日本語の意味説明を添える。%表示の指標は
+// あらかじめ100倍しておき、value自体が常に表示単位のまま使えるようにする。
+// 分母が0の場合はvalue:nullを返し、呼び出し側で「算出不可」表示に切り替える。
+function nexusCorpFinancialRatios(pl, bs) {
+  const p = pl || {};
+  const b = bs || {};
+  const {
+    totalAssets,
+    netAssets
+  } = nexusCorpFinancialTotals(b);
+  const revenue = nexusCorpNum(p.revenue);
+  const currentAssets = nexusCorpNum(b.cash) + nexusCorpNum(b.accountsReceivable) + nexusCorpNum(b.inventory) + nexusCorpNum(b.otherCurrentAssets);
+  const currentLiabilities = nexusCorpNum(b.accountsPayable) + nexusCorpNum(b.shortTermDebt);
+  const totalDebt = nexusCorpNum(b.shortTermDebt) + nexusCorpNum(b.longTermDebt);
+  const monthlyRevenue = revenue / 12;
+  const ratio = (n, d) => d ? n / d : null;
+  const pct = (n, d) => {
+    const r = ratio(n, d);
+    return r === null ? null : r * 100;
+  };
+  return {
+    equityRatio: {
+      value: pct(netAssets, totalAssets),
+      label: '自己資本比率',
+      unit: '%',
+      desc: '総資産のうち返済不要の自己資本（純資産）が占める割合。高いほど財務が安定している目安。'
+    },
+    currentRatio: {
+      value: pct(currentAssets, currentLiabilities),
+      label: '流動比率',
+      unit: '%',
+      desc: '1年以内に現金化できる資産が、1年以内に払うべき負債の何倍あるか。100%以上が望ましいとされる目安。'
+    },
+    operatingMargin: {
+      value: pct(nexusCorpNum(p.operatingProfit), revenue),
+      label: '売上高営業利益率',
+      unit: '%',
+      desc: '本業でどれだけ効率よく利益を出せているかを示す割合。'
+    },
+    ordinaryMargin: {
+      value: pct(nexusCorpNum(p.ordinaryProfit), revenue),
+      label: '売上高経常利益率',
+      unit: '%',
+      desc: '本業に加え財務活動等も含めた通常の収益力を示す割合。'
+    },
+    roa: {
+      value: pct(nexusCorpNum(p.netProfit), totalAssets),
+      label: 'ROA（総資産利益率）',
+      unit: '%',
+      desc: '保有する資産全体でどれだけ利益を生み出せているかを示す割合。'
+    },
+    roe: {
+      value: pct(nexusCorpNum(p.netProfit), netAssets),
+      label: 'ROE（自己資本利益率）',
+      unit: '%',
+      desc: '株主から預かった自己資本でどれだけ利益を生み出せているかを示す割合。'
+    },
+    debtToMonthlyRevenue: {
+      value: ratio(totalDebt, monthlyRevenue),
+      label: '借入金月商倍率',
+      unit: '倍',
+      desc: '借入金が月商（月平均売上）の何倍あるか。一般に小さいほど返済負担が軽いとされる目安。'
+    },
+    cashToMonthlyRevenue: {
+      value: ratio(nexusCorpNum(b.cash), monthlyRevenue),
+      label: '現預金月商倍率',
+      unit: '倍',
+      desc: '手元の現預金が月商の何倍あるか。資金繰りの余裕度を示す目安。'
+    }
+  };
+}
+// 倒産防止共済：現在積立額と上限額から、上限までの残額を計算する。
+// 上限額は呼び出し側から必ず渡す（コードに直接埋め込まない＝制度改正への対応）。
+function nexusSafetyMutualStatus(safetyMutual, capValue) {
+  const sm = safetyMutual || {};
+  const current = nexusCorpNum(sm.currentBalance);
+  const remaining = Math.max(0, nexusCorpNum(capValue) - current);
+  return {
+    current,
+    cap: nexusCorpNum(capValue),
+    remaining
+  };
+}
+// 月額掛金を継続した場合、上限に到達するまでの月数・到達予定年月（YYYY-MM）を計算する。
+// startDateはYYYY-MM形式を渡す（掛金変更予定日からのシナリオ用）。
+function nexusSafetyMutualScenario(remaining, monthlyAmount, startDate) {
+  const monthly = nexusCorpNum(monthlyAmount);
+  if (!monthly || monthly <= 0 || remaining <= 0) {
+    return {
+      monthsToFull: remaining <= 0 ? 0 : null,
+      fullDate: null
+    };
+  }
+  const monthsToFull = Math.ceil(remaining / monthly);
+  let fullDate = null;
+  if (startDate) {
+    const d = new Date(startDate + '-01');
+    if (!isNaN(d.getTime())) {
+      d.setMonth(d.getMonth() + monthsToFull - 1);
+      fullDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    }
+  }
+  return {
+    monthsToFull,
+    fullDate
+  };
+}
+// 借入一覧の集計：総額・年間返済額・毎月返済額・残高加重平均金利
+function nexusCorpLoanTotals(loans) {
+  const list = loans || [];
+  const totalBalance = list.reduce((s, l) => s + nexusCorpNum(l.currentBalance), 0);
+  const monthlyPaymentTotal = list.reduce((s, l) => s + nexusCorpNum(l.monthlyPayment), 0);
+  const annualPaymentTotal = monthlyPaymentTotal * 12;
+  const weightedRateSum = list.reduce((s, l) => s + nexusCorpNum(l.currentBalance) * nexusCorpNum(l.interestRate), 0);
+  const averageRate = totalBalance > 0 ? weightedRateSum / totalBalance : null;
+  return {
+    totalBalance,
+    monthlyPaymentTotal,
+    annualPaymentTotal,
+    averageRate,
+    count: list.length
+  };
+}
+// customer.corpのある配列フィールド（loans/officers/actionPlan等）に対する
+// add/update/removeをまとめて作る（NexusSimpleAssetListのopsパターンを踏襲）。
+function nexusCorpArrayOps(data, updateCorp, key, blankItemFn) {
+  return {
+    add: () => updateCorp({
+      [key]: [...(data[key] || []), blankItemFn()]
+    }),
+    update: (id, item) => updateCorp({
+      [key]: (data[key] || []).map(x => x.id === id ? item : x)
+    }),
+    remove: id => updateCorp({
+      [key]: (data[key] || []).filter(x => x.id !== id)
+    })
+  };
+}
+
+// ── 法人プランニング：汎用CRUDリスト（借入・法人保険・役員・アクションプラン共通） ──
+function NexusCorpItemField({
+  f,
+  item,
+  onChange,
+  customers
+}) {
+  if (f.type === 'select') {
+    return /*#__PURE__*/React.createElement("select", {
+      className: "form-select",
+      value: item[f.key] || '',
+      onChange: e => onChange({
+        [f.key]: e.target.value
+      })
+    }, /*#__PURE__*/React.createElement("option", {
+      value: ""
+    }, "選択"), (f.options || []).map(o => /*#__PURE__*/React.createElement("option", {
+      key: o,
+      value: o
+    }, o)));
+  }
+  if (f.type === 'amount') {
+    return /*#__PURE__*/React.createElement(AmountInput, {
+      prefix: "￥",
+      value: item[f.key] || '',
+      placeholder: f.placeholder,
+      onChange: e => onChange({
+        [f.key]: e.target.value
+      })
+    });
+  }
+  if (f.type === 'textarea') {
+    return /*#__PURE__*/React.createElement("textarea", {
+      className: "form-textarea",
+      value: item[f.key] || '',
+      placeholder: f.placeholder,
+      rows: 2,
+      onChange: e => onChange({
+        [f.key]: e.target.value
+      })
+    });
+  }
+  if (f.type === 'customerSelect') {
+    return /*#__PURE__*/React.createElement(CustomerSelect, {
+      value: item[f.key] || '',
+      onChange: v => onChange({
+        [f.key]: v
+      }),
+      customers: customers || []
+    });
+  }
+  return /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    type: f.type === 'number' ? 'number' : f.type === 'date' ? 'date' : 'text',
+    value: item[f.key] || '',
+    placeholder: f.placeholder,
+    onChange: e => onChange({
+      [f.key]: e.target.value
+    })
+  });
+}
+function NexusCorpItemList({
+  title,
+  items,
+  fields,
+  ops,
+  addLabel,
+  summaryFn,
+  customers,
+  emptyText
+}) {
+  const list = items || [];
+  const renderItem = item => {
+    const header = /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 8,
+        gap: 8
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        color: 'var(--text-sub)',
+        fontWeight: 700,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap'
+      }
+    }, summaryFn ? summaryFn(item) : ''), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => ops.remove(item.id),
+      style: {
+        background: 'none',
+        border: 'none',
+        color: 'var(--danger)',
+        fontSize: 18,
+        cursor: 'pointer',
+        flexShrink: 0
+      }
+    }, "×"));
+    const fieldEls = fields.map(f => /*#__PURE__*/React.createElement("div", {
+      key: f.key,
+      style: f.wide ? {
+        flex: '1 1 100%'
+      } : {
+        flex: '1 1 45%'
+      }
+    }, /*#__PURE__*/React.createElement("label", {
+      className: "form-label"
+    }, f.label), /*#__PURE__*/React.createElement(NexusCorpItemField, {
+      f,
+      item,
+      customers,
+      onChange: patch => ops.update(item.id, {
+        ...item,
+        ...patch
+      })
+    })));
+    const fieldsRow = /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 8
+      }
+    }, fieldEls);
+    return /*#__PURE__*/React.createElement("div", {
+      key: item.id,
+      style: {
+        border: '1px solid var(--border)',
+        borderRadius: 12,
+        padding: 12,
+        marginBottom: 10
+      }
+    }, header, fieldsRow);
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card-title"
+  }, title), list.length === 0 && /*#__PURE__*/React.createElement("div", {
+    className: "empty"
+  }, emptyText || `${title}はまだ登録されていません`), list.map(renderItem), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-sm btn-full",
+    onClick: ops.add
+  }, addLabel || `＋ ${title}を追加`));
+}
+
+// ── サマリータブ ────────────────────────────────────────────
+function NexusCorpSummaryTab({
+  corp,
+  data
+}) {
+  const financials = data.financials || [];
+  const latest = financials[financials.length - 1];
+  const totals = latest ? nexusCorpFinancialTotals(latest.bs) : null;
+  const loanTotals = nexusCorpLoanTotals(data.loans);
+  const regimeMaster = nexusLoadRegimeMaster();
+  const safetyStatus = nexusSafetyMutualStatus(data.safetyMutual, regimeMaster.safetyMutualCap.value);
+  const infoRows = [['法人番号', corp.corpNumber], ['代表者', corp.representative], ['設立年月日', corp.establishedDate], ['決算月', corp.fiscalYearEndMonth ? `${corp.fiscalYearEndMonth}月` : ''], ['業種', corp.industry], ['従業員数', corp.employeeCount ? `${corp.employeeCount}名` : ''], ['役員数', corp.officerCount ? `${corp.officerCount}名` : ''], ['資本金', corp.capitalJpy ? `${Number(corp.capitalJpy).toLocaleString()}円` : ''], ['発行済株式数', corp.issuedShares ? `${Number(corp.issuedShares).toLocaleString()}株` : ''], ['代表者持株比率', corp.representativeShareRatio ? `${corp.representativeShareRatio}%` : '']].filter(([, v]) => v);
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card-title"
+  }, "法人基本情報"), corp.businessDescription && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--text-sub)',
+      marginBottom: 10,
+      lineHeight: 1.6
+    }
+  }, corp.businessDescription), infoRows.length > 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 8
+    }
+  }, infoRows.map(([label, value]) => /*#__PURE__*/React.createElement("div", {
+    key: label,
+    className: "info-item",
+    style: {
+      flex: '1 1 45%'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-label"
+  }, label), /*#__PURE__*/React.createElement("div", {
+    className: "info-value"
+  }, value)))) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text-sub)'
+    }
+  }, "顧客編集画面で法人基本情報を入力してください")), /*#__PURE__*/React.createElement("div", {
+    className: "stat-grid"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "stat-card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "stat-num"
+  }, latest ? `${Math.round(totals.netAssets / 10000).toLocaleString()}万円` : '未入力'), /*#__PURE__*/React.createElement("div", {
+    className: "stat-label"
+  }, "純資産（最新期）")), /*#__PURE__*/React.createElement("div", {
+    className: "stat-card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "stat-num"
+  }, `${Math.round(loanTotals.totalBalance / 10000).toLocaleString()}万円`), /*#__PURE__*/React.createElement("div", {
+    className: "stat-label"
+  }, "借入総額")), /*#__PURE__*/React.createElement("div", {
+    className: "stat-card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "stat-num"
+  }, `${Math.round(safetyStatus.remaining / 10000).toLocaleString()}万円`), /*#__PURE__*/React.createElement("div", {
+    className: "stat-label"
+  }, "倒産防止共済 残り枠")), /*#__PURE__*/React.createElement("div", {
+    className: "stat-card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "stat-num"
+  }, (data.corpInsurancePolicies || []).length, "件"), /*#__PURE__*/React.createElement("div", {
+    className: "stat-label"
+  }, "法人保険契約数"))));
+}
+
+// ── 財務タブ：決算入力・推移・比率 ──────────────────────────────
+const NEXUS_CORP_PL_FIELDS = [['revenue', '売上高'], ['grossProfit', '売上総利益'], ['operatingProfit', '営業利益'], ['ordinaryProfit', '経常利益'], ['profitBeforeTax', '税引前利益'], ['corporateTax', '法人税等'], ['netProfit', '当期純利益'], ['depreciation', '減価償却費'], ['officerCompensation', '役員報酬'], ['personnelExpense', '人件費'], ['interestExpense', '支払利息']];
+const NEXUS_CORP_BS_FIELDS = [['cash', '現預金'], ['accountsReceivable', '売掛金'], ['inventory', '棚卸資産'], ['otherCurrentAssets', 'その他流動資産'], ['fixedAssets', '固定資産'], ['investmentsOther', '投資その他資産'], ['accountsPayable', '買掛金'], ['shortTermDebt', '短期借入金'], ['longTermDebt', '長期借入金'], ['otherLiabilities', 'その他負債'], ['capitalStock', '資本金'], ['retainedEarnings', '利益剰余金']];
+function NexusCorpFinancialPeriodCard({
+  period,
+  onUpdate,
+  onRemove
+}) {
+  const pl = period.pl || {};
+  const bs = period.bs || {};
+  const totals = nexusCorpFinancialTotals(bs);
+  const updatePl = (key, v) => onUpdate({
+    ...period,
+    pl: {
+      ...pl,
+      [key]: v
+    }
+  });
+  const updateBs = (key, v) => onUpdate({
+    ...period,
+    bs: {
+      ...bs,
+      [key]: v
+    }
+  });
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 10,
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    style: {
+      fontWeight: 700,
+      flex: 1
+    },
+    placeholder: "例：第15期／2025年3月期",
+    value: period.periodLabel || '',
+    onChange: e => onUpdate({
+      ...period,
+      periodLabel: e.target.value
+    })
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: onRemove,
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--danger)',
+      fontSize: 18,
+      cursor: 'pointer',
+      flexShrink: 0
+    }
+  }, "×")), /*#__PURE__*/React.createElement("div", {
+    className: "section-header",
+    style: {
+      marginTop: 0
+    }
+  }, "損益計算書"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 8,
+      marginBottom: 14
+    }
+  }, NEXUS_CORP_PL_FIELDS.map(([key, label]) => /*#__PURE__*/React.createElement("div", {
+    key,
+    style: {
+      flex: '1 1 45%'
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, label), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "￥",
+    value: pl[key] || '',
+    onChange: e => updatePl(key, e.target.value)
+  })))), /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "貸借対照表"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 8
+    }
+  }, NEXUS_CORP_BS_FIELDS.map(([key, label]) => /*#__PURE__*/React.createElement("div", {
+    key,
+    style: {
+      flex: '1 1 45%'
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, label), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "￥",
+    value: bs[key] || '',
+    onChange: e => updateBs(key, e.target.value)
+  })))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 8,
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-item",
+    style: {
+      flex: '1 1 30%'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-label"
+  }, "総資産（自動計算）"), /*#__PURE__*/React.createElement("div", {
+    className: "info-value"
+  }, totals.totalAssets.toLocaleString(), "円")), /*#__PURE__*/React.createElement("div", {
+    className: "info-item",
+    style: {
+      flex: '1 1 30%'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-label"
+  }, "総負債（自動計算）"), /*#__PURE__*/React.createElement("div", {
+    className: "info-value"
+  }, totals.totalLiabilities.toLocaleString(), "円")), /*#__PURE__*/React.createElement("div", {
+    className: "info-item",
+    style: {
+      flex: '1 1 30%'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-label"
+  }, "純資産（自動計算）"), /*#__PURE__*/React.createElement("div", {
+    className: "info-value"
+  }, totals.netAssets.toLocaleString(), "円"))));
+}
+const NEXUS_CORP_TREND_METRICS = [['revenue', '売上高', 'pl'], ['operatingProfit', '営業利益', 'pl'], ['ordinaryProfit', '経常利益', 'pl'], ['netProfit', '当期純利益', 'pl'], ['cash', '現預金', 'bs'], ['debt', '借入金', 'calc'], ['netAssets', '純資産', 'calc'], ['retainedEarnings', '利益剰余金', 'bs']];
+function NexusCorpTrendTable({
+  financials
+}) {
+  const list = financials || [];
+  if (list.length === 0) return null;
+  const rows = NEXUS_CORP_TREND_METRICS.map(([key, label, src]) => {
+    const values = list.map(p => {
+      if (src === 'pl') return nexusCorpNum((p.pl || {})[key]);
+      if (src === 'bs') return nexusCorpNum((p.bs || {})[key]);
+      if (key === 'debt') return nexusCorpNum((p.bs || {}).shortTermDebt) + nexusCorpNum((p.bs || {}).longTermDebt);
+      if (key === 'netAssets') return nexusCorpFinancialTotals(p.bs).netAssets;
+      return 0;
+    });
+    return {
+      label,
+      values
+    };
+  });
+  const thStyle = {
+    textAlign: 'left',
+    padding: '5px 8px',
+    borderBottom: '1px solid var(--border)'
+  };
+  const thRightStyle = {
+    textAlign: 'right',
+    padding: '5px 8px',
+    borderBottom: '1px solid var(--border)'
+  };
+  const tdStyle = {
+    padding: '5px 8px',
+    borderBottom: '1px solid var(--border)'
+  };
+  const tdRightStyle = {
+    textAlign: 'right',
+    padding: '5px 8px',
+    borderBottom: '1px solid var(--border)'
+  };
+  const headerRow = /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", {
+    style: thStyle
+  }, "項目"), list.map((p, i) => /*#__PURE__*/React.createElement("th", {
+    key: i,
+    style: thRightStyle
+  }, p.periodLabel || `第${i + 1}期`)));
+  const bodyRows = rows.map(r => {
+    const valueCells = r.values.map((v, i) => /*#__PURE__*/React.createElement("td", {
+      key: i,
+      style: tdRightStyle
+    }, v.toLocaleString(), "円"));
+    return /*#__PURE__*/React.createElement("tr", {
+      key: r.label
+    }, /*#__PURE__*/React.createElement("td", {
+      style: tdStyle
+    }, r.label), valueCells);
+  });
+  const table = /*#__PURE__*/React.createElement("table", {
+    style: {
+      width: '100%',
+      borderCollapse: 'collapse',
+      fontSize: 11.5
+    }
+  }, /*#__PURE__*/React.createElement("thead", null, headerRow), /*#__PURE__*/React.createElement("tbody", null, bodyRows));
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card-title"
+  }, "推移"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      overflowX: 'auto'
+    }
+  }, table));
+}
+function NexusCorpRatioGrid({
+  financials
+}) {
+  const list = financials || [];
+  if (list.length === 0) {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "card"
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: 'var(--text-sub)'
+      }
+    }, "決算情報を入力すると主要な指標が表示されます"));
+  }
+  const latest = list[list.length - 1];
+  const ratios = nexusCorpFinancialRatios(latest.pl, latest.bs);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card-title"
+  }, `主要指標（${latest.periodLabel || '最新期'}）`), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10
+    }
+  }, Object.values(ratios).map(r => /*#__PURE__*/React.createElement("div", {
+    key: r.label,
+    style: {
+      borderBottom: '1px solid var(--border)',
+      paddingBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'baseline'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700
+    }
+  }, r.label), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 16,
+      fontWeight: 800,
+      color: 'var(--accent)'
+    }
+  }, r.value === null ? '算出不可' : `${r.value.toFixed(1)}${r.unit}`)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      marginTop: 2
+    }
+  }, r.desc)))));
+}
+
+// ── 借入タブ ────────────────────────────────────────────────
+function NexusCorpLoansTab({
+  data,
+  updateCorp
+}) {
+  const loans = data.loans || [];
+  const ops = nexusCorpArrayOps(data, updateCorp, 'loans', () => ({
+    id: uid(),
+    lender: '',
+    purpose: '',
+    originalAmount: '',
+    currentBalance: '',
+    interestRate: '',
+    monthlyPayment: '',
+    borrowDate: '',
+    finalPaymentDate: '',
+    guarantee: '',
+    collateral: '',
+    representativeGuarantee: '',
+    memo: ''
+  }));
+  const totals = nexusCorpLoanTotals(loans);
+  const fields = [{
+    key: 'lender',
+    label: '金融機関'
+  }, {
+    key: 'purpose',
+    label: '借入目的'
+  }, {
+    key: 'originalAmount',
+    label: '当初借入額',
+    type: 'amount'
+  }, {
+    key: 'currentBalance',
+    label: '現在残高',
+    type: 'amount'
+  }, {
+    key: 'interestRate',
+    label: '金利（%）',
+    type: 'number'
+  }, {
+    key: 'monthlyPayment',
+    label: '毎月返済額',
+    type: 'amount'
+  }, {
+    key: 'borrowDate',
+    label: '借入日',
+    type: 'date'
+  }, {
+    key: 'finalPaymentDate',
+    label: '最終返済日',
+    type: 'date'
+  }, {
+    key: 'guarantee',
+    label: '保証'
+  }, {
+    key: 'collateral',
+    label: '担保'
+  }, {
+    key: 'representativeGuarantee',
+    label: '代表者保証'
+  }, {
+    key: 'memo',
+    label: 'メモ',
+    type: 'textarea',
+    wide: true
+  }];
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "stat-grid"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "stat-card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "stat-num"
+  }, `${Math.round(totals.totalBalance / 10000).toLocaleString()}万円`), /*#__PURE__*/React.createElement("div", {
+    className: "stat-label"
+  }, "借入総額")), /*#__PURE__*/React.createElement("div", {
+    className: "stat-card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "stat-num"
+  }, totals.annualPaymentTotal.toLocaleString(), "円"), /*#__PURE__*/React.createElement("div", {
+    className: "stat-label"
+  }, "年間返済額")), /*#__PURE__*/React.createElement("div", {
+    className: "stat-card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "stat-num"
+  }, totals.monthlyPaymentTotal.toLocaleString(), "円"), /*#__PURE__*/React.createElement("div", {
+    className: "stat-label"
+  }, "毎月返済額")), /*#__PURE__*/React.createElement("div", {
+    className: "stat-card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "stat-num"
+  }, totals.averageRate === null ? '—' : `${totals.averageRate.toFixed(2)}%`), /*#__PURE__*/React.createElement("div", {
+    className: "stat-label"
+  }, "平均金利（残高加重）"))), /*#__PURE__*/React.createElement(NexusCorpItemList, {
+    title: "借入金一覧",
+    items: loans,
+    fields,
+    ops,
+    summaryFn: l => `${l.lender || '（金融機関未入力）'}／残高${l.currentBalance ? Number(l.currentBalance).toLocaleString() + '円' : '未入力'}`,
+    emptyText: "借入金が登録されていません"
+  }));
+}
+
+// ── 倒産防止共済タブ ──────────────────────────────────────────
+function NexusCorpSafetyMutualTab({
+  data,
+  updateCorp
+}) {
+  const sm = data.safetyMutual || {};
+  const [regimeMaster, setRegimeMaster] = useState(() => nexusLoadRegimeMaster());
+  const [showRegimeEdit, setShowRegimeEdit] = useState(false);
+  const [scenarios, setScenarios] = useState(() => [{
+    id: 'a',
+    label: '現行の掛金を継続',
+    monthlyAmount: sm.monthlyContribution || '',
+    startDate: ''
+  }, {
+    id: 'b',
+    label: '変更後の掛金',
+    monthlyAmount: sm.plannedFutureContribution || '',
+    startDate: sm.contributionChangeDate || ''
+  }]);
+  const update = k => e => updateCorp({
+    safetyMutual: {
+      ...sm,
+      [k]: e.target.value
+    }
+  });
+  const status = nexusSafetyMutualStatus(sm, regimeMaster.safetyMutualCap.value);
+  const updateScenario = (id, patch) => setScenarios(prev => prev.map(s => s.id === id ? {
+    ...s,
+    ...patch
+  } : s));
+  const addScenario = () => setScenarios(prev => [...prev, {
+    id: uid(),
+    label: '',
+    monthlyAmount: '',
+    startDate: ''
+  }]);
+  const removeScenario = id => setScenarios(prev => prev.filter(s => s.id !== id));
+  const saveRegimeMaster = () => {
+    nexusSaveRegimeMaster(regimeMaster);
+    setShowRegimeEdit(false);
+  };
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card-title"
+  }, "倒産防止共済（経営セーフティ共済）"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: '1 1 45%'
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "現在の積立額"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "￥",
+    value: sm.currentBalance || '',
+    onChange: update('currentBalance')
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: '1 1 45%'
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "現在の月額掛金"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "￥",
+    value: sm.monthlyContribution || '',
+    onChange: update('monthlyContribution')
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: '1 1 45%'
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "掛金累計額"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "￥",
+    value: sm.cumulativeContribution || '',
+    onChange: update('cumulativeContribution')
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: '1 1 45%'
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "今後の予定掛金"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "￥",
+    value: sm.plannedFutureContribution || '',
+    onChange: update('plannedFutureContribution')
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: '1 1 45%'
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "掛金変更予定日"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    type: "date",
+    value: sm.contributionChangeDate || '',
+    onChange: update('contributionChangeDate')
+  })))), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card-title",
+    style: {
+      marginBottom: 0
+    }
+  }, "現状"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setShowRegimeEdit(v => !v),
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--accent)',
+      fontSize: 11,
+      cursor: 'pointer'
+    }
+  }, "⚙️ 上限額の設定")), showRegimeEdit && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: 'var(--bg)',
+      borderRadius: 10,
+      padding: 10,
+      marginTop: 8,
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      marginBottom: 8
+    }
+  }, "制度改正があった場合はここで上限額を更新してください（計算式には直接書き込まれず、この設定値が使われます）"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: '1 1 45%'
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "上限額"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "￥",
+    value: regimeMaster.safetyMutualCap.value,
+    onChange: e => setRegimeMaster(m => ({
+      ...m,
+      safetyMutualCap: {
+        ...m.safetyMutualCap,
+        value: Number(e.target.value) || 0
+      }
+    }))
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: '1 1 45%'
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "出典"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    value: regimeMaster.safetyMutualCap.source || '',
+    onChange: e => setRegimeMaster(m => ({
+      ...m,
+      safetyMutualCap: {
+        ...m.safetyMutualCap,
+        source: e.target.value
+      }
+    }))
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: '1 1 45%'
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "最終確認日"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    type: "date",
+    value: regimeMaster.safetyMutualCap.lastChecked || '',
+    onChange: e => setRegimeMaster(m => ({
+      ...m,
+      safetyMutualCap: {
+        ...m.safetyMutualCap,
+        lastChecked: e.target.value
+      }
+    }))
+  }))), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-sm",
+    style: {
+      marginTop: 8
+    },
+    onClick: saveRegimeMaster
+  }, "この設定を保存")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-item",
+    style: {
+      flex: '1 1 30%'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-label"
+  }, "現在積立額"), /*#__PURE__*/React.createElement("div", {
+    className: "info-value"
+  }, status.current.toLocaleString(), "円")), /*#__PURE__*/React.createElement("div", {
+    className: "info-item",
+    style: {
+      flex: '1 1 30%'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-label"
+  }, "上限額"), /*#__PURE__*/React.createElement("div", {
+    className: "info-value"
+  }, status.cap.toLocaleString(), "円")), /*#__PURE__*/React.createElement("div", {
+    className: "info-item",
+    style: {
+      flex: '1 1 30%'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-label"
+  }, "上限までの残額"), /*#__PURE__*/React.createElement("div", {
+    className: "info-value",
+    style: {
+      color: 'var(--accent)',
+      fontWeight: 800
+    }
+  }, status.remaining.toLocaleString(), "円")))), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card-title"
+  }, "掛金シナリオ比較"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      marginBottom: 10
+    }
+  }, "掛金を増やす・減らす・変更するパターンを比較できます（この画面上での試算のみで、保存はされません）"), scenarios.map(sc => {
+    const result = nexusSafetyMutualScenario(status.remaining, sc.monthlyAmount, sc.startDate ? sc.startDate.slice(0, 7) : '');
+    return /*#__PURE__*/React.createElement("div", {
+      key: sc.id,
+      style: {
+        border: '1px solid var(--border)',
+        borderRadius: 12,
+        padding: 10,
+        marginBottom: 8
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8,
+        marginBottom: 8
+      }
+    }, /*#__PURE__*/React.createElement("input", {
+      className: "form-input",
+      style: {
+        flex: 1
+      },
+      placeholder: "パターン名（例：月10万円を継続）",
+      value: sc.label,
+      onChange: e => updateScenario(sc.id, {
+        label: e.target.value
+      })
+    }), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => removeScenario(sc.id),
+      style: {
+        background: 'none',
+        border: 'none',
+        color: 'var(--danger)',
+        fontSize: 18,
+        cursor: 'pointer'
+      }
+    }, "×")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 8
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        flex: '1 1 45%'
+      }
+    }, /*#__PURE__*/React.createElement("label", {
+      className: "form-label"
+    }, "月額掛金"), /*#__PURE__*/React.createElement(AmountInput, {
+      prefix: "￥",
+      value: sc.monthlyAmount,
+      onChange: e => updateScenario(sc.id, {
+        monthlyAmount: e.target.value
+      })
+    })), /*#__PURE__*/React.createElement("div", {
+      style: {
+        flex: '1 1 45%'
+      }
+    }, /*#__PURE__*/React.createElement("label", {
+      className: "form-label"
+    }, "開始日（年月のみ使用）"), /*#__PURE__*/React.createElement("input", {
+      className: "form-input",
+      type: "date",
+      value: sc.startDate,
+      onChange: e => updateScenario(sc.id, {
+        startDate: e.target.value
+      })
+    }))), /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: 8,
+        fontSize: 13,
+        fontWeight: 700,
+        color: 'var(--accent)'
+      }
+    }, result.monthsToFull === null ? '月額掛金を入力してください' : result.monthsToFull === 0 ? '既に上限に達しています' : `残り${status.remaining.toLocaleString()}円 ÷ ${Number(sc.monthlyAmount).toLocaleString()}円 → あと${result.monthsToFull}ヶ月${result.fullDate ? `（${result.fullDate}頃に満額）` : ''}`));
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-sm btn-full",
+    onClick: addScenario
+  }, "＋ 比較パターンを追加")));
+}
+
+// ── 法人保険タブ ──────────────────────────────────────────────
+const NEXUS_CORP_INSURANCE_PURPOSES = ['死亡保障', '事業保障', '借入対策', '退職金準備', '福利厚生', 'その他'];
+const NEXUS_CORP_ACCOUNTING_TREATMENTS = ['全額損金', '1/2損金', '1/3損金', '1/4損金', '資産計上', 'その他'];
+function NexusCorpInsuranceTab({
+  data,
+  updateCorp
+}) {
+  const list = data.corpInsurancePolicies || [];
+  const ops = nexusCorpArrayOps(data, updateCorp, 'corpInsurancePolicies', () => ({
+    id: uid(),
+    company: '',
+    product: '',
+    insured: '',
+    contractor: '',
+    beneficiary: '',
+    insuranceType: '',
+    coverageAmount: '',
+    annualPremium: '',
+    paymentTerm: '',
+    insurancePeriod: '',
+    currentSurrenderValue: '',
+    maxSurrenderRate: '',
+    maxSurrenderRateYear: '',
+    accountingTreatment: '',
+    purpose: '',
+    memo: ''
+  }));
+  const fields = [{
+    key: 'company',
+    label: '保険会社'
+  }, {
+    key: 'product',
+    label: '商品名'
+  }, {
+    key: 'insured',
+    label: '被保険者'
+  }, {
+    key: 'contractor',
+    label: '契約者'
+  }, {
+    key: 'beneficiary',
+    label: '受取人'
+  }, {
+    key: 'insuranceType',
+    label: '保険種類'
+  }, {
+    key: 'coverageAmount',
+    label: '保険金額',
+    type: 'amount'
+  }, {
+    key: 'annualPremium',
+    label: '年間保険料',
+    type: 'amount'
+  }, {
+    key: 'paymentTerm',
+    label: '払込期間'
+  }, {
+    key: 'insurancePeriod',
+    label: '保険期間'
+  }, {
+    key: 'currentSurrenderValue',
+    label: '現在解約返戻金',
+    type: 'amount'
+  }, {
+    key: 'maxSurrenderRate',
+    label: '最高解約返戻率（%）',
+    type: 'number'
+  }, {
+    key: 'maxSurrenderRateYear',
+    label: '最高返戻率到達年'
+  }, {
+    key: 'accountingTreatment',
+    label: '経理処理区分',
+    type: 'select',
+    options: NEXUS_CORP_ACCOUNTING_TREATMENTS
+  }, {
+    key: 'purpose',
+    label: '契約目的',
+    type: 'select',
+    options: NEXUS_CORP_INSURANCE_PURPOSES
+  }, {
+    key: 'memo',
+    label: 'メモ',
+    type: 'textarea',
+    wide: true
+  }];
+  return /*#__PURE__*/React.createElement(NexusCorpItemList, {
+    title: "法人保険一覧",
+    items: list,
+    fields,
+    ops,
+    summaryFn: p => `${p.company || '（保険会社未入力）'}／${p.product || '商品名未入力'}${p.purpose ? '／' + p.purpose : ''}`,
+    emptyText: "法人保険契約が登録されていません"
+  });
+}
+
+// ── 役員情報タブ ──────────────────────────────────────────────
+function NexusCorpOfficersTab({
+  data,
+  updateCorp,
+  customers
+}) {
+  const list = data.officers || [];
+  const ops = nexusCorpArrayOps(data, updateCorp, 'officers', () => ({
+    id: uid(),
+    name: '',
+    role: '',
+    linkedCustomerId: '',
+    memo: ''
+  }));
+  const fields = [{
+    key: 'name',
+    label: '氏名'
+  }, {
+    key: 'role',
+    label: '役職'
+  }, {
+    key: 'linkedCustomerId',
+    label: 'NEXUS顧客と連携（任意）',
+    type: 'customerSelect',
+    wide: true
+  }, {
+    key: 'memo',
+    label: 'メモ',
+    type: 'textarea',
+    wide: true
+  }];
+  return /*#__PURE__*/React.createElement(NexusCorpItemList, {
+    title: "役員情報",
+    items: list,
+    fields,
+    ops,
+    customers,
+    summaryFn: o => `${o.name || '（氏名未入力）'}${o.role ? '／' + o.role : ''}`,
+    emptyText: "役員が登録されていません"
+  });
+}
+
+// ── アクションプランタブ ────────────────────────────────────────
+const NEXUS_CORP_ACTION_PRIORITIES = ['高', '中', '低'];
+const NEXUS_CORP_ACTION_STATUSES = ['未着手', '進行中', '完了', '保留'];
+function NexusCorpActionPlanTab({
+  data,
+  updateCorp
+}) {
+  const list = data.actionPlan || [];
+  const ops = nexusCorpArrayOps(data, updateCorp, 'actionPlan', () => ({
+    id: uid(),
+    title: '',
+    priority: '中',
+    owner: '',
+    dueDate: '',
+    status: '未着手',
+    result: '',
+    memo: ''
+  }));
+  const fields = [{
+    key: 'title',
+    label: '項目',
+    wide: true
+  }, {
+    key: 'priority',
+    label: '優先度',
+    type: 'select',
+    options: NEXUS_CORP_ACTION_PRIORITIES
+  }, {
+    key: 'status',
+    label: 'ステータス',
+    type: 'select',
+    options: NEXUS_CORP_ACTION_STATUSES
+  }, {
+    key: 'owner',
+    label: '担当者'
+  }, {
+    key: 'dueDate',
+    label: '期限',
+    type: 'date'
+  }, {
+    key: 'result',
+    label: '結果',
+    wide: true
+  }, {
+    key: 'memo',
+    label: 'メモ',
+    type: 'textarea',
+    wide: true
+  }];
+  return /*#__PURE__*/React.createElement(NexusCorpItemList, {
+    title: "アクションプラン",
+    items: list,
+    fields,
+    ops,
+    summaryFn: a => `${a.title || '（項目未入力）'}／優先度${a.priority || '—'}／${a.status || '未着手'}`,
+    emptyText: "アクションプランが登録されていません"
+  });
+}
+
+// ── 法人プランニング：メイン画面 ────────────────────────────────
+const NEXUS_CORP_PLANNING_TABS = [{
+  key: 'summary',
+  label: 'サマリー',
+  icon: '📋'
+}, {
+  key: 'finance',
+  label: '財務',
+  icon: '📊'
+}, {
+  key: 'loans',
+  label: '借入',
+  icon: '🏦'
+}, {
+  key: 'safetyMutual',
+  label: '共済',
+  icon: '🛡️'
+}, {
+  key: 'insurance',
+  label: '保険',
+  icon: '📄'
+}, {
+  key: 'officers',
+  label: '役員',
+  icon: '👤'
+}, {
+  key: 'actionPlan',
+  label: 'アクション',
+  icon: '✅'
+}];
+function NexusCorpPlanningSection({
+  customers,
+  setCustomers,
+  initialCorpId
+}) {
+  const corpCustomers = customers.filter(c => c.customerType === '法人');
+  const individualCustomers = customers.filter(c => c.customerType !== '法人');
+  const [selectedId, setSelectedId] = useState(initialCorpId || (corpCustomers[0] ? corpCustomers[0].id : ''));
+  const [subTab, setSubTab] = useState('summary');
+  React.useEffect(() => {
+    if (initialCorpId) {
+      setSelectedId(initialCorpId);
+      return;
+    }
+    // 現在の選択が消えた（削除された）、またはまだ何も選ばれていない場合は、
+    // 一覧の先頭を自動選択する（初めて法人を登録した直後にも選択状態にするため）。
+    if (!corpCustomers.some(c => c.id === selectedId) && corpCustomers[0]) {
+      setSelectedId(corpCustomers[0].id);
+    }
+  }, [initialCorpId, customers]);
+  const corp = customers.find(c => c.id === selectedId && c.customerType === '法人');
+  const data = (corp && corp.corp) || {};
+  const updateCorp = patch => {
+    setCustomers(prev => prev.map(c => c.id === selectedId ? {
+      ...c,
+      corp: {
+        ...(c.corp || {}),
+        ...patch
+      }
+    } : c));
+  };
+  if (corpCustomers.length === 0) {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "empty",
+      style: {
+        padding: '30px 16px'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "empty-icon"
+    }, "🏢"), "法人プランニングを行うには、まず「顧客」タブで区分「法人」の顧客を登録してください");
+  }
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "法人を選択"), /*#__PURE__*/React.createElement("select", {
+    className: "form-select",
+    value: selectedId,
+    onChange: e => {
+      setSelectedId(e.target.value);
+      setSubTab('summary');
+    }
+  }, corpCustomers.map(c => /*#__PURE__*/React.createElement("option", {
+    key: c.id,
+    value: c.id
+  }, nexusDisplayName(c))))), corp && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      overflowX: 'auto',
+      display: 'flex',
+      gap: 4,
+      marginBottom: 12,
+      paddingBottom: 4
+    }
+  }, NEXUS_CORP_PLANNING_TABS.map(t => /*#__PURE__*/React.createElement("button", {
+    key: t.key,
+    onClick: () => setSubTab(t.key),
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 4,
+      padding: '7px 12px',
+      borderRadius: 20,
+      border: '1.5px solid',
+      whiteSpace: 'nowrap',
+      cursor: 'pointer',
+      fontSize: 12,
+      fontWeight: 700,
+      flexShrink: 0,
+      borderColor: subTab === t.key ? 'var(--accent)' : 'var(--border)',
+      background: subTab === t.key ? 'var(--accent-light)' : 'var(--bg)',
+      color: subTab === t.key ? 'var(--accent)' : 'var(--text-sub)'
+    }
+  }, /*#__PURE__*/React.createElement("span", null, t.icon), /*#__PURE__*/React.createElement("span", null, t.label)))), subTab === 'summary' && /*#__PURE__*/React.createElement(NexusCorpSummaryTab, {
+    corp,
+    data
+  }), subTab === 'finance' && /*#__PURE__*/React.createElement(React.Fragment, null, (data.financials || []).map(p => /*#__PURE__*/React.createElement(NexusCorpFinancialPeriodCard, {
+    key: p.id,
+    period: p,
+    onUpdate: updated => updateCorp({
+      financials: (data.financials || []).map(x => x.id === p.id ? updated : x)
+    }),
+    onRemove: () => updateCorp({
+      financials: (data.financials || []).filter(x => x.id !== p.id)
+    })
+  })), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: {
+      marginBottom: 10
+    },
+    onClick: () => updateCorp({
+      financials: [...(data.financials || []), {
+        id: uid(),
+        periodLabel: '',
+        fiscalYear: '',
+        pl: {},
+        bs: {}
+      }]
+    })
+  }, "＋ 決算期を追加"), /*#__PURE__*/React.createElement(NexusCorpTrendTable, {
+    financials: data.financials
+  }), /*#__PURE__*/React.createElement(NexusCorpRatioGrid, {
+    financials: data.financials
+  })), subTab === 'loans' && /*#__PURE__*/React.createElement(NexusCorpLoansTab, {
+    data,
+    updateCorp
+  }), subTab === 'safetyMutual' && /*#__PURE__*/React.createElement(NexusCorpSafetyMutualTab, {
+    data,
+    updateCorp
+  }), subTab === 'insurance' && /*#__PURE__*/React.createElement(NexusCorpInsuranceTab, {
+    data,
+    updateCorp
+  }), subTab === 'officers' && /*#__PURE__*/React.createElement(NexusCorpOfficersTab, {
+    data,
+    updateCorp,
+    customers: individualCustomers
+  }), subTab === 'actionPlan' && /*#__PURE__*/React.createElement(NexusCorpActionPlanTab, {
+    data,
+    updateCorp
+  })));
+}
+
 function NexusPlanningSection({
   customers,
   setCustomers
@@ -23306,9 +24924,10 @@ function NexusTab({
   setServiceLinks,
   mission,
   setMission,
-  onNavigate
+  onNavigate,
+  corpPlanningTargetId
 }) {
-  const [subTab, setSubTab] = useState('list');
+  const [subTab, setSubTab] = useState(corpPlanningTargetId ? 'corpPlanning' : 'list');
   const [sortMode, setSortMode] = useState('gap');
   const [networkView, setNetworkView] = useState('referral');
   const [query, setQuery] = useState('');
@@ -23356,6 +24975,9 @@ function NexusTab({
   }, {
     key: 'planning',
     label: 'プランニング'
+  }, {
+    key: 'corpPlanning',
+    label: '法人プラン'
   }, {
     key: 'mission',
     label: '理念'
@@ -23423,6 +25045,10 @@ function NexusTab({
   }), subTab === 'planning' && /*#__PURE__*/React.createElement(NexusPlanningSection, {
     customers: customers,
     setCustomers: setCustomers
+  }), subTab === 'corpPlanning' && /*#__PURE__*/React.createElement(NexusCorpPlanningSection, {
+    customers: customers,
+    setCustomers: setCustomers,
+    initialCorpId: corpPlanningTargetId
   }), subTab === 'mission' && /*#__PURE__*/React.createElement(NexusMissionSection, {
     mission: mission,
     setMission: setMission
@@ -23479,6 +25105,7 @@ function App() {
     dailyAction: ''
   });
   const [tab, setTab] = useState('dashboard');
+  const [corpPlanningTargetId, setCorpPlanningTargetId] = useState('');
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [editingCustomer, setEditingCustomer] = useState(null);
   const [showCustomerForm, setShowCustomerForm] = useState(false);
@@ -23723,7 +25350,8 @@ function App() {
     onNavigate: (t, c) => {
       setTab(t === 'customers' ? 'list' : t);
       if (c) setSelectedCustomer(c);
-    }
+    },
+    corpPlanningTargetId: corpPlanningTargetId
   })), /*#__PURE__*/React.createElement("nav", {
     className: "bottom-nav"
   }, tabs.map(t => /*#__PURE__*/React.createElement("button", {
@@ -23763,6 +25391,11 @@ function App() {
     onOpenCustomer: id => {
       const target = customers.find(x => x.id === id);
       if (target) setSelectedCustomer(target);
+    },
+    onOpenCorpPlanning: corpId => {
+      setCorpPlanningTargetId(corpId);
+      setSelectedCustomer(null);
+      setTab('nexus');
     }
   }), showCustomerForm && /*#__PURE__*/React.createElement(CustomerForm, {
     editing: editingCustomer,
