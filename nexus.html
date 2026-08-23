@@ -13581,6 +13581,8 @@ function NexusImageImportScreen({
   const [phase, setPhase] = useState('pick'); // 'pick' | 'processing' | 'review'
   const [progressText, setProgressText] = useState('');
   const [rows, setRows] = useState([]);
+  const [rawTexts, setRawTexts] = useState([]);
+  const [showRaw, setShowRaw] = useState(false);
   const fileRef = React.useRef(null);
   const updateRow = (id, patch) => setRows(prev => prev.map(r => r.id === id ? {
     ...r,
@@ -13597,6 +13599,7 @@ function NexusImageImportScreen({
         let worker = null;
         try {
           const collected = [];
+          const newRawTexts = [];
           // 証券番号・氏名・カナ・電話番号…と列が多い表は、自動レイアウト解析（デフォルト）だと
           // 列の順序を誤認識しやすいため、「単一の均質なテキストブロック」として上から順に
           // 読ませるモード（PSM 6）に固定し、列間の空白もできるだけ保持させる。
@@ -13611,8 +13614,10 @@ function NexusImageImportScreen({
             const {
               data
             } = await worker.recognize(processed || files[i]);
+            newRawTexts.push(data.text || '');
             nexusExtractOcrRows(data.text || '').forEach(r => collected.push(r));
           }
+          setRawTexts(prev => [...prev, ...newRawTexts]);
           await worker.terminate();
           worker = null;
           const withMeta = collected.map(r => ({
@@ -13778,7 +13783,64 @@ function NexusImageImportScreen({
       marginBottom: 10,
       color: 'var(--text-sub)'
     }
-  }, rows.length, "件の候補を読み取りました。内容を確認・修正してから登録してください（OCRは誤読することがあります）。"), rows.map(r => /*#__PURE__*/React.createElement(NexusImageImportRow, {
+  }, rows.length, "件の候補を読み取りました。内容を確認・修正してから登録してください（OCRは誤読することがあります）。"), rawTexts.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setShowRaw(v => !v),
+    style: {
+      background: 'none',
+      border: 'none',
+      padding: 0,
+      color: 'var(--accent)',
+      fontSize: 12.5,
+      fontWeight: 700,
+      cursor: 'pointer'
+    }
+  }, showRaw ? '▼ ' : '▶ ', "読み取った生データを表示（不具合報告時はここをコピーして送ってください）"), showRaw && rawTexts.map((t, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 4
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)'
+    }
+  }, "画像 ", i + 1), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-sm",
+    onClick: () => {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(t).then(() => alert('コピーしました')).catch(() => alert('コピーに失敗しました。下のテキストを長押しして手動でコピーしてください。'));
+      } else {
+        alert('コピーに失敗しました。下のテキストを長押しして手動でコピーしてください。');
+      }
+    }
+  }, "📋 コピー")), /*#__PURE__*/React.createElement("textarea", {
+    readOnly: true,
+    value: t,
+    style: {
+      width: '100%',
+      minHeight: 120,
+      fontSize: 11,
+      fontFamily: 'monospace',
+      padding: 8,
+      borderRadius: 8,
+      border: '1px solid var(--border)',
+      background: 'var(--bg)'
+    }
+  })))), rows.map(r => /*#__PURE__*/React.createElement(NexusImageImportRow, {
     key: r.id,
     row: r,
     onUpdate: patch => updateRow(r.id, patch),
