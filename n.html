@@ -11644,6 +11644,365 @@ function nexusFindDuplicateCandidates(row, customers) {
   });
 }
 
+// ── 文字貼り付けによる顧客取込：TextImportParser ─────────────
+// CSBの顧客一覧をスマホで撮影→iPhoneのテキスト認識やGoogle Keep等で文字を
+// 抽出→その全文をそのまま貼り付けて顧客登録候補を作る機能。重いOCRは行わず、
+// 既に文字化された（ただし改行位置や区切りが崩れた）テキストをルールベースで
+// 解析するだけなので高速。外部AI APIへは一切送信しない。
+// 将来的に名刺等へも広げられるよう、「正規化」「証券番号アンカー検出」等の
+// 汎用部分と、CSB特有の列順・ラベルに依存する部分（nexusParseCsbBlock等）を
+// 分けている。CSB以外の解析器を追加する場合はnexusParseCsbPastedTextと同じ
+// 形（{original, normalized, records}を返す）の関数を用意すればよい。
+
+// STEP1：テキスト正規化（元の文字列はそのまま保持し、正規化後の文字列を
+// 別途返す。デバッグ画面で両方を確認できるようにするため）。
+function nexusNormalizeImportText(raw) {
+  const original = raw || '';
+  let t = original.normalize('NFKC'); // 全角数字・全角英字→半角、各種互換文字を統一
+  t = t.replace(/\r\n?/g, '\n'); // CRLF/CRをLFに統一
+  // 各種ハイフン・ダッシュ類（hyphen/en dash/em dash/minus sign/fullwidth hyphen）を
+  // 半角ハイフンに統一する。カナの長音記号「ー」は名前の一部になり得るため対象外。
+  t = t.replace(/[‐-―−－]/g, '-');
+  // ゼロ幅文字・制御文字（改行以外）を除去
+  t = t.replace(/[​-‏﻿\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
+  // OCRの罫線がパイプ文字として誤読されることがあるため空白に置換
+  t = t.replace(/[|｜_＿]/g, ' ');
+  t = t.replace(/[ \t]+/g, ' '); // タブ・連続スペースを整理
+  t = t.replace(/ *\n */g, '\n'); // 行頭行末の余分な空白を除去
+  t = t.replace(/\n{3,}/g, '\n\n'); // 3行以上の空行は2行に圧縮
+  t = t.trim();
+  return {
+    original,
+    normalized: t
+  };
+}
+
+// STEP2：証券番号らしいトークンをアンカーとして検出し、そこから次のアンカーの
+// 手前までを「1契約分の塊」とみなす。単純なsplit('\n')に頼らないための要。
+function nexusIsPolicyNumCandidate(token) {
+  const t = (token || '').trim();
+  if (t.length < 6 || t.length > 16) return false;
+  if (!/^[0-9A-Za-z]+(-[0-9A-Za-z]+)*$/.test(t)) return false;
+  if (!/\d/.test(t)) return false;
+  const digitsOnly = t.replace(/[^0-9]/g, '');
+  const hasLetter = /[A-Za-z]/.test(t);
+  if (!hasLetter) {
+    // 数字だけの場合、電話番号・郵便番号の形に一致するものは証券番号として扱わない
+    if (digitsOnly.length >= 10 && digitsOnly.length <= 11 && digitsOnly[0] === '0') return false;
+    if (/^\d{3}-?\d{4}$/.test(t)) return false;
+    if (digitsOnly.length === 8) {
+      const y = Number(digitsOnly.slice(0, 4)),
+        mo = Number(digitsOnly.slice(4, 6)),
+        d = Number(digitsOnly.slice(6, 8));
+      if (y >= 1900 && y <= new Date().getFullYear() && mo >= 1 && mo <= 12) {
+        const dt = new Date(y, mo - 1, d);
+        if (dt.getFullYear() === y && dt.getMonth() === mo - 1 && dt.getDate() === d) return false; // 生年月日らしい8桁数字は除外
+      }
+    }
+  }
+  if (/^(19|20)\d{2}-\d{1,2}-\d{1,2}$/.test(t)) return false; // 生年月日らしい形は除外
+  return true;
+}
+const NEXUS_TEXT_POLICY_TOKEN_RE = /[0-9A-Za-z][0-9A-Za-z-]{4,15}[0-9A-Za-z]/g;
+function nexusFindPolicyNumAnchors(text) {
+  const anchors = [];
+  let m;
+  NEXUS_TEXT_POLICY_TOKEN_RE.lastIndex = 0;
+  while (m = NEXUS_TEXT_POLICY_TOKEN_RE.exec(text)) {
+    if (nexusIsPolicyNumCandidate(m[0])) anchors.push({
+      raw: m[0],
+      index: m.index
+    });
+  }
+  return anchors;
+}
+function nexusSplitIntoCsbBlocks(text) {
+  const anchors = nexusFindPolicyNumAnchors(text);
+  if (anchors.length === 0) return text.trim() ? [{
+    policyNum: '',
+    text
+  }] : [];
+  return anchors.map((a, i) => ({
+    policyNum: a.raw,
+    text: text.slice(a.index, i + 1 < anchors.length ? anchors[i + 1].index : text.length)
+  }));
+}
+
+// STEP3：数値項目の抽出。OCRは改行位置が崩れやすいため、改行を空白1個に
+// 変換してから検索することで「途中で改行された番号」もある程度拾えるようにする。
+function nexusFlattenBlockText(blockText) {
+  return blockText.replace(/\n/g, ' ').replace(/[ \t]+/g, ' ').trim();
+}
+function nexusExtractBirthDateFromText(text) {
+  const re = /(?<!\d)((?:19|20)\d{2})\s?[\/\-年.]?\s?(0?[1-9]|1[0-2])\s?[\/\-月.]?\s?(0?[1-9]|[12]\d|3[01])\s?日?(?!\d)/;
+  const m = text.match(re);
+  if (!m) return null;
+  const y = Number(m[1]),
+    mo = Number(m[2]),
+    d = Number(m[3]);
+  const normalized = `${m[1]}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  const dt = new Date(y, mo - 1, d);
+  const isRealDate = dt.getFullYear() === y && dt.getMonth() === mo - 1 && dt.getDate() === d;
+  const inRange = y >= 1900 && y <= new Date().getFullYear();
+  return {
+    raw: m[0],
+    normalized,
+    valid: isRealDate && inRange,
+    index: m.index
+  };
+}
+function nexusExtractPostalFromText(text) {
+  // 末尾に「-数字」がさらに続く場合（090-1234-5678のような3組の電話番号の
+  // 前半2組）は郵便番号として誤認しないよう除外する。
+  const reHyphen = /(?<!\d)(\d{3})\s?-\s?(\d{4})(?!\d)(?!\s?-\s?\d)/;
+  const mH = text.match(reHyphen);
+  if (mH) return {
+    raw: mH[0],
+    normalized: `${mH[1]}-${mH[2]}`,
+    isCandidate: false,
+    index: mH.index
+  };
+  const reBare = /(?<!\d)(\d{7})(?!\d)/;
+  const mB = text.match(reBare);
+  if (mB) return {
+    raw: mB[0],
+    normalized: `${mB[1].slice(0, 3)}-${mB[1].slice(3)}`,
+    isCandidate: true,
+    index: mB.index
+  };
+  return null;
+}
+function nexusExtractPhoneFromText(text) {
+  const fixed = text.replace(/\b[oO](?=[\d\s.\-]{6,14}\d(?!\d))/g, '0');
+  // 最初に見つかった候補の桁数が電話番号らしくなくても（証券番号や郵便番号の
+  // 一部の「0」に誤爆した等）、そこで諦めず他の候補も順に試す。また直前が
+  // 数字・ハイフンのいずれでもない位置からのみ開始を許可し、郵便番号
+  // 「160-0022」の後半グループ先頭「0」から誤って開始することを防ぐ。
+  const re = /(?<![\d-])0\s?[\d\s.\-]{6,14}\d(?!\d)/g;
+  let m;
+  while (m = re.exec(fixed)) {
+    const digits = m[0].replace(/[^\d]/g, '');
+    if (digits.length === 10 || digits.length === 11) return {
+      raw: m[0].trim(),
+      digits,
+      index: m.index
+    };
+  }
+  return null;
+}
+function nexusExtractEmailFromText(text) {
+  const m = text.match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
+  return m ? {
+    raw: m[0],
+    index: m.index
+  } : null;
+}
+
+// STEP4：氏名候補の検出。証券番号・生年月日・郵便番号・電話番号・メールの
+// ような形式的なデータと違い、日本語氏名は形が定まらないため最後に扱う。
+// 見出し語（「証券番号」「顧客氏名」等）や担当者名を除外したうえで、
+// 既存のnexusValidateNameCell／nexusValidateKanaCell（CSB専用取込のセル
+// バリデーションと同じ判定）を行単位で適用する。
+const NEXUS_TEXT_HEADER_STOPWORDS_RE = /^(証券番号|顧客氏名|顧客カナ|顧客カタカナ|契約者氏名|契約者カナ|カナ|フリガナ|ふりがな|氏名|生年月日|郵便番号|電話番号|携帯番号|性別|担当者|担当|保険会社|商品名|契約日|種別|種類|備考|住所|保険種類|契約状況|ステータス|顧客一覧|一覧|保険期間|払込方法|保険料|契約者|被保険者)$/;
+function nexusLineHasJapaneseText(l) {
+  return /[一-龠々ぁ-んァ-ヶー]/.test(l);
+}
+function nexusFindNameCandidatesInBlock(lines, excludeSet) {
+  const candidates = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (excludeSet.has(i)) continue;
+    const line = lines[i];
+    if (!nexusLineHasJapaneseText(line)) continue;
+    const isPureKana = /^[ァ-ヶー\s]+$/.test(line.replace(/[|｜_＿]/g, ''));
+    if (isPureKana) {
+      const kanaV = nexusValidateKanaCell(line);
+      if (kanaV.valid) {
+        candidates.push({
+          kind: 'kana',
+          text: kanaV.text,
+          lineIndex: i
+        });
+        continue;
+      }
+    }
+    const kanjiV = nexusValidateNameCell(line);
+    if (kanjiV.valid) {
+      candidates.push({
+        kind: 'kanji',
+        text: kanjiV.text,
+        lineIndex: i
+      });
+      continue;
+    }
+    // 氏名が2行に分断されている場合の救済策として、次の行と結合して再判定する
+    if (i + 1 < lines.length && !excludeSet.has(i + 1)) {
+      const joined = `${line}${lines[i + 1]}`;
+      const kanjiJ = nexusValidateNameCell(joined);
+      if (kanjiJ.valid) {
+        candidates.push({
+          kind: 'kanji',
+          text: kanjiJ.text,
+          lineIndex: i
+        });
+        i++;
+        continue;
+      }
+    }
+  }
+  return candidates;
+}
+// 検出した氏名候補を「顧客氏名」「契約者氏名」に割り当てる。CSBの列順
+// （顧客氏名→顧客カナ→契約者氏名→契約者カナ）に対応する並び順を前提に、
+// 最初に見つかった漢字氏名を顧客、次に見つかった別人の漢字氏名を契約者とする。
+function nexusAssignNameRoles(candidates) {
+  const kanjiCands = candidates.filter(c => c.kind === 'kanji');
+  const kanaCands = candidates.filter(c => c.kind === 'kana');
+  const customerName = kanjiCands[0] ? kanjiCands[0].text : '';
+  const customerNameLineIdx = kanjiCands[0] ? kanjiCands[0].lineIndex : -1;
+  let policyholderName = '',
+    policyholderLineIdx = -1;
+  for (const c of kanjiCands.slice(1)) {
+    if (c.text !== customerName) {
+      policyholderName = c.text;
+      policyholderLineIdx = c.lineIndex;
+      break;
+    }
+  }
+  const usedKana = new Set();
+  const nearestKana = afterLineIdx => {
+    let best = null;
+    for (const k of kanaCands) {
+      if (usedKana.has(k.lineIndex)) continue;
+      if (k.lineIndex >= afterLineIdx && (best === null || k.lineIndex < best.lineIndex)) best = k;
+    }
+    return best;
+  };
+  const custKana = customerNameLineIdx >= 0 ? nearestKana(customerNameLineIdx) : null;
+  if (custKana) usedKana.add(custKana.lineIndex);
+  const polKana = policyholderLineIdx >= 0 ? nearestKana(policyholderLineIdx) : null;
+  if (polKana) usedKana.add(polKana.lineIndex);
+  return {
+    customerName,
+    customerNameKana: custKana ? custKana.text : '',
+    policyholderName,
+    policyholderNameKana: polKana ? polKana.text : '',
+    hasPolicyholderCol: !!policyholderName
+  };
+}
+// 完全一致だけでなく、空白の有無だけが違う場合（OCR特有のずれ）も同一人物と
+// 見なす。それでも一致しなければ、自動的に同一人物扱いにはしない。
+function nexusNamesMatchLoosely(a, b) {
+  const ta = (a || '').trim(),
+    tb = (b || '').trim();
+  if (!ta || !tb) return false;
+  if (ta === tb) return true;
+  return ta.replace(/\s+/g, '') === tb.replace(/\s+/g, '');
+}
+
+// STEP5：1契約ブロック分の解析。顧客氏名と契約者氏名が異なる場合、郵便番号・
+// 生年月日は「契約者本人の情報である可能性がある」として、顧客本人の情報と
+// 断定しない（呼び出し側の登録処理で自動反映しないようにする）。
+function nexusParseCsbBlock(block) {
+  const rawText = block.text;
+  const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
+  const flat = nexusFlattenBlockText(rawText);
+  const birth = nexusExtractBirthDateFromText(flat);
+  const postal = nexusExtractPostalFromText(flat);
+  const phone = nexusExtractPhoneFromText(flat);
+  const email = nexusExtractEmailFromText(flat);
+  let genderRaw = '';
+  for (const line of lines) {
+    if (/^(男性?|女性?)$/.test(line)) {
+      genderRaw = line;
+      break;
+    }
+  }
+  const genderValid = genderRaw ? nexusValidateGenderCell(genderRaw) : null;
+  const excludeSet = new Set();
+  lines.forEach((l, i) => {
+    const compact = l.replace(/\s/g, '');
+    const isHeader = NEXUS_TEXT_HEADER_STOPWORDS_RE.test(compact.replace(/[:：]/g, ''));
+    const isPolicyLine = compact === block.policyNum;
+    const isGenderLine = l === genderRaw;
+    const isStaffLine = /担当/.test(l);
+    if (isHeader || isPolicyLine || isGenderLine || isStaffLine) excludeSet.add(i);
+  });
+  // 「担当者」の行の次の行に担当者名が来るケースにも対応し、氏名候補から除外する
+  lines.forEach((l, i) => {
+    if (/担当/.test(l) && i + 1 < lines.length) excludeSet.add(i + 1);
+  });
+  const candidates = nexusFindNameCandidatesInBlock(lines, excludeSet);
+  const roles = nexusAssignNameRoles(candidates);
+  const policyValid = nexusValidatePolicyNumCell(block.policyNum);
+  const customerEqualsPolicyholder = !roles.hasPolicyholderCol ? true : nexusNamesMatchLoosely(roles.customerName, roles.policyholderName);
+  const reasons = [];
+  if (!policyValid.valid || !policyValid.text) reasons.push('証券番号が不自然です');
+  if (!roles.customerName) reasons.push('顧客氏名が見つかりませんでした');
+  if (roles.hasPolicyholderCol && !customerEqualsPolicyholder) reasons.push('顧客氏名と契約者氏名が一致しません（契約者情報です）');
+  if (birth && !birth.valid) reasons.push('生年月日の形式または日付が不正です');
+  if (postal && postal.isCandidate) reasons.push('郵便番号はハイフン無し7桁のため候補扱いです');
+  if (genderRaw && genderValid && !genderValid.valid) reasons.push('性別欄を認識できませんでした');
+  return {
+    id: uid(),
+    policyNum: policyValid.text || block.policyNum,
+    name: roles.customerName,
+    nameKana: roles.customerNameKana,
+    policyholderName: roles.policyholderName,
+    policyholderNameKana: roles.policyholderNameKana,
+    customerEqualsPolicyholder,
+    hasPolicyholderCol: roles.hasPolicyholderCol,
+    birthDate: birth ? birth.normalized : '',
+    birthDateValid: birth ? birth.valid : true,
+    postalCode: postal ? postal.normalized : '',
+    postalIsCandidate: postal ? postal.isCandidate : false,
+    phone: phone ? phone.raw.replace(/\s+/g, '') : '',
+    phoneDigits: phone ? phone.digits : '',
+    email: email ? email.raw : '',
+    gender: genderValid && genderValid.valid ? genderValid.text : '',
+    status: reasons.length === 0 ? 'ok' : 'review',
+    reviewReasons: reasons,
+    rawBlockText: rawText,
+    selected: true,
+    resolution: 'new'
+  };
+}
+
+// STEP6：貼り付けテキスト全体の一括解析。同じ人物が複数の証券番号を持つ
+// ケースを検出するが、自動統合はせず確認画面でユーザーに選ばせる。
+function nexusParseCsbPastedText(rawText, customers) {
+  const {
+    original,
+    normalized
+  } = nexusNormalizeImportText(rawText);
+  const blocks = nexusSplitIntoCsbBlocks(normalized);
+  const records = blocks.map(b => nexusParseCsbBlock(b));
+  records.forEach((r, i) => {
+    // レコードのidで持つ（配列添字にすると、後で1件削除しただけで残り全員の
+    // 添字がずれ、無関係な人へ誤統合しかねないため）。
+    const siblings = [];
+    records.forEach((r2, j) => {
+      if (i === j || !r.name || !r2.name) return;
+      if (nexusNamesMatchLoosely(r.name, r2.name)) siblings.push(r2.id);
+    });
+    r.siblingIds = siblings;
+    if (siblings.length > 0) {
+      r.reviewReasons.push('同一人物の可能性がある契約が他にもあります（下の一覧で確認してください）');
+      r.status = 'review';
+    }
+    r.duplicates = nexusFindDuplicateCandidates({
+      name: r.name,
+      furigana: r.nameKana,
+      birthdate: r.customerEqualsPolicyholder ? r.birthDate : '',
+      phone: r.phoneDigits
+    }, customers || []);
+  });
+  return {
+    original,
+    normalized,
+    records
+  };
+}
+
 // ── RFC4180準拠 CSVパーサー（改行含むフィールド対応）──────────
 function parseCSVFull(text) {
   const rows = [];
@@ -15908,7 +16267,7 @@ function NexusCsbImportScreen({
       fontWeight: 700,
       fontSize: 15
     }
-  }, "CSB専用取込（証券番号・氏名・生年月日・性別・郵便番号）")), /*#__PURE__*/React.createElement("div", {
+  }, "写真から直接読み取る（β版）")), /*#__PURE__*/React.createElement("div", {
     className: "full-content"
   }, errorNote && /*#__PURE__*/React.createElement("div", {
     className: "card",
@@ -15926,7 +16285,7 @@ function NexusCsbImportScreen({
       marginBottom: 10,
       lineHeight: 1.6
     }
-  }, "CSBの顧客一覧を撮影した写真を選んでください。証券番号・顧客氏名（漢字/カナ）・生年月日・性別・郵便番号を読み取ります（列の位置は撮影のたびに調整できます）。画像はこの端末内だけで処理され、外部には送信されません。", rows.length > 0 ? `　（これまでに${rows.length}件読み取り済み）` : ''), /*#__PURE__*/React.createElement("input", {
+  }, "β版：CSBの顧客一覧を撮影した写真を選んでください。証券番号・顧客氏名（漢字/カナ）・生年月日・性別・郵便番号を読み取ります（列の位置は撮影のたびに調整できます）。画像はこの端末内だけで処理され、外部には送信されません。より速く安定して使いたい場合は「抽出した文字を貼り付ける」機能がおすすめです。", rows.length > 0 ? `　（これまでに${rows.length}件読み取り済み）` : ''), /*#__PURE__*/React.createElement("input", {
     ref: fileRef,
     type: "file",
     accept: "image/*",
@@ -16473,6 +16832,616 @@ function NexusContractImportScreen({
   }, "選択した契約を登録する"))));
 }
 
+// ── 文字貼り付けによる顧客取込：確認画面の1件分カード ─────────
+function NexusTextImportRecordCard({
+  record,
+  index,
+  allRecords,
+  onUpdate,
+  onRemove
+}) {
+  const [showRaw, setShowRaw] = useState(false);
+  const hasDup = record.duplicates && record.duplicates.length > 0;
+  const mismatch = record.hasPolicyholderCol && !record.customerEqualsPolicyholder;
+  // 「何番目」の表示・「より前の候補にまとめる」判定は、削除操作で配列の添字が
+  // ずれても正しく動くよう、現在の表示順をidから毎回引き直して求める。
+  const earlierSiblings = (record.siblingIds || []).map(sid => ({
+    id: sid,
+    idx: allRecords.findIndex(r2 => r2.id === sid)
+  })).filter(s => s.idx !== -1 && s.idx < index);
+  const statusInfo = record.status === 'ok' ? {
+    label: 'OK',
+    bg: '#DCFCE7',
+    color: '#16A34A'
+  } : {
+    label: '要確認',
+    bg: '#FEF3C7',
+    color: '#B45309'
+  };
+  const field = (label, key, wide) => /*#__PURE__*/React.createElement("div", {
+    style: wide ? {
+      flex: '1 1 100%'
+    } : {
+      flex: '1 1 45%'
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, label), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    value: record[key] || '',
+    onChange: e => onUpdate({
+      [key]: e.target.value
+    })
+  }));
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      padding: 10,
+      border: record.status === 'ok' ? undefined : '1.5px solid #FDE68A'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      flexWrap: 'wrap'
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      flexShrink: 0
+    }
+  }, index + 1), /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: record.selected,
+    onChange: e => onUpdate({
+      selected: e.target.checked
+    }),
+    style: {
+      width: 18,
+      height: 18,
+      flexShrink: 0
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    style: {
+      background: statusInfo.bg,
+      color: statusInfo.color,
+      flexShrink: 0
+    }
+  }, statusInfo.label), hasDup && /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    style: {
+      background: '#FEF3C7',
+      color: '#B45309',
+      flexShrink: 0
+    }
+  }, "△重複候補"), earlierSiblings.length > 0 && /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    style: {
+      background: '#DBEAFE',
+      color: '#2563EB',
+      flexShrink: 0
+    }
+  }, "同一人物候補あり"), mismatch && /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    style: {
+      background: '#FEE2E2',
+      color: '#DC2626',
+      flexShrink: 0
+    }
+  }, "⚠契約者情報です"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setShowRaw(v => !v),
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--accent)',
+      fontSize: 11,
+      cursor: 'pointer',
+      flexShrink: 0
+    }
+  }, showRaw ? '元の文字を隠す' : '元の文字を見る'), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: onRemove,
+    style: {
+      marginLeft: 'auto',
+      background: 'none',
+      border: 'none',
+      color: 'var(--danger)',
+      fontSize: 18,
+      cursor: 'pointer',
+      flexShrink: 0
+    }
+  }, "×")), showRaw && /*#__PURE__*/React.createElement("pre", {
+    style: {
+      marginTop: 8,
+      fontSize: 10.5,
+      background: 'var(--bg)',
+      padding: 8,
+      borderRadius: 6,
+      border: '1px solid var(--border)',
+      whiteSpace: 'pre-wrap',
+      maxHeight: 200,
+      overflowY: 'auto',
+      margin: '8px 0 0'
+    }
+  }, record.rawBlockText), mismatch && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8,
+      padding: 8,
+      borderRadius: 6,
+      background: '#FEF2F2',
+      color: 'var(--danger)',
+      fontSize: 11.5,
+      lineHeight: 1.6
+    }
+  }, "契約者氏名「", record.policyholderName || '(未検出)', "」が顧客氏名と一致しません。郵便番号・生年月日は契約者本人のものである可能性があるため、自動反映していません。"), record.reviewReasons && record.reviewReasons.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8,
+      padding: 8,
+      borderRadius: 6,
+      background: '#FFFBEB',
+      color: '#B45309',
+      fontSize: 11,
+      lineHeight: 1.6
+    }
+  }, record.reviewReasons.map((r, i) => /*#__PURE__*/React.createElement("div", {
+    key: i
+  }, "・", r))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 8,
+      marginTop: 8
+    }
+  }, field('証券番号', 'policyNum'), field('顧客氏名（漢字）', 'name'), field('顧客氏名（カナ）', 'nameKana'), field('生年月日', 'birthDate'), field('性別', 'gender'), field('郵便番号', 'postalCode'), field('電話番号', 'phone'), record.hasPolicyholderCol && field('契約者氏名（漢字）', 'policyholderName', true), record.hasPolicyholderCol && field('契約者氏名（カナ）', 'policyholderNameKana', true)), (hasDup || earlierSiblings.length > 0) && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "登録方法"), /*#__PURE__*/React.createElement("select", {
+    className: "form-select",
+    value: record.resolution,
+    onChange: e => onUpdate({
+      resolution: e.target.value
+    })
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "new"
+  }, "新規登録する"), earlierSiblings.map(s => /*#__PURE__*/React.createElement("option", {
+    key: 'sib' + s.id,
+    value: `sibling:${s.id}`
+  }, `${s.idx + 1}番目の「${allRecords[s.idx].name || '(氏名未検出)'}」に契約をまとめる（同一人物候補）`)), record.duplicates.map(d => /*#__PURE__*/React.createElement("option", {
+    key: d.id,
+    value: d.id
+  }, `既存「${nexusDisplayName(d)}」に統合`)), /*#__PURE__*/React.createElement("option", {
+    value: "skip"
+  }, "今回は登録しない"))));
+}
+
+// ── 文字貼り付けによる顧客取込：メイン画面 ─────────────────
+function NexusTextImportScreen({
+  customers,
+  setCustomers,
+  onClose
+}) {
+  const [pastedText, setPastedText] = useState('');
+  const [parseResult, setParseResult] = useState(null);
+  const [records, setRecords] = useState([]);
+  const [showDebug, setShowDebug] = useState(false);
+  const [errorNote, setErrorNote] = useState('');
+  const updateRecord = (idx, patch) => setRecords(prev => prev.map((r, i) => i === idx ? {
+    ...r,
+    ...patch
+  } : r));
+  const removeRecord = idx => setRecords(prev => prev.filter((_, i) => i !== idx));
+  const handleParse = () => {
+    setErrorNote('');
+    if (!pastedText.trim()) {
+      setErrorNote('貼り付けられたテキストがありません。');
+      return;
+    }
+    try {
+      const result = nexusParseCsbPastedText(pastedText, customers);
+      setParseResult(result);
+      setRecords(result.records);
+      if (result.records.length === 0) {
+        setErrorNote('証券番号らしき手がかりが見つからず、契約候補を検出できませんでした。貼り付けた内容をご確認ください。');
+      }
+    } catch (e) {
+      setErrorNote('解析中にエラーが発生しました：' + e.message);
+    }
+  };
+  const okCount = records.filter(r => r.status === 'ok').length;
+  const reviewCount = records.filter(r => r.status === 'review').length;
+  // sibling（同一バッチ内の同一人物候補）の解決先を再帰的にたどる。ユーザーが
+  // 手動でA→B→Cのように連鎖させても無限ループしないよう既訪問集合で防ぐ。
+  const resolveTarget = (idx, seen) => {
+    if (seen.has(idx)) return null;
+    seen.add(idx);
+    const r = records[idx];
+    if (!r) return null;
+    if (r.resolution === 'new') return {
+      type: 'new',
+      idx
+    };
+    if (typeof r.resolution === 'string' && r.resolution.startsWith('sibling:')) {
+      const targetId = r.resolution.slice('sibling:'.length);
+      const targetIdx = records.findIndex(rec => rec.id === targetId);
+      if (targetIdx === -1) return null;
+      return resolveTarget(targetIdx, seen);
+    }
+    if (r.resolution && r.resolution !== 'skip') return {
+      type: 'existing',
+      id: r.resolution
+    };
+    return null;
+  };
+  const handleCommit = () => {
+    const toProcess = records.map((r, idx) => ({
+      r,
+      idx
+    })).filter(({
+      r
+    }) => r.selected && r.resolution !== 'skip');
+    if (toProcess.length === 0) {
+      alert('登録する項目がありません（選択・登録方法をご確認ください）');
+      return;
+    }
+    const buildContract = r => r.policyNum ? [{
+      id: uid(),
+      type: '',
+      company: '',
+      policyNum: r.policyNum,
+      premium: '',
+      date: ''
+    }] : [];
+    // 郵便番号・生年月日は「顧客氏名＝契約者氏名」の場合のみ顧客本人の情報として
+    // 自動反映する。契約者列が別人を示している場合は、取り違えを防ぐため
+    // 自動反映せず、メモに要確認として残すだけにする。
+    const buildMemo = r => {
+      const notes = ['文字貼り付けで取込'];
+      if (r.hasPolicyholderCol && !r.customerEqualsPolicyholder) {
+        notes.push(`契約者情報です：契約者氏名「${r.policyholderName || '(未検出)'}」／郵便番号「${r.postalCode || '(未検出)'}」／生年月日「${r.birthDate || '(未検出)'}」は要確認`);
+      }
+      return notes.join('　');
+    };
+    const newCustomerIdByIndex = {};
+    setCustomers(prev => {
+      let next = [...prev];
+      // 1. 「新規登録する」を先に確定させ、あとの同一人物・契約統合で参照できるようにする
+      toProcess.forEach(({
+        r,
+        idx
+      }) => {
+        if (r.resolution !== 'new') return;
+        const newId = uid();
+        newCustomerIdByIndex[idx] = newId;
+        next = [...next, {
+          id: newId,
+          customerType: '個人',
+          name: r.name || '',
+          furigana: r.nameKana || '',
+          age: '',
+          gender: r.gender || '',
+          birthdate: r.customerEqualsPolicyholder ? r.birthDate || '' : '',
+          phone: r.phone || '',
+          email: r.email || '',
+          postalCode: r.customerEqualsPolicyholder ? r.postalCode || '' : '',
+          address: '',
+          occupation: '',
+          workplace: '',
+          maritalStatus: '',
+          dualIncome: false,
+          employmentType: '',
+          status: '未接触',
+          contactMethod: '電話',
+          contactChannel: '',
+          lastContact: '',
+          nextAppt: '',
+          memo: buildMemo(r),
+          lineRegistered: false,
+          contracts: buildContract(r),
+          suspects: [],
+          referredBy: '',
+          referredByName: '',
+          referredTo: [],
+          linkedCorpId: ''
+        }];
+      });
+      // 2. 既存顧客・同一人物候補（sibling）への統合。sibling連鎖は最終的な
+      // 登録先（'new'で作成した顧客 or 既存顧客）まで解決してから処理する。
+      toProcess.forEach(({
+        r,
+        idx
+      }) => {
+        if (r.resolution === 'new' || r.resolution === 'skip') return;
+        const target = resolveTarget(idx, new Set());
+        if (!target) return;
+        const targetId = target.type === 'new' ? newCustomerIdByIndex[target.idx] : target.id;
+        if (!targetId) return;
+        next = next.map(c => {
+          if (c.id !== targetId) return c;
+          const patch = {};
+          if (!c.name && r.name) patch.name = r.name;
+          if (!c.furigana && r.nameKana) patch.furigana = r.nameKana;
+          if (!c.gender && r.gender) patch.gender = r.gender;
+          if (!c.phone && r.phone) patch.phone = r.phone;
+          if (r.customerEqualsPolicyholder) {
+            if (!c.birthdate && r.birthDate) patch.birthdate = r.birthDate;
+            if (!c.postalCode && r.postalCode) patch.postalCode = r.postalCode;
+          }
+          const starter = buildContract(r);
+          if (starter.length > 0 && !(c.contracts || []).some(ct => ct.policyNum && ct.policyNum === r.policyNum)) {
+            patch.contracts = [...(c.contracts || []), ...starter];
+          }
+          return {
+            ...c,
+            ...patch
+          };
+        });
+      });
+      return next;
+    });
+    const processedIdxs = new Set(toProcess.map(({
+      idx
+    }) => idx));
+    setRecords(prev => prev.filter((_, i) => !processedIdxs.has(i)));
+    alert(`登録完了：${toProcess.length}件を処理しました`);
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: "full-screen"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "full-header"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn-ghost",
+    onClick: onClose
+  }, "← 閉じる"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 15
+    }
+  }, "抽出した文字を貼り付け")), /*#__PURE__*/React.createElement("div", {
+    className: "full-content"
+  }, errorNote && /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      background: '#FEF2F2',
+      color: 'var(--danger)',
+      fontSize: 12.5,
+      marginBottom: 10
+    }
+  }, errorNote), records.length === 0 && /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      marginBottom: 10,
+      lineHeight: 1.6
+    }
+  }, "iPhoneの写真アプリやGoogle Keepなどで、CSBの顧客一覧を撮影した写真から文字を抽出し、そのまま下に貼り付けてください。重いOCRは行わず、テキストをそのまま解析するので数秒で完了します。外部AIへは送信されません。"), /*#__PURE__*/React.createElement("textarea", {
+    className: "form-input",
+    style: {
+      width: '100%',
+      minHeight: 220,
+      fontFamily: 'monospace',
+      fontSize: 12
+    },
+    placeholder: "ここに抽出した文字を貼り付け",
+    value: pastedText,
+    onChange: e => setPastedText(e.target.value)
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-full",
+    style: {
+      marginTop: 10
+    },
+    onClick: handleParse
+  }, "顧客情報を解析する")), records.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      fontSize: 12.5,
+      marginBottom: 10,
+      lineHeight: 1.8
+    }
+  }, /*#__PURE__*/React.createElement("b", null, records.length, "件の契約候補を検出しました　OK ", okCount, "件／要確認 ", reviewCount, "件")), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: {
+      marginBottom: 10
+    },
+    onClick: () => {
+      setRecords([]);
+      setParseResult(null);
+      setPastedText('');
+    }
+  }, "＋ 別のテキストを貼り付け直す"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8,
+      marginBottom: 10
+    }
+  }, records.map((r, i) => /*#__PURE__*/React.createElement(NexusTextImportRecordCard, {
+    key: r.id,
+    record: r,
+    index: i,
+    allRecords: records,
+    onUpdate: patch => updateRecord(i, patch),
+    onRemove: () => removeRecord(i)
+  }))), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-full",
+    onClick: handleCommit
+  }, "確認済みを一括登録")), parseResult && /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setShowDebug(v => !v),
+    style: {
+      background: 'none',
+      border: 'none',
+      padding: 0,
+      color: 'var(--accent)',
+      fontSize: 12.5,
+      fontWeight: 700,
+      cursor: 'pointer'
+    }
+  }, showDebug ? '▼ ' : '▶ ', "デバッグ：元テキストと正規化後テキストを表示"), showDebug && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      marginBottom: 4
+    }
+  }, "元テキスト"), /*#__PURE__*/React.createElement("pre", {
+    style: {
+      fontSize: 10.5,
+      background: 'var(--bg)',
+      padding: 8,
+      borderRadius: 6,
+      border: '1px solid var(--border)',
+      whiteSpace: 'pre-wrap',
+      margin: 0,
+      maxHeight: 200,
+      overflowY: 'auto'
+    }
+  }, parseResult.original)), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      marginBottom: 4
+    }
+  }, "正規化後テキスト"), /*#__PURE__*/React.createElement("pre", {
+    style: {
+      fontSize: 10.5,
+      background: 'var(--bg)',
+      padding: 8,
+      borderRadius: 6,
+      border: '1px solid var(--border)',
+      whiteSpace: 'pre-wrap',
+      margin: 0,
+      maxHeight: 200,
+      overflowY: 'auto'
+    }
+  }, parseResult.normalized))))));
+}
+
+// ── 画像・文字から顧客登録：入口ハブ画面 ────────────────────
+function NexusCustomerImportHub({
+  onPickText,
+  onPickPhoto,
+  onPickCsv,
+  onClose
+}) {
+  const OptionCard = ({
+    badge,
+    badgeBg,
+    badgeColor,
+    icon,
+    title,
+    desc,
+    onClick
+  }) => /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick,
+    className: "card",
+    style: {
+      textAlign: 'left',
+      width: '100%',
+      cursor: 'pointer',
+      display: 'block'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      marginBottom: 4
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 20
+    }
+  }, icon), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 700,
+      fontSize: 14.5
+    }
+  }, title), badge && /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    style: {
+      background: badgeBg,
+      color: badgeColor
+    }
+  }, badge)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--text-sub)'
+    }
+  }, desc));
+  return /*#__PURE__*/React.createElement("div", {
+    className: "full-screen"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "full-header"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn-ghost",
+    onClick: onClose
+  }, "← 閉じる"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 15
+    }
+  }, "顧客情報を取り込む")), /*#__PURE__*/React.createElement("div", {
+    className: "full-content",
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--text-sub)'
+    }
+  }, "CSBの顧客一覧など、画像・文字から顧客登録候補をまとめて作成できます。"), OptionCard({
+    badge: 'おすすめ',
+    badgeBg: '#DCFCE7',
+    badgeColor: '#16A34A',
+    icon: '📋',
+    title: '抽出した文字を貼り付ける',
+    desc: 'iPhoneの写真アプリやGoogle Keep等で抽出した文字を貼り付けるだけ。重いOCRを行わないため数秒で高速・安定して解析します。',
+    onClick: onPickText
+  }), OptionCard({
+    badge: 'β版',
+    badgeBg: '#FEF3C7',
+    badgeColor: '#B45309',
+    icon: '📷',
+    title: '写真から直接読み取る',
+    desc: 'ブラウザ内OCRで証券番号・氏名等を直接読み取ります（開発中・処理に時間がかかります）。',
+    onClick: onPickPhoto
+  }), OptionCard({
+    badge: '既存機能',
+    badgeBg: '#E0E7FF',
+    badgeColor: '#4338CA',
+    icon: '📥',
+    title: 'CSVから取り込む',
+    desc: '名前,職業,会社,電話,住所,紹介者,メモの列を持つCSVファイルから取り込みます。',
+    onClick: onPickCsv
+  })));
+}
+
 // ── 顧客一覧（人脈ネクサス視点：検索・CSV連携）─────────────────
 function NexusListSection({
   customers,
@@ -16488,6 +17457,8 @@ function NexusListSection({
   const [showImageImport, setShowImageImport] = useState(false);
   const [showContractImport, setShowContractImport] = useState(false);
   const [showCsbImport, setShowCsbImport] = useState(false);
+  const [showImportHub, setShowImportHub] = useState(false);
+  const [showTextImport, setShowTextImport] = useState(false);
   const exportCSV = () => {
     const byId = {};
     customers.forEach(c => byId[c.id] = c);
@@ -16560,12 +17531,12 @@ function NexusListSection({
     },
     onClick: () => setShowContractImport(true)
   }, "📑 既契約Excel取込"), /*#__PURE__*/React.createElement("button", {
-    className: "btn btn-outline btn-sm",
+    className: "btn btn-primary btn-sm",
     style: {
       flex: '1 1 100%'
     },
-    onClick: () => setShowCsbImport(true)
-  }, "📋 CSB専用取込（証券番号・氏名・生年月日・性別・郵便番号）")), /*#__PURE__*/React.createElement("div", {
+    onClick: () => setShowImportHub(true)
+  }, "🧾 画像・文字から顧客登録（CSB取込）")), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 10.5,
       color: 'var(--text-sub)',
@@ -16658,6 +17629,24 @@ function NexusListSection({
     customers: customers,
     setCustomers: setCustomers,
     onClose: () => setShowCsbImport(false)
+  }), showImportHub && /*#__PURE__*/React.createElement(NexusCustomerImportHub, {
+    onPickText: () => {
+      setShowImportHub(false);
+      setShowTextImport(true);
+    },
+    onPickPhoto: () => {
+      setShowImportHub(false);
+      setShowCsbImport(true);
+    },
+    onPickCsv: () => {
+      setShowImportHub(false);
+      csvRef.current?.click();
+    },
+    onClose: () => setShowImportHub(false)
+  }), showTextImport && /*#__PURE__*/React.createElement(NexusTextImportScreen, {
+    customers: customers,
+    setCustomers: setCustomers,
+    onClose: () => setShowTextImport(false)
   }));
 }
 
