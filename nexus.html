@@ -11075,6 +11075,353 @@ function nexusBuildOcrTable(blocks) {
     rows: nexusDedupeRepeatedNames(nexusStripRepeatedNameTokens(rows))
   };
 }
+
+// ── CSB専用取込：人が表範囲・列位置を指定し、機械は行の切り出しとセルOCRに
+// 専念する方式 ────────────────────────────────────────────────
+// 汎用OCRで表全体を文章として読む方式は、モアレのひどい写真では見出しの
+// 自動検出自体が失敗する。そこで、①表の四隅は人が指定→透視変換で正面向きの
+// 長方形に補正、②行の境界は横罫線の濃淡（画像処理）から検出（OCR結果からの
+// 改行推測はしない）、③列位置は人が一度だけ校正してlocalStorageに保存、
+// ④証券番号・氏名それぞれのセル画像だけを個別にOCRする、という設計にする。
+
+// 4点対応（射影先→元画像）から射影変換行列を解く（OpenCV等の外部ライブラリを
+// 使わず、8元連立一次方程式をガウスの消去法で解く標準的な方法）。
+function nexusSolveLinearSystem(A, b) {
+  const n = A.length;
+  const M = A.map((row, i) => [...row, b[i]]);
+  for (let col = 0; col < n; col++) {
+    let pivot = col;
+    for (let r = col + 1; r < n; r++) {
+      if (Math.abs(M[r][col]) > Math.abs(M[pivot][col])) pivot = r;
+    }
+    const tmp = M[col];
+    M[col] = M[pivot];
+    M[pivot] = tmp;
+    const pv = M[col][col];
+    if (Math.abs(pv) < 1e-12) continue;
+    for (let r = 0; r < n; r++) {
+      if (r === col) continue;
+      const factor = M[r][col] / pv;
+      for (let c = col; c <= n; c++) M[r][c] -= factor * M[col][c];
+    }
+  }
+  return M.map((row, i) => Math.abs(row[i]) < 1e-12 ? 0 : row[n] / row[i]);
+}
+function nexusSolveHomography(src, dst) {
+  const A = [];
+  const b = [];
+  for (let i = 0; i < 4; i++) {
+    const sx = src[i].x,
+      sy = src[i].y,
+      dx = dst[i].x,
+      dy = dst[i].y;
+    A.push([sx, sy, 1, 0, 0, 0, -sx * dx, -sy * dx]);
+    b.push(dx);
+    A.push([0, 0, 0, sx, sy, 1, -sx * dy, -sy * dy]);
+    b.push(dy);
+  }
+  const h = nexusSolveLinearSystem(A, b);
+  return [h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 1];
+}
+// 射影変換で「四隅を指定した台形」を正面向きの長方形（outWidth×outHeight）に
+// 補正する。出力側の各ピクセルから元画像側の座標へ逆写像し、バイリニア補間で
+// サンプリングする（この向きで解くことで、逆行列計算を省ける）。
+function nexusWarpPerspective(imageData, srcCorners, outWidth, outHeight) {
+  const dstCorners = [{
+    x: 0,
+    y: 0
+  }, {
+    x: outWidth,
+    y: 0
+  }, {
+    x: outWidth,
+    y: outHeight
+  }, {
+    x: 0,
+    y: outHeight
+  }];
+  const H = nexusSolveHomography(dstCorners, srcCorners);
+  const {
+    width: sw,
+    height: sh,
+    data: sdata
+  } = imageData;
+  const out = new Uint8ClampedArray(outWidth * outHeight * 4);
+  for (let y = 0; y < outHeight; y++) {
+    for (let x = 0; x < outWidth; x++) {
+      const denom = H[6] * x + H[7] * y + 1;
+      const sx = (H[0] * x + H[1] * y + H[2]) / denom;
+      const sy = (H[3] * x + H[4] * y + H[5]) / denom;
+      const di = (y * outWidth + x) * 4;
+      if (sx < 0 || sy < 0 || sx >= sw - 1 || sy >= sh - 1) {
+        out[di] = 255;
+        out[di + 1] = 255;
+        out[di + 2] = 255;
+        out[di + 3] = 255;
+        continue;
+      }
+      const x0 = Math.floor(sx),
+        y0 = Math.floor(sy);
+      const fx = sx - x0,
+        fy = sy - y0;
+      for (let c = 0; c < 4; c++) {
+        const p00 = sdata[(y0 * sw + x0) * 4 + c];
+        const p10 = sdata[(y0 * sw + x0 + 1) * 4 + c];
+        const p01 = sdata[((y0 + 1) * sw + x0) * 4 + c];
+        const p11 = sdata[((y0 + 1) * sw + x0 + 1) * 4 + c];
+        const top = p00 * (1 - fx) + p10 * fx;
+        const bottom = p01 * (1 - fx) + p11 * fx;
+        out[di + c] = top * (1 - fy) + bottom * fy;
+      }
+    }
+  }
+  return {
+    width: outWidth,
+    height: outHeight,
+    data: out
+  };
+}
+// 補正後の表画像から、横罫線を「行の境界」として検出する。OCR結果からの改行
+// 推測は行わず、画像処理（各行の平均輝度＝横方向の濃淡プロファイル）だけで
+// 罫線位置を特定する。罫線は周囲より明らかに暗い横帯として現れる。
+function nexusComputeRowBrightnessProfile(imageData) {
+  const {
+    width,
+    height,
+    data
+  } = imageData;
+  const profile = new Array(height).fill(0);
+  for (let y = 0; y < height; y++) {
+    let sum = 0;
+    const rowStart = y * width * 4;
+    for (let x = 0; x < width; x++) {
+      const i = rowStart + x * 4;
+      sum += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+    }
+    profile[y] = sum / width;
+  }
+  return profile;
+}
+function nexusDetectGridlineRows(profile, opts) {
+  const o = opts || {};
+  const sorted = [...profile].sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)] || 200;
+  const threshold = median * (o.thresholdRatio || 0.8);
+  const candidates = [];
+  for (let y = 1; y < profile.length - 1; y++) {
+    if (profile[y] <= threshold && profile[y] <= profile[y - 1] && profile[y] <= profile[y + 1]) {
+      candidates.push(y);
+    }
+  }
+  const merged = [];
+  candidates.forEach(y => {
+    if (merged.length && y - merged[merged.length - 1] < (o.mergeDistance || 4)) return;
+    merged.push(y);
+  });
+  // 表の上端・下端も境界として扱う
+  if (merged.length === 0 || merged[0] > 5) merged.unshift(0);
+  if (merged[merged.length - 1] < profile.length - 5) merged.push(profile.length - 1);
+  return merged;
+}
+function nexusDetectRowBoundaries(imageData, opts) {
+  const o = opts || {};
+  const profile = nexusComputeRowBrightnessProfile(imageData);
+  const lines = nexusDetectGridlineRows(profile, o);
+  const rows = [];
+  for (let i = 0; i < lines.length - 1; i++) {
+    const y0 = lines[i],
+      y1 = lines[i + 1];
+    if (y1 - y0 < (o.minRowHeight || 12)) continue;
+    // 罫線そのものを巻き込まないよう、行の上下を少し内側に詰める
+    const margin = Math.min(3, Math.floor((y1 - y0) * 0.08));
+    rows.push({
+      y0: y0 + margin,
+      y1: y1 - margin
+    });
+  }
+  return rows;
+}
+// 列の位置（証券番号・氏名それぞれの開始/終了）は「表全体の横幅に対する割合」で
+// 保持する。固定pxだと画面解像度・撮影距離が変わるたびにズレるため。
+const NEXUS_CSB_COLUMN_CALIBRATION_KEY = 'nexus_csb_column_calibration_v1';
+const NEXUS_CSB_DEFAULT_COLUMN_CALIBRATION = {
+  policyNumStart: 0,
+  policyNumEnd: 0.11,
+  nameStart: 0.2,
+  nameEnd: 0.32
+};
+function nexusLoadCsbColumnCalibration() {
+  try {
+    const raw = localStorage.getItem(NEXUS_CSB_COLUMN_CALIBRATION_KEY);
+    if (!raw) return null;
+    const v = JSON.parse(raw);
+    if (v && typeof v.policyNumStart === 'number' && typeof v.nameStart === 'number') return v;
+  } catch (e) {}
+  return null;
+}
+function nexusSaveCsbColumnCalibration(cal) {
+  try {
+    localStorage.setItem(NEXUS_CSB_COLUMN_CALIBRATION_KEY, JSON.stringify(cal));
+  } catch (e) {}
+}
+// 補正後の表画像から、1行分・1列分の領域だけを切り出す（割合→ピクセル変換）。
+function nexusCropCellImageData(imageData, row, xStartPct, xEndPct) {
+  const {
+    width,
+    height,
+    data
+  } = imageData;
+  const x0 = Math.max(0, Math.round(width * xStartPct));
+  const x1 = Math.min(width, Math.round(width * xEndPct));
+  const y0 = Math.max(0, Math.round(row.y0));
+  const y1 = Math.min(height, Math.round(row.y1));
+  const cw = Math.max(1, x1 - x0);
+  const ch = Math.max(1, y1 - y0);
+  const out = new Uint8ClampedArray(cw * ch * 4);
+  for (let y = 0; y < ch; y++) {
+    for (let x = 0; x < cw; x++) {
+      const si = ((y0 + y) * width + (x0 + x)) * 4;
+      const di = (y * cw + x) * 4;
+      out[di] = data[si];
+      out[di + 1] = data[si + 1];
+      out[di + 2] = data[si + 2];
+      out[di + 3] = data[si + 3];
+    }
+  }
+  return {
+    width: cw,
+    height: ch,
+    data: out
+  };
+}
+// セル画像の前処理：グレースケール化＋コントラスト伸長、および大津の二値化
+// （画面全体でなく、切り出した小さなセルだけに適用する）。適応的二値化までは
+// 実装していないが、セルは既に小さく切り出し済みで照明ムラの影響が小さいため、
+// 大域的な大津の二値化で十分な精度が見込める。
+function nexusGrayscaleContrastImageData(imageData) {
+  const {
+    width,
+    height,
+    data
+  } = imageData;
+  const n = width * height;
+  const gray = new Float32Array(n);
+  let min = 255,
+    max = 0;
+  for (let i = 0; i < n; i++) {
+    const g = 0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2];
+    gray[i] = g;
+    if (g < min) min = g;
+    if (g > max) max = g;
+  }
+  const range = Math.max(max - min, 1);
+  const out = new Uint8ClampedArray(data.length);
+  for (let i = 0; i < n; i++) {
+    const v = Math.max(0, Math.min(255, (gray[i] - min) / range * 255));
+    out[i * 4] = v;
+    out[i * 4 + 1] = v;
+    out[i * 4 + 2] = v;
+    out[i * 4 + 3] = 255;
+  }
+  return {
+    width,
+    height,
+    data: out
+  };
+}
+function nexusOtsuThreshold(imageData) {
+  const {
+    data
+  } = imageData;
+  const hist = new Array(256).fill(0);
+  const n = data.length / 4;
+  for (let i = 0; i < n; i++) hist[data[i * 4]]++;
+  let sum = 0;
+  for (let t = 0; t < 256; t++) sum += t * hist[t];
+  let sumB = 0,
+    wB = 0,
+    maxVar = 0,
+    threshold = 128;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t];
+    if (wB === 0) continue;
+    const wF = n - wB;
+    if (wF === 0) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB;
+    const mF = (sum - sumB) / wF;
+    const varBetween = wB * wF * (mB - mF) * (mB - mF);
+    // 同値（分散が変わらない＝ヒストグラムに隙間がある区間）の場合も更新することで、
+    // しきい値が2つの山の間のギャップの端に寄り、暗い側の画素が「明るい」側に
+    // 誤って分類されるのを防ぐ（>だと最初にタイになった時点で止まってしまう）。
+    if (varBetween >= maxVar) {
+      maxVar = varBetween;
+      threshold = t;
+    }
+  }
+  return threshold;
+}
+function nexusBinarizeImageData(imageData, threshold) {
+  const {
+    width,
+    height,
+    data
+  } = imageData;
+  const out = new Uint8ClampedArray(data.length);
+  for (let i = 0; i < width * height; i++) {
+    const v = data[i * 4] >= threshold ? 255 : 0;
+    out[i * 4] = v;
+    out[i * 4 + 1] = v;
+    out[i * 4 + 2] = v;
+    out[i * 4 + 3] = 255;
+  }
+  return {
+    width,
+    height,
+    data: out
+  };
+}
+// 証券番号セルの検証：英数字・ハイフンのみ、4〜19文字、数字を1つ以上含むこと。
+// O/0・I/1・S/5・B/8等の誤読はここでは書き換えない（ユーザーの指示通り、
+// 勝手な推測での置き換えはしない。confidenceで低信頼度として示すのみ）。
+function nexusValidatePolicyNumCell(text) {
+  const t = (text || '').replace(/[^0-9A-Za-z-]/g, '');
+  if (t.length < 4 || t.length >= 20 || !/\d/.test(t)) return {
+    text: t,
+    valid: false
+  };
+  return {
+    text: t,
+    valid: true
+  };
+}
+// 氏名セルの検証：10文字超・記号過多・同じ文字の異常な連続は失敗扱いにする。
+function nexusValidateNameCell(text) {
+  const t = (text || '').replace(/[|｜_＿]/g, '').trim();
+  if (!t || t.length > 10) return {
+    text: t,
+    valid: false
+  };
+  const symbolRatio = (t.match(/[^一-龠々ぁ-んァ-ヶー\sA-Za-z]/g) || []).length / t.length;
+  if (symbolRatio > 0.3) return {
+    text: t,
+    valid: false
+  };
+  if (/(.)\1{2,}/.test(t.replace(/\s/g, ''))) return {
+    text: t,
+    valid: false
+  };
+  const kanaOrKanjiRatio = (t.match(/[一-龠々ぁ-んァ-ヶー]/g) || []).length / t.replace(/\s/g, '').length;
+  if (kanaOrKanjiRatio < 0.5) return {
+    text: t,
+    valid: false
+  };
+  return {
+    text: t,
+    valid: true
+  };
+}
+
 // 取込候補行が既存顧客と重複していそうかを判定する。完全一致だけでなく
 // 「氏名＋生年月日」「氏名＋フリガナ」の組み合わせ一致、電話番号の完全一致も
 // 重複候補として拾う（電話番号は表記ゆれを避けるため数字だけで比較する）。
@@ -14246,6 +14593,921 @@ function NexusImageImportScreen({
   }, "選択した項目を登録する"))));
 }
 
+// ── CSB専用取込：人が表範囲・列位置を指定し、機械は行の切り出しと
+// セルOCRに専念する（証券番号・顧客氏名(漢字)のみを対象とした専用フロー）─
+function nexusPointFromEvent(e, containerEl) {
+  const rect = containerEl.getBoundingClientRect();
+  const touch = e.touches && e.touches[0];
+  const clientX = touch ? touch.clientX : e.clientX;
+  const clientY = touch ? touch.clientY : e.clientY;
+  return {
+    xPct: Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)),
+    yPct: Math.max(0, Math.min(1, (clientY - rect.top) / rect.height))
+  };
+}
+function nexusLoadImageFile(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => resolve({
+      img,
+      url
+    });
+    img.onerror = e => {
+      URL.revokeObjectURL(url);
+      reject(e);
+    };
+    img.src = url;
+  });
+}
+function nexusImageToImageData(img) {
+  const canvas = document.createElement('canvas');
+  canvas.width = img.naturalWidth;
+  canvas.height = img.naturalHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  return ctx.getImageData(0, 0, canvas.width, canvas.height);
+}
+function nexusImageDataToDataUrl(imageData) {
+  const canvas = document.createElement('canvas');
+  canvas.width = imageData.width;
+  canvas.height = imageData.height;
+  canvas.getContext('2d').putImageData(new ImageData(imageData.data, imageData.width, imageData.height), 0, 0);
+  return canvas.toDataURL();
+}
+// STEP2：表の四隅を指で合わせる（URL欄・タスクバー等を除外するため）
+function NexusCsbCropStep({
+  imageUrl,
+  naturalWidth,
+  naturalHeight,
+  onConfirm,
+  onCancel
+}) {
+  const containerRef = React.useRef(null);
+  const [corners, setCorners] = useState([{
+    xPct: 0.05,
+    yPct: 0.05
+  }, {
+    xPct: 0.95,
+    yPct: 0.05
+  }, {
+    xPct: 0.95,
+    yPct: 0.95
+  }, {
+    xPct: 0.05,
+    yPct: 0.95
+  }]);
+  const [dragIdx, setDragIdx] = useState(null);
+  const displayWidth = Math.min(naturalWidth, 380);
+  const displayHeight = displayWidth / naturalWidth * naturalHeight;
+  const handleMove = e => {
+    if (dragIdx === null || !containerRef.current) return;
+    const p = nexusPointFromEvent(e, containerRef.current);
+    setCorners(prev => prev.map((c, i) => i === dragIdx ? p : c));
+  };
+  const confirm = () => {
+    onConfirm(corners.map(c => ({
+      x: c.xPct * naturalWidth,
+      y: c.yPct * naturalHeight
+    })));
+  };
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      marginBottom: 10,
+      color: 'var(--text-sub)'
+    }
+  }, "表の四隅の丸印を、顧客一覧表のふちに合わせてください。ブラウザのURL欄やタスクバー等の表以外の部分は含めないでください。"), /*#__PURE__*/React.createElement("div", {
+    ref: containerRef,
+    style: {
+      position: 'relative',
+      width: displayWidth,
+      height: displayHeight,
+      margin: '0 auto',
+      touchAction: 'none',
+      background: '#000'
+    },
+    onPointerMove: handleMove,
+    onPointerUp: () => setDragIdx(null),
+    onPointerLeave: () => setDragIdx(null)
+  }, /*#__PURE__*/React.createElement("img", {
+    src: imageUrl,
+    style: {
+      width: '100%',
+      height: '100%',
+      display: 'block',
+      userSelect: 'none'
+    },
+    draggable: false
+  }), /*#__PURE__*/React.createElement("svg", {
+    style: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      width: '100%',
+      height: '100%',
+      pointerEvents: 'none'
+    }
+  }, /*#__PURE__*/React.createElement("polygon", {
+    points: corners.map(c => `${c.xPct * displayWidth},${c.yPct * displayHeight}`).join(' '),
+    fill: "rgba(124,58,237,0.18)",
+    stroke: "var(--accent)",
+    strokeWidth: "2"
+  })), corners.map((c, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    onPointerDown: e => {
+      e.preventDefault();
+      setDragIdx(i);
+    },
+    style: {
+      position: 'absolute',
+      left: c.xPct * displayWidth - 15,
+      top: c.yPct * displayHeight - 15,
+      width: 30,
+      height: 30,
+      borderRadius: '50%',
+      background: 'var(--accent)',
+      border: '3px solid #fff',
+      boxShadow: '0 1px 4px rgba(0,0,0,0.4)',
+      touchAction: 'none'
+    }
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline",
+    style: {
+      flex: 1
+    },
+    onClick: onCancel
+  }, "キャンセル"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary",
+    style: {
+      flex: 1
+    },
+    onClick: confirm
+  }, "次へ（傾き補正）")));
+}
+// STEP3〜5：傾き補正後の表を見ながら、先頭のデータ行・証券番号列・氏名列を調整する
+function NexusCsbCalibrateStep({
+  warpedUrl,
+  warpedWidth,
+  warpedHeight,
+  detectedRows,
+  initialCalibration,
+  initialHeaderSkip,
+  onConfirm,
+  onBack
+}) {
+  const [headerSkip, setHeaderSkip] = useState(initialHeaderSkip);
+  const [cal, setCal] = useState(initialCalibration);
+  const containerRef = React.useRef(null);
+  const [dragKey, setDragKey] = useState(null);
+  const displayWidth = Math.min(warpedWidth, 380);
+  const displayHeight = displayWidth / warpedWidth * warpedHeight;
+  const handleMove = e => {
+    if (!dragKey || !containerRef.current) return;
+    const p = nexusPointFromEvent(e, containerRef.current);
+    setCal(prev => ({
+      ...prev,
+      [dragKey]: Math.max(0, Math.min(1, p.xPct))
+    }));
+  };
+  const LINES = [{
+    key: 'policyNumStart',
+    color: '#7C3AED',
+    label: '証券番号：開始'
+  }, {
+    key: 'policyNumEnd',
+    color: '#7C3AED',
+    label: '証券番号：終了'
+  }, {
+    key: 'nameStart',
+    color: '#059669',
+    label: '氏名：開始'
+  }, {
+    key: 'nameEnd',
+    color: '#059669',
+    label: '氏名：終了'
+  }];
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      marginBottom: 10,
+      color: 'var(--text-sub)'
+    }
+  }, "緑の横線は自動検出した行の区切りです。グレーの点線は見出し行として除外されます（矢印で調整）。紫の縦線2本で証券番号列、緑の縦線2本で氏名（漢字）列の範囲をドラッグして合わせてください。一度設定すれば次回から自動で使われます。"), /*#__PURE__*/React.createElement("div", {
+    ref: containerRef,
+    style: {
+      position: 'relative',
+      width: displayWidth,
+      height: displayHeight,
+      margin: '0 auto',
+      touchAction: 'none',
+      background: '#000'
+    },
+    onPointerMove: handleMove,
+    onPointerUp: () => setDragKey(null),
+    onPointerLeave: () => setDragKey(null)
+  }, /*#__PURE__*/React.createElement("img", {
+    src: warpedUrl,
+    style: {
+      width: '100%',
+      height: '100%',
+      display: 'block',
+      userSelect: 'none'
+    },
+    draggable: false
+  }), /*#__PURE__*/React.createElement("svg", {
+    style: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      width: '100%',
+      height: '100%',
+      pointerEvents: 'none'
+    }
+  }, detectedRows.map((r, i) => /*#__PURE__*/React.createElement("line", {
+    key: 'r' + i,
+    x1: 0,
+    x2: displayWidth,
+    y1: r.y0 / warpedHeight * displayHeight,
+    y2: r.y0 / warpedHeight * displayHeight,
+    stroke: i < headerSkip ? '#9CA3AF' : '#16A34A',
+    strokeDasharray: i < headerSkip ? '3,3' : undefined,
+    strokeWidth: "1.5"
+  })), LINES.map(l => /*#__PURE__*/React.createElement("line", {
+    key: l.key,
+    x1: cal[l.key] * displayWidth,
+    x2: cal[l.key] * displayWidth,
+    y1: 0,
+    y2: displayHeight,
+    stroke: l.color,
+    strokeWidth: "2"
+  }))), LINES.map(l => /*#__PURE__*/React.createElement("div", {
+    key: l.key,
+    onPointerDown: e => {
+      e.preventDefault();
+      setDragKey(l.key);
+    },
+    style: {
+      position: 'absolute',
+      left: cal[l.key] * displayWidth - 11,
+      top: displayHeight / 2 - 16,
+      width: 22,
+      height: 32,
+      background: l.color,
+      borderRadius: 6,
+      touchAction: 'none',
+      boxShadow: '0 1px 4px rgba(0,0,0,0.4)'
+    }
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      marginTop: 10,
+      fontSize: 13
+    }
+  }, "先頭のデータ行：", /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-sm",
+    onClick: () => setHeaderSkip(v => Math.max(0, v - 1))
+  }, "◀"), (headerSkip + 1) + "行目から", /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-sm",
+    onClick: () => setHeaderSkip(v => Math.min(Math.max(detectedRows.length - 1, 0), v + 1))
+  }, "▶")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline",
+    style: {
+      flex: 1
+    },
+    onClick: onBack
+  }, "← 撮り直す"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary",
+    style: {
+      flex: 1
+    },
+    onClick: () => onConfirm({
+      cal,
+      headerSkip
+    })
+  }, "この設定でOCR開始")));
+}
+// 1セル分の画像を、2パターンの前処理（グレースケール／二値化）でそれぞれOCRし、
+// confidenceが高い方を採用する（1回だけの読み取りに頼らないため）。
+async function nexusOcrCsbCell(worker, cellImageData, kind) {
+  const gray = nexusGrayscaleContrastImageData(cellImageData);
+  const threshold = nexusOtsuThreshold(gray);
+  const bin = nexusBinarizeImageData(gray, threshold);
+  const variants = [gray, bin];
+  let best = null;
+  for (const v of variants) {
+    const scale = v.width < 300 ? 3 : 1;
+    const srcCanvas = document.createElement('canvas');
+    srcCanvas.width = v.width;
+    srcCanvas.height = v.height;
+    srcCanvas.getContext('2d').putImageData(new ImageData(v.data, v.width, v.height), 0, 0);
+    const outCanvas = document.createElement('canvas');
+    outCanvas.width = Math.max(1, Math.round(v.width * scale));
+    outCanvas.height = Math.max(1, Math.round(v.height * scale));
+    const ctx = outCanvas.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(srcCanvas, 0, 0, outCanvas.width, outCanvas.height);
+    // eslint-disable-next-line no-await-in-loop
+    const {
+      data
+    } = await worker.recognize(outCanvas);
+    const conf = typeof data.confidence === 'number' ? data.confidence : 0;
+    const text = (data.text || '').trim();
+    if (!best || conf > best.confidence) {
+      best = {
+        text,
+        confidence: conf,
+        dataUrl: outCanvas.toDataURL()
+      };
+    }
+  }
+  return best;
+}
+function nexusCsbConfColor(c) {
+  if (c >= 80) return 'var(--success)';
+  if (c >= 60) return '#B45309';
+  return 'var(--danger)';
+}
+// STEP7：確認画面の1行（状態／証券番号／氏名。タップで元画像の切り抜きを表示）
+function NexusCsbReviewRow({
+  row,
+  onUpdate,
+  onRemove
+}) {
+  const [showImg, setShowImg] = useState(false);
+  const hasDup = row.duplicates && row.duplicates.length > 0;
+  const statusInfo = row.status === 'ok' ? {
+    label: 'OK',
+    bg: '#DCFCE7',
+    color: '#16A34A'
+  } : {
+    label: '要確認',
+    bg: '#FEF3C7',
+    color: '#B45309'
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      padding: 10,
+      border: row.status === 'ok' ? undefined : '1.5px solid #FDE68A'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: row.selected,
+    onChange: e => onUpdate({
+      selected: e.target.checked
+    }),
+    style: {
+      width: 18,
+      height: 18,
+      flexShrink: 0
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    style: {
+      background: statusInfo.bg,
+      color: statusInfo.color,
+      flexShrink: 0
+    }
+  }, statusInfo.label), hasDup && /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    style: {
+      background: '#FEF3C7',
+      color: '#B45309',
+      flexShrink: 0
+    }
+  }, "△重複候補"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setShowImg(v => !v),
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--accent)',
+      fontSize: 11,
+      cursor: 'pointer',
+      flexShrink: 0
+    }
+  }, showImg ? '元画像を隠す' : '元画像と比較'), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: onRemove,
+    style: {
+      marginLeft: 'auto',
+      background: 'none',
+      border: 'none',
+      color: 'var(--danger)',
+      fontSize: 18,
+      cursor: 'pointer',
+      flexShrink: 0
+    }
+  }, "×")), showImg && row.rowImageUrl && /*#__PURE__*/React.createElement("img", {
+    src: row.rowImageUrl,
+    style: {
+      width: '100%',
+      marginTop: 8,
+      borderRadius: 6,
+      border: '1px solid var(--border)'
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "form-row",
+    style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "証券番号", row.confidence && /*#__PURE__*/React.createElement("span", {
+    style: {
+      marginLeft: 6,
+      fontSize: 10,
+      fontWeight: 700,
+      color: nexusCsbConfColor(row.confidence.policyNum)
+    }
+  }, Math.round(row.confidence.policyNum), "%")), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    value: row.policyNum || '',
+    onChange: e => onUpdate({
+      policyNum: e.target.value
+    })
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "顧客氏名（漢字）", row.confidence && /*#__PURE__*/React.createElement("span", {
+    style: {
+      marginLeft: 6,
+      fontSize: 10,
+      fontWeight: 700,
+      color: nexusCsbConfColor(row.confidence.name)
+    }
+  }, Math.round(row.confidence.name), "%")), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    value: row.name || '',
+    onChange: e => onUpdate({
+      name: e.target.value
+    })
+  }))), hasDup && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "登録方法（既存顧客と重複の可能性があります）"), /*#__PURE__*/React.createElement("select", {
+    className: "form-select",
+    value: row.resolution,
+    onChange: e => onUpdate({
+      resolution: e.target.value
+    })
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "new"
+  }, "新規登録する"), row.duplicates.map(d => /*#__PURE__*/React.createElement("option", {
+    key: d.id,
+    value: d.id
+  }, `既存「${nexusDisplayName(d)}」に統合`)), /*#__PURE__*/React.createElement("option", {
+    value: "skip"
+  }, "今回は登録しない"))));
+}
+// STEP1〜7 全体を統括する画面。1枚ずつ「選択→トリミング→補正・列調整→OCR」を
+// 実行し、結果をrowsに積み上げていく（複数枚に分けて撮影しても最後にまとめて
+// 確認・登録できる）。画像は各段階の一時データとしてのみメモリ上に保持し、
+// localStorageや外部には保存しない（列位置の割合設定のみ保存する）。
+function NexusCsbImportScreen({
+  customers,
+  setCustomers,
+  onClose
+}) {
+  const [phase, setPhase] = useState('pick'); // pick|crop|calibrate|processing|review
+  const [progressText, setProgressText] = useState('');
+  const [pickedImage, setPickedImage] = useState(null);
+  const [warped, setWarped] = useState(null);
+  const [detectedRows, setDetectedRows] = useState([]);
+  const [rows, setRows] = useState([]);
+  const [debugStages, setDebugStages] = useState([]);
+  const [showDebug, setShowDebug] = useState(false);
+  const [lastSummary, setLastSummary] = useState(null);
+  const [errorNote, setErrorNote] = useState('');
+  const fileRef = React.useRef(null);
+  const updateRow = (id, patch) => setRows(prev => prev.map(r => r.id === id ? {
+    ...r,
+    ...patch
+  } : r));
+  const removeRow = id => setRows(prev => prev.filter(r => r.id !== id));
+  const handlePick = async file => {
+    if (!file) return;
+    setErrorNote('');
+    try {
+      const {
+        img,
+        url
+      } = await nexusLoadImageFile(file);
+      setPickedImage({
+        url,
+        naturalWidth: img.naturalWidth,
+        naturalHeight: img.naturalHeight,
+        img
+      });
+      setPhase('crop');
+    } catch (e) {
+      setErrorNote('画像の読み込みに失敗しました：' + e.message);
+    }
+  };
+  const handleCropConfirm = corners => {
+    try {
+      const imageData = nexusImageToImageData(pickedImage.img);
+      const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+      const topLen = dist(corners[0], corners[1]);
+      const bottomLen = dist(corners[3], corners[2]);
+      const leftLen = dist(corners[0], corners[3]);
+      const rightLen = dist(corners[1], corners[2]);
+      let outWidth = Math.round(Math.max(topLen, bottomLen));
+      let outHeight = Math.round(Math.max(leftLen, rightLen));
+      const capWidth = 1200;
+      if (outWidth > capWidth) {
+        outHeight = Math.round(outHeight * capWidth / outWidth);
+        outWidth = capWidth;
+      }
+      outWidth = Math.max(outWidth, 200);
+      outHeight = Math.max(outHeight, 100);
+      const warpedData = nexusWarpPerspective(imageData, corners, outWidth, outHeight);
+      const url = nexusImageDataToDataUrl(warpedData);
+      const detected = nexusDetectRowBoundaries(warpedData, {
+        minRowHeight: Math.max(14, Math.round(outHeight * 0.02))
+      });
+      setWarped({
+        imageData: warpedData,
+        url,
+        width: outWidth,
+        height: outHeight
+      });
+      setDetectedRows(detected);
+      setDebugStages(prev => [...prev, {
+        label: '傾き補正後',
+        url
+      }]);
+      if (detected.length === 0) {
+        setErrorNote('横罫線を検出できず、行の区切りが見つかりませんでした。表がまっすぐ・大きく写るよう、四隅の指定をやり直してください。');
+        return;
+      }
+      setPhase('calibrate');
+    } catch (e) {
+      setErrorNote('傾き補正に失敗しました：' + e.message);
+    }
+  };
+  const handleCalibrateConfirm = async ({
+    cal,
+    headerSkip
+  }) => {
+    nexusSaveCsbColumnCalibration(cal);
+    setPhase('processing');
+    setErrorNote('');
+    let workerNum = null,
+      workerName = null;
+    try {
+      setProgressText('OCRライブラリを準備中…');
+      await new Promise(resolve => nexusEnsureOcrLib(resolve));
+      workerNum = await window.Tesseract.createWorker('eng');
+      await workerNum.setParameters({
+        tessedit_pageseg_mode: '8',
+        tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ-'
+      });
+      workerName = await window.Tesseract.createWorker('jpn');
+      await workerName.setParameters({
+        tessedit_pageseg_mode: '7'
+      });
+      const dataRows = detectedRows.slice(headerSkip);
+      const newRows = [];
+      const newDebug = [];
+      let okCount = 0,
+        reviewCount = 0;
+      for (let i = 0; i < dataRows.length; i++) {
+        setProgressText(`行を読み取り中…（${i + 1}/${dataRows.length}）`);
+        const row = dataRows[i];
+        const policyCell = nexusCropCellImageData(warped.imageData, row, cal.policyNumStart, cal.policyNumEnd);
+        const nameCell = nexusCropCellImageData(warped.imageData, row, cal.nameStart, cal.nameEnd);
+        // eslint-disable-next-line no-await-in-loop
+        const policyResult = await nexusOcrCsbCell(workerNum, policyCell, 'policyNum');
+        // eslint-disable-next-line no-await-in-loop
+        const nameResult = await nexusOcrCsbCell(workerName, nameCell, 'name');
+        const policyValid = nexusValidatePolicyNumCell(policyResult.text);
+        const nameValid = nexusValidateNameCell(nameResult.text);
+        // 文字種・長さ等のパターン検証だけでは、「間串間間剛川上」のような一見
+        // それらしい長さのデタラメな漢字列は弾ききれない（実在の名前かどうかは
+        // 文字種だけでは判定不能なため）。そこでTesseract自身のconfidenceも
+        // 合わせて見る：本当に読み取れていない文字はconfidenceも低く出ることが
+        // 多いため、両方の検証を組み合わせて「OK」と「要確認」を分ける。
+        const status = policyValid.valid && nameValid.valid && policyResult.confidence >= 60 && nameResult.confidence >= 50 ? 'ok' : 'review';
+        if (status === 'ok') okCount++;else reviewCount++;
+        const rowImageUrl = nexusImageDataToDataUrl(nexusCropCellImageData(warped.imageData, row, 0, 1));
+        newRows.push({
+          id: uid(),
+          policyNum: policyValid.text,
+          name: nameValid.text,
+          status,
+          confidence: {
+            policyNum: policyResult.confidence,
+            name: nameResult.confidence
+          },
+          rowImageUrl,
+          selected: true,
+          resolution: 'new',
+          duplicates: nexusFindDuplicateCandidates({
+            name: nameValid.text
+          }, customers)
+        });
+        newDebug.push({
+          label: `行${i + 1}：証券番号ROI（採用値「${policyResult.text}」conf${Math.round(policyResult.confidence)}）`,
+          url: policyResult.dataUrl
+        });
+        newDebug.push({
+          label: `行${i + 1}：氏名ROI（採用値「${nameResult.text}」conf${Math.round(nameResult.confidence)}）`,
+          url: nameResult.dataUrl
+        });
+      }
+      await workerNum.terminate();
+      await workerName.terminate();
+      setRows(prev => [...prev, ...newRows]);
+      setDebugStages(prev => [...prev, ...newDebug]);
+      setLastSummary({
+        total: dataRows.length,
+        ok: okCount,
+        review: reviewCount
+      });
+      setPhase('review');
+    } catch (err) {
+      if (workerNum) {
+        try {
+          await workerNum.terminate();
+        } catch (e) {}
+      }
+      if (workerName) {
+        try {
+          await workerName.terminate();
+        } catch (e) {}
+      }
+      setErrorNote('OCR処理中にエラーが発生しました：' + err.message);
+      setPhase('calibrate');
+    }
+  };
+  const handleCommit = () => {
+    const toRegister = rows.filter(r => r.selected && r.resolution === 'new');
+    const toMerge = rows.filter(r => r.selected && r.resolution !== 'new' && r.resolution !== 'skip');
+    const toDrop = rows.filter(r => r.selected);
+    if (toRegister.length === 0 && toMerge.length === 0) {
+      alert('登録する項目がありません（選択・登録方法をご確認ください）');
+      return;
+    }
+    const buildContract = r => r.policyNum ? [{
+      id: uid(),
+      type: '',
+      company: '',
+      policyNum: r.policyNum,
+      premium: '',
+      date: ''
+    }] : [];
+    setCustomers(prev => {
+      let next = [...prev, ...toRegister.map(r => ({
+        id: uid(),
+        customerType: '個人',
+        name: r.name || '',
+        furigana: '',
+        age: '',
+        gender: '',
+        birthdate: '',
+        phone: '',
+        email: '',
+        postalCode: '',
+        address: '',
+        occupation: '',
+        workplace: '',
+        maritalStatus: '',
+        dualIncome: false,
+        employmentType: '',
+        status: '未接触',
+        contactMethod: '電話',
+        contactChannel: '',
+        lastContact: '',
+        nextAppt: '',
+        memo: 'CSB画像取込',
+        lineRegistered: false,
+        contracts: buildContract(r),
+        suspects: [],
+        referredBy: '',
+        referredByName: '',
+        referredTo: [],
+        linkedCorpId: ''
+      }))];
+      toMerge.forEach(r => {
+        next = next.map(c => {
+          if (c.id !== r.resolution) return c;
+          const patch = {};
+          if (!c.name && r.name) patch.name = r.name;
+          const starter = buildContract(r);
+          if (starter.length > 0 && !(c.contracts || []).some(ct => ct.policyNum && ct.policyNum === r.policyNum)) {
+            patch.contracts = [...(c.contracts || []), ...starter];
+          }
+          return {
+            ...c,
+            ...patch
+          };
+        });
+      });
+      return next;
+    });
+    const droppedIds = new Set(toDrop.map(r => r.id));
+    setRows(prev => prev.filter(r => !droppedIds.has(r.id)));
+    alert(`登録完了：新規登録 ${toRegister.length}件／既存顧客に統合 ${toMerge.length}件`);
+  };
+  const okCount = rows.filter(r => r.status === 'ok').length;
+  const reviewCount = rows.filter(r => r.status === 'review').length;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "full-screen"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "full-header"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn-ghost",
+    onClick: onClose
+  }, "← 閉じる"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 15
+    }
+  }, "CSB専用取込（証券番号・氏名）")), /*#__PURE__*/React.createElement("div", {
+    className: "full-content"
+  }, errorNote && /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      background: '#FEF2F2',
+      color: 'var(--danger)',
+      fontSize: 12.5,
+      marginBottom: 10
+    }
+  }, errorNote), phase === 'pick' && /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      marginBottom: 10,
+      lineHeight: 1.6
+    }
+  }, "CSBの顧客一覧を撮影した写真を選んでください。証券番号と顧客氏名（漢字）だけを読み取ります。画像はこの端末内だけで処理され、外部には送信されません。", rows.length > 0 ? `　（これまでに${rows.length}件読み取り済み）` : ''), /*#__PURE__*/React.createElement("input", {
+    ref: fileRef,
+    type: "file",
+    accept: "image/*",
+    style: {
+      display: 'none'
+    },
+    onChange: e => {
+      handlePick(e.target.files[0]);
+      e.target.value = '';
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-full",
+    onClick: () => fileRef.current?.click()
+  }, "📷 写真を選ぶ"), rows.length > 0 && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: {
+      marginTop: 8
+    },
+    onClick: () => setPhase('review')
+  }, "確認画面へ進む（", rows.length, "件）")), phase === 'crop' && pickedImage && /*#__PURE__*/React.createElement(NexusCsbCropStep, {
+    imageUrl: pickedImage.url,
+    naturalWidth: pickedImage.naturalWidth,
+    naturalHeight: pickedImage.naturalHeight,
+    onConfirm: handleCropConfirm,
+    onCancel: () => setPhase('pick')
+  }), phase === 'calibrate' && warped && /*#__PURE__*/React.createElement(NexusCsbCalibrateStep, {
+    warpedUrl: warped.url,
+    warpedWidth: warped.width,
+    warpedHeight: warped.height,
+    detectedRows: detectedRows,
+    initialCalibration: nexusLoadCsbColumnCalibration() || NEXUS_CSB_DEFAULT_COLUMN_CALIBRATION,
+    initialHeaderSkip: 1,
+    onConfirm: handleCalibrateConfirm,
+    onBack: () => setPhase('crop')
+  }), phase === 'processing' && /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      textAlign: 'center',
+      padding: 30
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      marginBottom: 8
+    }
+  }, progressText || '処理中…'), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)'
+    }
+  }, "行ごとに証券番号・氏名を個別に読み取っています。少し時間がかかります")), phase === 'review' && /*#__PURE__*/React.createElement(React.Fragment, null, lastSummary && /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      fontSize: 12.5,
+      marginBottom: 10,
+      lineHeight: 1.8
+    }
+  }, /*#__PURE__*/React.createElement("b", null, "今回：", lastSummary.total, "行検出　OK ", lastSummary.ok, "件／要確認 ", lastSummary.review, "件")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      marginBottom: 10,
+      color: 'var(--text-sub)'
+    }
+  }, "全体：", rows.length, "件（OK ", okCount, "件／要確認 ", reviewCount, "件）。内容を確認・修正してから登録してください。"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: {
+      marginBottom: 10
+    },
+    onClick: () => setPhase('pick')
+  }, "＋ 別の写真を追加で読み取る"), rows.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--text-sub)'
+    }
+  }, "まだ読み取った行がありません。")) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8,
+      marginBottom: 10
+    }
+  }, rows.map(r => /*#__PURE__*/React.createElement(NexusCsbReviewRow, {
+    key: r.id,
+    row: r,
+    onUpdate: patch => updateRow(r.id, patch),
+    onRemove: () => removeRow(r.id)
+  }))), rows.length > 0 && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-full",
+    onClick: handleCommit
+  }, "選択した項目を登録する")), debugStages.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setShowDebug(v => !v),
+    style: {
+      background: 'none',
+      border: 'none',
+      padding: 0,
+      color: 'var(--accent)',
+      fontSize: 12.5,
+      fontWeight: 700,
+      cursor: 'pointer'
+    }
+  }, showDebug ? '▼ ' : '▶ ', "デバッグ：各段階の画像を表示"), showDebug && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10
+    }
+  }, debugStages.map((d, i) => /*#__PURE__*/React.createElement("div", {
+    key: i
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      marginBottom: 4
+    }
+  }, d.label), /*#__PURE__*/React.createElement("img", {
+    src: d.url,
+    style: {
+      maxWidth: '100%',
+      border: '1px solid var(--border)',
+      borderRadius: 6
+    }
+  })))))));
+}
 // ── 既契約Excel/CSV取込：プレビュー画面の1契約行 ────────────────
 function NexusContractImportRow({
   row,
@@ -14661,6 +15923,7 @@ function NexusListSection({
   const csvRef = React.useRef(null);
   const [showImageImport, setShowImageImport] = useState(false);
   const [showContractImport, setShowContractImport] = useState(false);
+  const [showCsbImport, setShowCsbImport] = useState(false);
   const exportCSV = () => {
     const byId = {};
     customers.forEach(c => byId[c.id] = c);
@@ -14732,7 +15995,13 @@ function NexusListSection({
       flex: '1 1 45%'
     },
     onClick: () => setShowContractImport(true)
-  }, "📑 既契約Excel取込")), /*#__PURE__*/React.createElement("div", {
+  }, "📑 既契約Excel取込"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-outline btn-sm",
+    style: {
+      flex: '1 1 100%'
+    },
+    onClick: () => setShowCsbImport(true)
+  }, "📋 CSB専用取込（証券番号・氏名）")), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 10.5,
       color: 'var(--text-sub)',
@@ -14821,6 +16090,10 @@ function NexusListSection({
     customers: customers,
     setCustomers: setCustomers,
     onClose: () => setShowContractImport(false)
+  }), showCsbImport && /*#__PURE__*/React.createElement(NexusCsbImportScreen, {
+    customers: customers,
+    setCustomers: setCustomers,
+    onClose: () => setShowCsbImport(false)
   }));
 }
 
