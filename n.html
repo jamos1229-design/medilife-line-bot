@@ -10614,18 +10614,24 @@ const NEXUS_PREFECTURES = ['北海道', '青森県', '岩手県', '宮城県', '
 // 保険会社名は自由入力だと1〜2文字のOCR誤読で丸ごと使い物にならなくなるため、
 // 主要な生保・損保の社名一覧との一致（部分一致・省略「…」対応の前方一致）で拾う。
 const NEXUS_INSURANCE_COMPANIES = ['日本生命', '第一生命', '明治安田生命', '住友生命保険', '住友生命', '太陽生命', '大同生命', '富国生命', '朝日生命', 'かんぽ生命', 'ソニー生命', 'ソニー損保', 'アクサ生命', 'アクサダイレクト', 'プルデンシャルジブラルタ生命', 'プルデンシャル生命', 'ジブラルタ生命', 'オリックス生命', 'メットライフ生命', 'チューリッヒ生命', 'チューリッヒ保険', 'はなさく生命', 'FWD生命', 'マニュライフ生命', 'ネオファースト生命', 'なないろ生命', 'SOMPOひまわり生命', '第一フロンティア生命', '東京海上日動あんしん生命', '東京海上日動', '三井住友海上あいおい生命', '三井住友海上プライマリー生命', '三井住友あいおい生命', '三井住友海上', 'あいおいニッセイ同和損保', '損害保険ジャパン', '日新火災', 'セゾン自動車火災', '楽天損保', 'イーデザイン損保', 'アフラック', 'エヌエヌ生命'];
+// 社名の文字間にOCRが余分な空白を混入させることがあるため、除去時は文字ごとに
+// 任意の空白を許容する緩いパターンで置換する（そうしないと判定はできても
+// 元のテキストから実際に取り除けず、残りカスとして氏名等に混入してしまう）。
+function nexusLooseNameRegex(name) {
+  return new RegExp(name.split('').map(c => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s*'));
+}
 function nexusMatchInsuranceCompany(text) {
-  const t = (text || '').replace(/[…。\s]+/g, '');
+  const src = text || '';
+  const t = src.replace(/[…。\s]+/g, '');
   if (!t) return {
     company: '',
-    rest: text || ''
+    rest: src
   };
   for (const name of NEXUS_INSURANCE_COMPANIES) {
-    const idx = (text || '').replace(/\s+/g, '').indexOf(name);
-    if (idx !== -1) {
+    if (t.includes(name)) {
       return {
         company: name,
-        rest: (text || '').replace(name, ' ')
+        rest: src.replace(nexusLooseNameRegex(name), ' ')
       };
     }
   }
@@ -10636,14 +10642,14 @@ function nexusMatchInsuranceCompany(text) {
       if (t.includes(prefix)) {
         return {
           company: name,
-          rest: (text || '').replace(prefix, ' ')
+          rest: src.replace(nexusLooseNameRegex(prefix), ' ')
         };
       }
     }
   }
   return {
     company: '',
-    rest: text || ''
+    rest: src
   };
 }
 // OCRで読み取った1行のテキストから、氏名・フリガナ・生年月日・電話番号・郵便番号・住所・
@@ -10661,25 +10667,24 @@ function nexusParseOcrLine(line) {
   };
   const emailM = take(/[\w.+-]+@[\w-]+\.[\w.-]+/);
   const email = emailM ? emailM[0] : '';
-  const postalM = take(/〒?\s*(\d{3})-?(\d{4})/);
+  // 電話番号（3グループ・ハイフン必須）を先に抜き出してから郵便番号（2グループ・
+  // ハイフン必須）を探す。ハイフンを省略可にすると、電話番号の一部（例：
+  // 「090-5745」）や証券番号の数字の一部を郵便番号として誤って拾ってしまうため、
+  // どちらもハイフンを必須にして誤爆を防ぐ。
+  const phoneM = take(/0\d{1,4}-\d{1,4}-\d{3,4}/);
+  const phone = phoneM ? phoneM[0] : '';
+  const postalM = take(/〒?\s*(\d{3})-(\d{4})/);
   const postalCode = postalM ? `${postalM[1]}-${postalM[2]}` : '';
   const birthM = take(/((?:19|20)\d{2})[\/\-年.](\d{1,2})[\/\-月.](\d{1,2})日?/);
   const birthdate = birthM ? `${birthM[1]}-${String(birthM[2]).padStart(2, '0')}-${String(birthM[3]).padStart(2, '0')}` : '';
-  const phoneM = take(/0\d{1,4}-?\d{1,4}-?\d{3,4}/);
-  const phone = phoneM ? phoneM[0] : '';
-  let address = '';
-  const prefMatch = NEXUS_PREFECTURES.find(p => rest.includes(p));
-  if (prefMatch) {
-    const start = rest.indexOf(prefMatch);
-    address = rest.slice(start).trim();
-    rest = rest.slice(0, start);
-  }
   const genderM = rest.match(/男性|女性/);
   const gender = genderM ? genderM[0] : '';
   if (genderM) rest = rest.slice(0, genderM.index) + ' ' + rest.slice(genderM.index + genderM[0].length);
   const companyMatch = nexusMatchInsuranceCompany(rest);
   const company = companyMatch.company;
   rest = companyMatch.rest;
+  // 表の罫線がパイプ文字として誤読されることがあるため、区切りとして扱う
+  rest = rest.replace(/\|/g, ' ');
   // 証券番号：英数字混在（またはある程度長い数字のみ）のトークンを1つだけ拾う。
   // 年齢欄（「72」等の短い数字）まで拾わないよう、5文字以上に限定する。
   const policyRe = /^[0-9A-Za-z][0-9A-Za-z-]{4,19}$/;
@@ -10696,19 +10701,32 @@ function nexusParseOcrLine(line) {
   // 表のラベル・記号など、氏名・フリガナとして混入しやすいノイズ語を除外する
   // （「本人」は被保険者欄などで「契約者と同一」を表す定型語として現れることが多い）
   const NOISE_TOKENS = ['本人', '個人', '法人', '不明', '未登録'];
-  const isGarbage = t => NOISE_TOKENS.includes(t) || t.length <= 1 || /^[a-z]+$/.test(t) || /^[|＊*ー\-＿_.。、,]+$/.test(t) || /\d/.test(t);
-  const tokens = tokensAfterPolicy.filter(t => !isGarbage(t));
+  const isStopToken = t => NOISE_TOKENS.includes(t) || /^\d+$/.test(t) || /^[a-z]+$/.test(t) || /^[ァ-ヶー]+$/.test(t);
+  // 住所：都道府県トークンを起点に、数字だけ・ノイズ語・カナだけのトークンが
+  // 出てくる手前まで（最大4トークン）を住所とみなす。「都道府県から行末まで」を
+  // 丸ごと拾うと、住所より右にある列（生年月日以降）まで巻き込んでしまうため。
+  let address = '';
+  const prefIdx = tokensAfterPolicy.findIndex(t => NEXUS_PREFECTURES.some(p => t.includes(p)));
+  let tokensAfterAddress = tokensAfterPolicy;
+  if (prefIdx !== -1) {
+    const addrParts = [tokensAfterPolicy[prefIdx]];
+    let end = prefIdx + 1;
+    while (end < tokensAfterPolicy.length && addrParts.length < 4 && !isStopToken(tokensAfterPolicy[end])) {
+      addrParts.push(tokensAfterPolicy[end]);
+      end++;
+    }
+    address = addrParts.join('');
+    tokensAfterAddress = [...tokensAfterPolicy.slice(0, prefIdx), ...tokensAfterPolicy.slice(end)];
+  }
+  // 列幅で省略された「…」は、カナ判定の妨げにならないよう先に取り除く
+  const stripEllipsis = t => t.replace(/[…]+$/, '');
+  // 「寿」のような一文字の名前もあるため、1文字でも切り捨てるのは漢字以外（記号・
+  // 誤読の欠片など）に限る
+  const isGarbage = t => NOISE_TOKENS.includes(t) || t.length <= 1 && !/[一-龠々]/.test(t) || /^[a-z]+$/.test(t) || /^[|＊*ー\-＿_.。、,]+$/.test(t) || /\d/.test(t);
+  const tokens = tokensAfterAddress.map(stripEllipsis).filter(t => !isGarbage(t));
   const isKatakana = t => /^[ァ-ヶー]+$/.test(t);
   const furiganaTokens = tokens.filter(isKatakana);
-  let nameTokens = tokens.filter(t => !isKatakana(t));
-  // 顧客氏名・契約者氏名が同一で表に2回並ぶケースが多いため、後半が前半と
-  // 同じ並びであれば1回分に畳む（例：「吉本 沙桜 吉本 沙桜」→「吉本 沙桜」）
-  if (nameTokens.length >= 2 && nameTokens.length % 2 === 0) {
-    const half = nameTokens.length / 2;
-    if (nameTokens.slice(0, half).join('') === nameTokens.slice(half).join('')) {
-      nameTokens = nameTokens.slice(0, half);
-    }
-  }
+  const nameTokens = tokens.filter(t => !isKatakana(t));
   return {
     name: nameTokens.join(' '),
     furigana: furiganaTokens.join(' '),
@@ -10729,7 +10747,11 @@ function nexusStripRepeatedNameTokens(rows) {
   if (rows.length < 3) return rows;
   const freq = {};
   rows.forEach(r => {
-    (r.name || '').split(' ').filter(Boolean).forEach(t => {
+    // 同じトークンが1行の中に複数回出てきても「1行につき1カウント」とする
+    // （担当者名かどうかは行をまたいだ繰り返しで判断したいため、行内の重複で
+    // 閾値に達してしまわないよう、行ごとに重複排除してから数える）
+    const uniqueTokens = new Set((r.name || '').split(' ').filter(Boolean));
+    uniqueTokens.forEach(t => {
       freq[t] = (freq[t] || 0) + 1;
     });
   });
@@ -10741,11 +10763,34 @@ function nexusStripRepeatedNameTokens(rows) {
     name: (r.name || '').split(' ').filter(t => t && !repeated.includes(t)).join(' ')
   }));
 }
+// 顧客氏名・契約者氏名（・被保険者氏名）が同一で表に2回以上並ぶケースが多いため、
+// トークン列を半分に割って前半＝後半であれば1回分に畳む。担当者名の除去後に行う
+// （担当者名が前に付いたままだと前半・後半の境目がずれて畳めなくなるため）。
+function nexusHalveIfRepeated(str) {
+  let tokens = (str || '').split(' ').filter(Boolean);
+  let changed = true;
+  while (changed && tokens.length >= 2 && tokens.length % 2 === 0) {
+    const half = tokens.length / 2;
+    if (tokens.slice(0, half).join('') === tokens.slice(half).join('')) {
+      tokens = tokens.slice(0, half);
+    } else {
+      changed = false;
+    }
+  }
+  return tokens.join(' ');
+}
+function nexusDedupeRepeatedNames(rows) {
+  return rows.map(r => ({
+    ...r,
+    name: nexusHalveIfRepeated(r.name),
+    furigana: nexusHalveIfRepeated(r.furigana)
+  }));
+}
 // 生年月日・電話番号のどちらかが読み取れた行だけを「顧客の行」とみなす
 // （表の見出しや罫線などのノイズ行は、どちらも無いことがほとんどのため除外できる）。
 function nexusExtractOcrRows(text) {
   const rows = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 1).map(nexusParseOcrLine).filter(r => (r.birthdate || r.phone) && (r.name || r.furigana || r.policyNum));
-  return nexusStripRepeatedNameTokens(rows);
+  return nexusDedupeRepeatedNames(nexusStripRepeatedNameTokens(rows));
 }
 // 取込候補行が既存顧客と重複していそうかを判定する。完全一致だけでなく
 // 「氏名＋生年月日」「氏名＋フリガナ」の組み合わせ一致、電話番号の完全一致も
