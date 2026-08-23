@@ -10658,7 +10658,10 @@ function nexusMatchInsuranceCompany(text) {
 // 正規表現で拾い、残ったテキストから氏名・フリガナ・住所をヒューリスティックに推定する。
 // 精度を追い求めすぎず、間違っていても「取込内容確認」画面で手修正できる前提でよい。
 function nexusParseOcrLine(line) {
-  let rest = line;
+  // 電話番号の先頭「0」が、字形の似ているアルファベット「o」「O」に誤読される
+  // ケースが非常に多いため、電話番号らしい並び（o+数字-数字-数字）に限定して
+  // 先頭だけ「0」に補正しておく（無関係な単語まで書き換えないよう範囲を絞る）。
+  let rest = line.replace(/\b[oO](\d{1,4}[-.]\d{1,4}[-.]\d{3,4})/g, '0$1');
   const take = re => {
     const m = rest.match(re);
     if (!m) return '';
@@ -10667,13 +10670,14 @@ function nexusParseOcrLine(line) {
   };
   const emailM = take(/[\w.+-]+@[\w-]+\.[\w.-]+/);
   const email = emailM ? emailM[0] : '';
-  // 電話番号（3グループ・ハイフン必須）を先に抜き出してから郵便番号（2グループ・
-  // ハイフン必須）を探す。ハイフンを省略可にすると、電話番号の一部（例：
+  // 電話番号（3グループ・区切り必須）を先に抜き出してから郵便番号（2グループ・
+  // 区切り必須）を探す。区切りを省略可にすると、電話番号の一部（例：
   // 「090-5745」）や証券番号の数字の一部を郵便番号として誤って拾ってしまうため、
-  // どちらもハイフンを必須にして誤爆を防ぐ。
-  const phoneM = take(/0\d{1,4}-\d{1,4}-\d{3,4}/);
-  const phone = phoneM ? phoneM[0] : '';
-  const postalM = take(/〒?\s*(\d{3})-(\d{4})/);
+  // どちらも区切り文字を必須にして誤爆を防ぐ。区切りはハイフンだけでなく、細い
+  // ハイフンがOCRでピリオドと誤認識されるケースが非常に多いため「.」も許容する。
+  const phoneM = take(/0\d{1,4}[-.]\d{1,4}[-.]\d{3,4}/);
+  const phone = phoneM ? phoneM[0].replace(/\./g, '-') : '';
+  const postalM = take(/〒?\s*(\d{3})[-.](\d{4})/);
   const postalCode = postalM ? `${postalM[1]}-${postalM[2]}` : '';
   const birthM = take(/((?:19|20)\d{2})[\/\-年.](\d{1,2})[\/\-月.](\d{1,2})日?/);
   const birthdate = birthM ? `${birthM[1]}-${String(birthM[2]).padStart(2, '0')}-${String(birthM[3]).padStart(2, '0')}` : '';
