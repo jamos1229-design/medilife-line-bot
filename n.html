@@ -20897,9 +20897,11 @@ const NEXUS_CORP_INSURANCE_PURPOSES = ['死亡保障', '事業保障', '借入�
 const NEXUS_CORP_ACCOUNTING_TREATMENTS = ['全額損金', '1/2損金', '1/3損金', '1/4損金', '資産計上', 'その他'];
 function NexusCorpInsuranceTab({
   data,
-  updateCorp
+  updateCorp,
+  corp
 }) {
   const list = data.corpInsurancePolicies || [];
+  const existingContracts = (corp && corp.contracts) || [];
   const ops = nexusCorpArrayOps(data, updateCorp, 'corpInsurancePolicies', () => ({
     id: uid(),
     company: '',
@@ -20978,32 +20980,67 @@ function NexusCorpInsuranceTab({
     type: 'textarea',
     wide: true
   }];
-  return /*#__PURE__*/React.createElement(NexusCorpItemList, {
-    title: "法人保険一覧",
+  const existingRows = existingContracts.map(ct => /*#__PURE__*/React.createElement("div", {
+    key: ct.id,
+    style: {
+      fontSize: 12,
+      background: 'var(--bg)',
+      borderRadius: 8,
+      padding: '6px 8px',
+      marginBottom: 4
+    }
+  }, `${ct.company || '（保険会社未入力）'}／${ct.type || '種類未入力'}／被保険者：${ct.insuredName || '未入力'}`, ct.coverageAmount ? `／保険金額${Number(ct.coverageAmount).toLocaleString()}円` : ''));
+  const existingSection = existingContracts.length === 0 ? null : /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card-title"
+  }, "この法人の既契約（読み取り専用）"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      marginBottom: 8
+    }
+  }, "顧客詳細の「既契約を読込」等で登録済みの保険です。編集はそちらの画面から行ってください。経理処理区分など法人プランニング特有の項目を追加したい場合は、下の「＋ 法人保険一覧を追加」で別途登録できます。"), existingRows);
+  return /*#__PURE__*/React.createElement(React.Fragment, null, existingSection, /*#__PURE__*/React.createElement(NexusCorpItemList, {
+    title: "法人保険一覧（手入力・経理処理区分等）",
     items: list,
     fields,
     ops,
     summaryFn: p => `${p.company || '（保険会社未入力）'}／${p.product || '商品名未入力'}${p.purpose ? '／' + p.purpose : ''}`,
     emptyText: "法人保険契約が登録されていません"
-  });
+  }));
 }
 
 // ── 役員情報タブ ──────────────────────────────────────────────
-// 役員の氏名（または連携中のNEXUS顧客の表示名）と、法人保険の被保険者名を緩やかに
-// 一致させることで、役員カード上に関連する法人保険契約を自動で表示する。
-function nexusCorpOfficerInsurances(officer, policies, customers) {
+// 役員の氏名（または連携中のNEXUS顧客の表示名）と、被保険者名を緩やかに一致させることで、
+// 役員カード上に関連する保険契約を自動で表示する。参照先は2つある：
+// ①法人顧客レコード自体が持つ既存の customer.contracts（既契約Excel/CSV取込・OCR・手入力等、
+//   アプリ全体で使われている通常の契約データ。法人が契約者の保険は通常ここに入っている）
+// ②法人プランニング「保険」タブで新規に手入力する corp.corpInsurancePolicies（経理処理区分等、
+//   法人プランニング特有の項目を持つ）
+// 実際のユーザーデータの多くは①にあるため、両方を見て統合する。
+function nexusCorpOfficerInsurances(officer, corp, corpInsurancePolicies, customers) {
   const linked = officer.linkedCustomerId ? (customers || []).find(c => c.id === officer.linkedCustomerId) : null;
   const names = [officer.name, linked ? nexusDisplayName(linked) : ''].filter(Boolean);
-  if (names.length === 0) return [];
-  return (policies || []).filter(p => (p.insured || '').trim() && names.some(n => nexusNamesMatchLoosely(n, p.insured)));
+  if (names.length === 0) return {
+    corpContracts: [],
+    manualPolicies: []
+  };
+  const corpContracts = ((corp && corp.contracts) || []).filter(ct => (ct.insuredName || '').trim() && names.some(n => nexusNamesMatchLoosely(n, ct.insuredName)));
+  const manualPolicies = (corpInsurancePolicies || []).filter(p => (p.insured || '').trim() && names.some(n => nexusNamesMatchLoosely(n, p.insured)));
+  return {
+    corpContracts,
+    manualPolicies
+  };
 }
 function NexusCorpOfficersTab({
   data,
   updateCorp,
-  customers
+  customers,
+  corp
 }) {
   const list = data.officers || [];
-  const policies = data.corpInsurancePolicies || [];
+  const manualPolicyList = data.corpInsurancePolicies || [];
   const ops = nexusCorpArrayOps(data, updateCorp, 'officers', () => ({
     id: uid(),
     name: '',
@@ -21032,7 +21069,10 @@ function NexusCorpOfficersTab({
     const linked = officer.linkedCustomerId ? (customers || []).find(c => c.id === officer.linkedCustomerId) : null;
     const matchName = officer.name || (linked ? nexusDisplayName(linked) : '');
     if (!matchName) return null;
-    const related = nexusCorpOfficerInsurances(officer, policies, customers);
+    const {
+      corpContracts,
+      manualPolicies
+    } = nexusCorpOfficerInsurances(officer, corp, manualPolicyList, customers);
     const heading = /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 11,
@@ -21040,8 +21080,8 @@ function NexusCorpOfficersTab({
         fontWeight: 700,
         marginBottom: 6
       }
-    }, "🔗 被保険者として一致する法人保険");
-    if (related.length === 0) {
+    }, "🔗 被保険者として一致する保険契約");
+    if (corpContracts.length === 0 && manualPolicies.length === 0) {
       return /*#__PURE__*/React.createElement("div", {
         style: {
           marginTop: 10,
@@ -21053,10 +21093,20 @@ function NexusCorpOfficersTab({
           fontSize: 11.5,
           color: 'var(--text-sub)'
         }
-      }, `「${matchName}」を被保険者とする法人保険はまだ見つかりません（保険タブで被保険者欄に同じ氏名で登録すると自動的にここに表示されます）`));
+      }, `「${matchName}」を被保険者とする保険契約はまだ見つかりません（この法人の「既契約」に被保険者「${matchName}」の契約を登録するか、この画面の「保険」タブで登録すると自動的にここに表示されます）`));
     }
-    const relatedRows = related.map(p => /*#__PURE__*/React.createElement("div", {
-      key: p.id,
+    const contractRows = corpContracts.map(ct => /*#__PURE__*/React.createElement("div", {
+      key: `ct_${ct.id}`,
+      style: {
+        fontSize: 12,
+        background: 'var(--bg)',
+        borderRadius: 8,
+        padding: '6px 8px',
+        marginBottom: 4
+      }
+    }, `${ct.company || '（保険会社未入力）'}／${ct.type || '種類未入力'}`, ct.coverageAmount ? `／保険金額${Number(ct.coverageAmount).toLocaleString()}円` : '', nexusContractPurposes(ct).length ? `／${nexusContractPurposes(ct).join('・')}` : ''));
+    const policyRows = manualPolicies.map(p => /*#__PURE__*/React.createElement("div", {
+      key: `pol_${p.id}`,
       style: {
         fontSize: 12,
         background: 'var(--bg)',
@@ -21071,7 +21121,7 @@ function NexusCorpOfficersTab({
         paddingTop: 8,
         borderTop: '1px dashed var(--border)'
       }
-    }, heading, relatedRows);
+    }, heading, contractRows, policyRows);
   };
   return /*#__PURE__*/React.createElement(NexusCorpItemList, {
     title: "役員情報",
@@ -21356,11 +21406,13 @@ function NexusCorpPlanningSection({
     updateCorp
   }), subTab === 'insurance' && /*#__PURE__*/React.createElement(NexusCorpInsuranceTab, {
     data,
-    updateCorp
+    updateCorp,
+    corp
   }), subTab === 'officers' && /*#__PURE__*/React.createElement(NexusCorpOfficersTab, {
     data,
     updateCorp,
-    customers: individualCustomers
+    customers: individualCustomers,
+    corp
   }), subTab === 'actionPlan' && /*#__PURE__*/React.createElement(NexusCorpActionPlanTab, {
     data,
     updateCorp
@@ -21413,6 +21465,11 @@ function nexusBuildCorpPrintHtml(corp, data) {
     <td>${s.monthlyAmount ? Number(s.monthlyAmount).toLocaleString() + '円' : ''}</td><td>${escapeHtmlForPrint(s.futurePlan)}</td>
     <td>${escapeHtmlForPrint(s.taxTreatment)}</td></tr>`).join('') : '<tr><td colspan="5">登録なし</td></tr>';
 
+  const existingContracts = corp.contracts || [];
+  const existingContractRowsHtml = existingContracts.length ? existingContracts.map(ct => `
+    <tr><td>${escapeHtmlForPrint(ct.company)}</td><td>${escapeHtmlForPrint(ct.type)}</td><td>${escapeHtmlForPrint(ct.insuredName)}</td>
+    <td>${ct.coverageAmount ? Number(ct.coverageAmount).toLocaleString() + '円' : ''}</td><td>${escapeHtmlForPrint(nexusContractPurposes(ct).join('、'))}</td></tr>`).join('') : '<tr><td colspan="5">登録なし</td></tr>';
+
   const policyRowsHtml = policies.length ? policies.map(p => `
     <tr><td>${escapeHtmlForPrint(p.company)}</td><td>${escapeHtmlForPrint(p.product)}</td><td>${escapeHtmlForPrint(p.insured)}</td><td>${escapeHtmlForPrint(p.contractor)}</td>
     <td>${p.coverageAmount ? Number(p.coverageAmount).toLocaleString() + '円' : ''}</td><td>${p.annualPremium ? Number(p.annualPremium).toLocaleString() + '円' : ''}</td>
@@ -21451,7 +21508,11 @@ function nexusBuildCorpPrintHtml(corp, data) {
       <table><tr><th>種類</th><th>現在残高</th><th>月額掛金</th><th>今後の予定</th><th>損金・所得控除等の区分</th></tr>${otherMutualRowsHtml}</table>
     </div>
     <div class="print-section">
-      <h3>法人保険一覧</h3>
+      <h3>この法人の既契約</h3>
+      <table><tr><th>保険会社</th><th>保険種類</th><th>被保険者</th><th>保険金額</th><th>目的</th></tr>${existingContractRowsHtml}</table>
+    </div>
+    <div class="print-section">
+      <h3>法人保険一覧（手入力・経理処理区分等）</h3>
       <table><tr><th>保険会社</th><th>商品名</th><th>被保険者</th><th>契約者</th><th>保険金額</th><th>年間保険料</th><th>現在解約返戻金</th><th>経理処理区分</th><th>契約目的</th></tr>${policyRowsHtml}</table>
     </div>
     <div class="print-section">
