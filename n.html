@@ -21029,22 +21029,33 @@ function NexusCorpOfficersTab({
     wide: true
   }];
   const extraFn = officer => {
+    const linked = officer.linkedCustomerId ? (customers || []).find(c => c.id === officer.linkedCustomerId) : null;
+    const matchName = officer.name || (linked ? nexusDisplayName(linked) : '');
+    if (!matchName) return null;
     const related = nexusCorpOfficerInsurances(officer, policies, customers);
-    if (related.length === 0) return null;
-    return /*#__PURE__*/React.createElement("div", {
-      style: {
-        marginTop: 10,
-        paddingTop: 8,
-        borderTop: '1px dashed var(--border)'
-      }
-    }, /*#__PURE__*/React.createElement("div", {
+    const heading = /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 11,
         color: 'var(--text-sub)',
         fontWeight: 700,
         marginBottom: 6
       }
-    }, "🔗 被保険者として一致する法人保険"), related.map(p => /*#__PURE__*/React.createElement("div", {
+    }, "🔗 被保険者として一致する法人保険");
+    if (related.length === 0) {
+      return /*#__PURE__*/React.createElement("div", {
+        style: {
+          marginTop: 10,
+          paddingTop: 8,
+          borderTop: '1px dashed var(--border)'
+        }
+      }, heading, /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 11.5,
+          color: 'var(--text-sub)'
+        }
+      }, `「${matchName}」を被保険者とする法人保険はまだ見つかりません（保険タブで被保険者欄に同じ氏名で登録すると自動的にここに表示されます）`));
+    }
+    const relatedRows = related.map(p => /*#__PURE__*/React.createElement("div", {
       key: p.id,
       style: {
         fontSize: 12,
@@ -21053,7 +21064,14 @@ function NexusCorpOfficersTab({
         padding: '6px 8px',
         marginBottom: 4
       }
-    }, `${p.company || '（保険会社未入力）'}／${p.product || '商品名未入力'}`, p.coverageAmount ? `／保険金額${Number(p.coverageAmount).toLocaleString()}円` : '', p.purpose ? `／${p.purpose}` : '')));
+    }, `${p.company || '（保険会社未入力）'}／${p.product || '商品名未入力'}`, p.coverageAmount ? `／保険金額${Number(p.coverageAmount).toLocaleString()}円` : '', p.purpose ? `／${p.purpose}` : ''));
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: 10,
+        paddingTop: 8,
+        borderTop: '1px dashed var(--border)'
+      }
+    }, heading, relatedRows);
   };
   return /*#__PURE__*/React.createElement(NexusCorpItemList, {
     title: "役員情報",
