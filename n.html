@@ -5360,37 +5360,6 @@ function MissionBanner({
   }, "今日の行動："), mission.dailyAction)));
 }
 
-// クイック活動登録ボタンのタップ1回で作成する活動の営業ランク・サブタイプの初期値
-const NEXUS_SALES_ACTIVITY_RANK_MAP = {
-  新規接触: {
-    rank: 'S',
-    subType: '見込み客づくり'
-  },
-  紹介依頼: {
-    rank: 'S',
-    subType: '見込み客づくり'
-  },
-  アポ打診: {
-    rank: 'S',
-    subType: '商談立ち上げ'
-  },
-  アポ獲得: {
-    rank: 'S',
-    subType: '商談立ち上げ'
-  },
-  商談: {
-    rank: 'A',
-    subType: ''
-  },
-  提案: {
-    rank: 'A',
-    subType: ''
-  },
-  成約: {
-    rank: 'A',
-    subType: ''
-  }
-};
 // ── 今日の営業司令塔：見込み客づくり／商談立ち上げ／商談前進／フォローの4グループで
 // 優先度上位を表示する。既存のDashboardTab本体（stat-grid以下）はそのまま維持し、
 // この新セクションをその手前に追加するだけに留める。 ──
@@ -5512,96 +5481,214 @@ function NexusTodayCommandCenter({
     className: "card-title"
   }, "🎯 今日の最重要行動"), groupCards);
 }
-// ── クイック営業活動登録：1タップで活動記録（完了済みタスク）を作成する。
-// 顧客紐付けは必須にせず、後から一覧で編集できる。 ──
-function NexusQuickActivityButtons({
-  tasks,
-  setTasks,
+// ── 営業活動履歴の追加・編集・削除フォーム（.overlay/.drawerパターン） ──
+function NexusActivityForm({
+  editing,
+  onSave,
+  onDelete,
+  onClose,
   customers
 }) {
-  const [editingRecent, setEditingRecent] = useState(null);
-  const add = type => {
-    const now = new Date().toISOString();
-    const rankInfo = NEXUS_SALES_ACTIVITY_RANK_MAP[type] || {
-      rank: '',
-      subType: ''
-    };
-    const newTask = {
-      id: uid(),
-      source: 'salesTodo',
-      title: type,
-      customerId: '',
-      dealId: '',
-      date: todayStr(),
-      startAt: '',
-      endAt: '',
-      status: '完了',
-      salesRank: rankInfo.rank,
-      salesSubType: rankInfo.subType,
-      revenueImpact: 0,
-      expectedRevenue: '',
-      nextAction: '',
-      calendarSync: false,
-      activityType: type,
-      memo: '',
-      completed: true,
-      importance: 0,
-      urgency: 0,
-      clientId: '',
-      rowType: 'work',
-      axis: '',
-      recurrence: 'none',
-      steps: [],
-      completedAt: now,
-      createdAt: now,
-      updatedAt: now
-    };
-    setTasks(prev => [newTask, ...prev]);
+  const nowIso = new Date().toISOString();
+  const blank = {
+    id: '',
+    type: '',
+    customerId: '',
+    dealId: '',
+    occurredAt: nowIso,
+    memo: '',
+    expectedRevenue: '',
+    linkedTaskId: '',
+    createdAt: '',
+    updatedAt: '',
+    deletedAt: ''
   };
-  const today = todayStr();
-  const recent = (tasks || []).filter(t => t.source === 'salesTodo' && t.activityType && t.completedAt && t.completedAt.slice(0, 10) === today).slice(0, 5);
-  const buttons = NEXUS_SALES_ACTIVITY_TYPES.map(type => /*#__PURE__*/React.createElement("button", {
-    key: type,
+  const [form, setForm] = useState({
+    ...blank,
+    ...(editing || {})
+  });
+  const s = k => v => setForm(f => ({
+    ...f,
+    [k]: v
+  }));
+  const si = k => e => s(k)(e.target.value);
+  const dateVal = (form.occurredAt || nowIso).slice(0, 10);
+  const timeVal = (form.occurredAt || nowIso).slice(11, 16);
+  const setDate = d => s('occurredAt')(`${d}T${timeVal}`);
+  const setTime = t => s('occurredAt')(`${dateVal}T${t}`);
+  const save = () => {
+    if (!form.type) return;
+    const now = new Date().toISOString();
+    onSave({
+      ...form,
+      id: form.id || uid(),
+      createdAt: form.createdAt || now,
+      updatedAt: now
+    });
+    onClose();
+  };
+  const handleDelete = () => {
+    if (!window.confirm('この活動を削除しますか？')) return;
+    onDelete(form.id);
+    onClose();
+  };
+  const typeBtn = t => /*#__PURE__*/React.createElement("button", {
+    key: t.key,
     type: "button",
-    className: "btn btn-outline btn-sm",
-    onClick: () => add(type)
-  }, "＋", type));
-  const buttonsRow = /*#__PURE__*/React.createElement("div", {
+    className: `toggle-btn ${form.type === t.key ? 'sel' : ''}`,
+    onClick: () => s('type')(t.key)
+  }, t.label);
+  const salesTypeRow = /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group",
+    style: {
+      marginBottom: 6
+    }
+  }, NEXUS_ACTIVITY_TYPES.filter(t => t.category === 'sales').map(typeBtn));
+  const customerTypeRow = /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, NEXUS_ACTIVITY_TYPES.filter(t => t.category === 'customer').map(typeBtn));
+  const revenueField = form.type === 'close' && /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "成約金額（任意）"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "￥",
+    value: form.expectedRevenue,
+    onChange: si('expectedRevenue')
+  }));
+  const linkedTaskNote = form.linkedTaskId && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--text-sub)',
+      marginBottom: 10
+    }
+  }, "🔗 次回アポのToDoが作成されています（タスク→営業ToDoから確認できます）");
+  const deleteBtn = form.id && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: {
+      color: 'var(--danger)',
+      borderColor: 'var(--danger)',
+      marginTop: 8
+    },
+    onClick: handleDelete
+  }, "削除する");
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "🔥 売上・商談を作る"), salesTypeRow, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "🤝 お客様対応"), customerTypeRow), /*#__PURE__*/React.createElement("div", {
+    className: "form-row"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "日付"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    type: "date",
+    value: dateVal,
+    onChange: e => setDate(e.target.value)
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "時刻"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    type: "time",
+    value: timeVal,
+    onChange: e => setTime(e.target.value)
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "顧客（任意）"), /*#__PURE__*/React.createElement(CustomerSelect, {
+    value: form.customerId,
+    onChange: s('customerId'),
+    customers: customers || []
+  })), revenueField, /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "メモ"), /*#__PURE__*/React.createElement("textarea", {
+    className: "form-textarea",
+    value: form.memo,
+    onChange: si('memo')
+  })), linkedTaskNote, /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
-      flexWrap: 'wrap',
-      gap: 6
+      gap: 8
     }
-  }, buttons);
-  const recentRows = recent.length === 0 ? null : /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 8
-    }
-  }, recent.map(t => /*#__PURE__*/React.createElement("div", {
-    key: t.id,
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-outline btn-full",
+    onClick: onClose
+  }, "キャンセル"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-primary btn-full",
+    onClick: save,
+    disabled: !form.type
+  }, "保存")), deleteBtn);
+}
+// ── 活動履歴の行表示（ホームのミニ一覧・全件表示画面の両方から使う） ──
+function NexusActivityHistoryList({
+  activityLogs,
+  setActivityLogs,
+  customers,
+  limit,
+  onOpenCustomer
+}) {
+  const [editingLog, setEditingLog] = useState(null);
+  const active = nexusActiveLogs(activityLogs).sort((a, b) => (b.occurredAt || '').localeCompare(a.occurredAt || ''));
+  const list = limit ? active.slice(0, limit) : active;
+  const customerName = id => {
+    const c = (customers || []).find(x => x.id === id);
+    return c ? nexusDisplayName(c) : '';
+  };
+  const saveLog = a => setActivityLogs(prev => {
+    const idx = prev.findIndex(x => x.id === a.id);
+    return idx >= 0 ? prev.map((x, i) => i === idx ? a : x) : [a, ...prev];
+  });
+  const deleteLog = id => setActivityLogs(prev => prev.map(x => x.id === id ? {
+    ...x,
+    deletedAt: new Date().toISOString()
+  } : x));
+  const rows = list.length === 0 ? /*#__PURE__*/React.createElement(EmptyState, {
+    icon: "📋",
+    text: "活動履歴はまだありません"
+  }) : list.map(a => /*#__PURE__*/React.createElement("div", {
+    key: a.id,
+    onClick: () => setEditingLog(a),
     style: {
       display: 'flex',
       alignItems: 'center',
       gap: 8,
+      padding: '7px 0',
+      borderBottom: '1px solid var(--border)',
+      cursor: 'pointer'
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
       fontSize: 11.5,
       color: 'var(--text-sub)',
-      padding: '3px 0'
+      flexShrink: 0,
+      width: 40
     }
-  }, /*#__PURE__*/React.createElement("span", null, "✓ ", t.activityType), !t.customerId && /*#__PURE__*/React.createElement("button", {
-    type: "button",
-    onClick: () => setEditingRecent(t),
+  }, (a.occurredAt || '').slice(11, 16)), /*#__PURE__*/React.createElement("span", {
     style: {
-      background: 'none',
-      border: 'none',
-      color: 'var(--accent)',
-      fontSize: 11.5,
-      cursor: 'pointer',
-      padding: 0
+      fontSize: 13,
+      fontWeight: 700,
+      flexShrink: 0
     }
-  }, "顧客を紐づける"))));
-  const editDrawer = editingRecent && /*#__PURE__*/React.createElement("div", {
+  }, nexusActivityTypeLabel(a.type)), a.customerId && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--text-sub)',
+      flex: 1,
+      minWidth: 0,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
+    }
+  }, customerName(a.customerId))));
+  const editDrawer = editingLog && /*#__PURE__*/React.createElement("div", {
     className: "overlay",
-    onClick: () => setEditingRecent(null)
+    onClick: () => setEditingLog(null)
   }, /*#__PURE__*/React.createElement("div", {
     className: "drawer",
     onClick: e => e.stopPropagation()
@@ -5609,26 +5696,467 @@ function NexusQuickActivityButtons({
     className: "drawer-handle"
   }), /*#__PURE__*/React.createElement("div", {
     className: "drawer-title"
-  }, "活動記録を編集"), /*#__PURE__*/React.createElement(NexusSalesTodoForm, {
-    editing: editingRecent,
+  }, "活動を編集"), /*#__PURE__*/React.createElement(NexusActivityForm, {
+    editing: editingLog,
     customers: customers,
-    onSave: t => {
-      setTasks(prev => prev.map(x => x.id === t.id ? t : x));
-      setEditingRecent(null);
-    },
-    onClose: () => setEditingRecent(null)
+    onSave: saveLog,
+    onDelete: deleteLog,
+    onClose: () => setEditingLog(null)
   })));
+  return /*#__PURE__*/React.createElement("div", null, rows, editDrawer);
+}
+// ── 活動履歴（全件、日付ごとにグルーピング）── 「すべて見る」から開く全画面 ──
+function NexusActivityHistoryScreen({
+  activityLogs,
+  setActivityLogs,
+  customers,
+  onClose
+}) {
+  const active = nexusActiveLogs(activityLogs).sort((a, b) => (b.occurredAt || '').localeCompare(a.occurredAt || ''));
+  const byDate = {};
+  active.forEach(a => {
+    const d = (a.occurredAt || '').slice(0, 10) || '（日付不明）';
+    (byDate[d] = byDate[d] || []).push(a);
+  });
+  const dates = Object.keys(byDate).sort((a, b) => b.localeCompare(a));
+  const sections = dates.map(d => /*#__PURE__*/React.createElement("div", {
+    key: d,
+    style: {
+      marginBottom: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 700,
+      color: 'var(--text-sub)',
+      marginBottom: 6
+    }
+  }, d), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement(NexusActivityHistoryList, {
+    activityLogs: byDate[d],
+    setActivityLogs: setActivityLogs,
+    customers: customers
+  }))));
   return /*#__PURE__*/React.createElement("div", {
+    className: "full-screen"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "full-header"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    style: {
+      background: 'none',
+      border: 'none',
+      cursor: 'pointer',
+      fontSize: 15,
+      color: 'var(--text-sub)',
+      fontWeight: 600,
+      padding: '4px 8px'
+    }
+  }, "← 戻る"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      fontSize: 16,
+      fontWeight: 700
+    }
+  }, "活動履歴")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 16
+    }
+  }, active.length === 0 ? /*#__PURE__*/React.createElement(EmptyState, {
+    icon: "📋",
+    text: "活動履歴はまだありません"
+  }) : sections));
+}
+// クイック登録ボタン1回分の活動時間ウィンドウ（この時間内の同種連打はブロックする）
+const NEXUS_ACTIVITY_DEDUP_WINDOW_MS = 1500;
+// ── クイック営業活動登録：タップした瞬間にactivityLogsへ1件保存する。
+// 直接tasksを+1するのではなく履歴として保存し、KPIは常にこの履歴から再集計する。 ──
+function NexusQuickActivityPanel({
+  activityLogs,
+  setActivityLogs,
+  customers,
+  tasks,
+  setTasks
+}) {
+  const [busy, setBusy] = useState(false);
+  const [justAdded, setJustAdded] = useState(null); // {id, label}
+  const [dealPrompt, setDealPrompt] = useState(null); // 商談登録直後の次回アポ確認用
+  const [showApptForm, setShowApptForm] = useState(false);
+  const [editingLog, setEditingLog] = useState(null);
+  const add = typeKey => {
+    if (busy) return;
+    const active = nexusActiveLogs(activityLogs);
+    const nowMs = Date.now();
+    if (nexusShouldBlockDuplicateActivity(active, typeKey, nowMs, NEXUS_ACTIVITY_DEDUP_WINDOW_MS)) return;
+    setBusy(true);
+    setTimeout(() => setBusy(false), NEXUS_ACTIVITY_DEDUP_WINDOW_MS);
+    const now = new Date().toISOString();
+    const newLog = {
+      id: uid(),
+      type: typeKey,
+      customerId: '',
+      dealId: '',
+      occurredAt: now,
+      memo: '',
+      expectedRevenue: '',
+      linkedTaskId: '',
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: ''
+    };
+    setActivityLogs(prev => [newLog, ...prev]);
+    setJustAdded({
+      id: newLog.id,
+      label: nexusActivityTypeLabel(typeKey)
+    });
+    if (typeKey === 'deal') setDealPrompt(newLog.id);
+    setTimeout(() => {
+      setJustAdded(prev => prev && prev.id === newLog.id ? null : prev);
+    }, 6000);
+  };
+  const undo = () => {
+    if (!justAdded) return;
+    setActivityLogs(prev => prev.filter(a => a.id !== justAdded.id));
+    if (dealPrompt === justAdded.id) setDealPrompt(null);
+    setJustAdded(null);
+  };
+  const saveApptTask = form => {
+    const now = new Date().toISOString();
+    const newTask = {
+      id: uid(),
+      source: 'salesTodo',
+      title: form.title,
+      customerId: form.customerId,
+      dealId: '',
+      date: form.date,
+      startAt: form.date && form.startTime ? `${form.date}T${form.startTime}` : '',
+      endAt: form.date && form.endTime ? `${form.date}T${form.endTime}` : '',
+      status: '未着手',
+      salesRank: 'A',
+      salesSubType: '',
+      revenueImpact: 0,
+      expectedRevenue: '',
+      nextAction: '',
+      calendarSync: false,
+      activityType: '',
+      memo: '',
+      completed: false,
+      importance: 0,
+      urgency: 0,
+      clientId: '',
+      rowType: 'work',
+      axis: '',
+      recurrence: 'none',
+      steps: [],
+      completedAt: '',
+      createdAt: now,
+      updatedAt: now
+    };
+    setTasks(prev => [...prev, newTask]);
+    setActivityLogs(prev => prev.map(a => a.id === dealPrompt ? {
+      ...a,
+      linkedTaskId: newTask.id,
+      updatedAt: now
+    } : a));
+    setShowApptForm(false);
+    setDealPrompt(null);
+  };
+  const saveEditedLog = a => {
+    setActivityLogs(prev => prev.map(x => x.id === a.id ? a : x));
+    setEditingLog(null);
+  };
+  const deleteLog = id => {
+    setActivityLogs(prev => prev.map(x => x.id === id ? {
+      ...x,
+      deletedAt: new Date().toISOString()
+    } : x));
+    setEditingLog(null);
+  };
+  const salesTypes = NEXUS_ACTIVITY_TYPES.filter(t => t.category === 'sales');
+  const customerTypes = NEXUS_ACTIVITY_TYPES.filter(t => t.category === 'customer');
+  const activityBtn = t => /*#__PURE__*/React.createElement("button", {
+    key: t.key,
+    type: "button",
+    className: "btn btn-outline",
+    disabled: busy,
+    style: t.key === 'close' ? {
+      gridColumn: '1 / -1'
+    } : null,
+    onClick: () => add(t.key)
+  }, "＋", t.label);
+  const salesGrid = /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: 8
+    }
+  }, salesTypes.map(activityBtn));
+  const customerGrid = /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: 8
+    }
+  }, customerTypes.map(activityBtn));
+  const isPreferCustomerType = justAdded && (activityLogs.find(a => a.id === justAdded.id) || {}).type;
+  const showBigCustomerLink = isPreferCustomerType && NEXUS_ACTIVITY_TYPES_PREFER_CUSTOMER.includes(isPreferCustomerType);
+  const toast = justAdded && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10,
+      padding: '10px 12px',
+      background: 'var(--accent-light)',
+      borderRadius: 10,
+      fontSize: 13
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("span", null, "✅ ", justAdded.label, "を登録しました"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: undo,
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--danger)',
+      fontWeight: 700,
+      fontSize: 13,
+      cursor: 'pointer'
+    }
+  }, "取り消す")), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setEditingLog(activityLogs.find(a => a.id === justAdded.id)),
+    className: showBigCustomerLink ? "btn btn-outline btn-sm btn-full" : null,
+    style: showBigCustomerLink ? {
+      marginTop: 8
+    } : {
+      background: 'none',
+      border: 'none',
+      color: 'var(--accent)',
+      fontSize: 12.5,
+      cursor: 'pointer',
+      padding: '6px 0 0',
+      display: 'block'
+    }
+  }, "顧客を紐づける"));
+  const dealPromptCard = dealPrompt && !showApptForm && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10,
+      padding: '10px 12px',
+      border: '1.5px solid var(--border)',
+      borderRadius: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 700,
+      marginBottom: 8
+    }
+  }, "次回予定は決まっていますか？"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-sm",
+    onClick: () => setShowApptForm(true)
+  }, "次回アポを設定"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-sm",
+    onClick: () => setDealPrompt(null)
+  }, "後で設定"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-sm",
+    onClick: () => setDealPrompt(null)
+  }, "次回予定なし")));
+  const apptFormCard = showApptForm && /*#__PURE__*/React.createElement(NexusNextApptMiniForm, {
+    customers: customers,
+    defaultCustomerId: (activityLogs.find(a => a.id === dealPrompt) || {}).customerId || '',
+    onSave: saveApptTask,
+    onCancel: () => {
+      setShowApptForm(false);
+      setDealPrompt(null);
+    }
+  });
+  const recentList = /*#__PURE__*/React.createElement(NexusActivityHistoryList, {
+    activityLogs: activityLogs,
+    setActivityLogs: setActivityLogs,
+    customers: customers,
+    limit: 5
+  });
+  const [showHistory, setShowHistory] = useState(false);
+  const editDrawer = editingLog && /*#__PURE__*/React.createElement("div", {
+    className: "overlay",
+    onClick: () => setEditingLog(null)
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "drawer",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "drawer-handle"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "drawer-title"
+  }, "活動を編集"), /*#__PURE__*/React.createElement(NexusActivityForm, {
+    editing: editingLog,
+    customers: customers,
+    onSave: saveEditedLog,
+    onDelete: deleteLog,
+    onClose: () => setEditingLog(null)
+  })));
+  const historyScreen = showHistory && /*#__PURE__*/React.createElement(NexusActivityHistoryScreen, {
+    activityLogs: activityLogs,
+    setActivityLogs: setActivityLogs,
+    customers: customers,
+    onClose: () => setShowHistory(false)
+  });
+  const salesCard = /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "card-title"
-  }, "⚡ クイック活動登録"), buttonsRow, recentRows, editDrawer);
+  }, "🔥 売上・商談を作る"), salesGrid, toast, dealPromptCard, apptFormCard);
+  const customerCard = /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card-title"
+  }, "🤝 お客様対応"), customerGrid);
+  const recentCard = /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card-title",
+    style: {
+      marginBottom: 0
+    }
+  }, "最近の活動"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setShowHistory(true),
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--accent)',
+      fontSize: 12.5,
+      cursor: 'pointer'
+    }
+  }, "すべて見る →")), recentList);
+  return /*#__PURE__*/React.createElement(React.Fragment, null, salesCard, customerCard, recentCard, editDrawer, historyScreen);
+}
+// 「次回アポを設定」用の簡易フォーム（日付・開始/終了時刻・内容・顧客）。
+// 保存すると既存のtasksストアへ1件ToDoを作る（新しいストアは増やさない）。
+function NexusNextApptMiniForm({
+  customers,
+  defaultCustomerId,
+  onSave,
+  onCancel
+}) {
+  const [form, setForm] = useState({
+    title: '',
+    date: '',
+    startTime: '',
+    endTime: '',
+    customerId: defaultCustomerId || ''
+  });
+  const s = k => v => setForm(f => ({
+    ...f,
+    [k]: v
+  }));
+  const si = k => e => s(k)(e.target.value);
+  const save = () => {
+    if (!form.title.trim() || !form.date) return;
+    onSave(form);
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10,
+      padding: '10px 12px',
+      border: '1.5px solid var(--border)',
+      borderRadius: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "内容"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    value: form.title,
+    placeholder: "例：田中様 次回面談",
+    onChange: si('title')
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-row",
+    style: {
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "日付"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    type: "date",
+    value: form.date,
+    onChange: si('date')
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "顧客（任意）")), /*#__PURE__*/React.createElement(CustomerSelect, {
+    value: form.customerId,
+    onChange: s('customerId'),
+    customers: customers || []
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-row",
+    style: {
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "開始時刻"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    type: "time",
+    value: form.startTime,
+    onChange: si('startTime')
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "終了時刻"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    type: "time",
+    value: form.endTime,
+    onChange: si('endTime')
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    onClick: onCancel
+  }, "キャンセル"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-full",
+    onClick: save
+  }, "登録")));
 }
 // ── 今日／今週／今月で切り替えるKPI集計。件数だけでなく「入口不足か商談不足か」が
 // 分かるよう新規接触〜成約までの各段階を並べる（フルファネル可視化はPhase2）。
-// 確定売上・売上目標・残り金額は既存のsales（ml_sales_v1）をそのまま利用する。
+// 活動件数はactivityLogsから都度集計（編集・削除しても常に正しい数字になる）。
+// 見込み売上（オープン案件）は引き続きtasksから、確定売上・目標・残りは既存のsales
+// （ml_sales_v1）から算出する（この部分の仕組みは変更しない）。
 const NEXUS_KPI_PERIODS = ['今日', '今週', '今月'];
 function NexusSalesKpiCard({
+  activityLogs,
   tasks,
   sales
 }) {
@@ -5642,7 +6170,8 @@ function NexusSalesKpiCard({
     start: today.slice(0, 7) + '-01',
     end: today
   };
-  const kpi = nexusSalesKpi(tasks, range.start, range.end);
+  const kpi = nexusActivityKpi(activityLogs, range.start, range.end);
+  const pipelineExpectedRevenue = (tasks || []).filter(t => !t.completed && t.salesRank && t.expectedRevenue).reduce((s, t) => s + (Number(t.expectedRevenue) || 0), 0);
   const target = Number((sales || {}).target) || 0;
   const current = Number((sales || {}).current) || 0;
   const remaining = Math.max(0, target - current);
@@ -5656,15 +6185,19 @@ function NexusSalesKpiCard({
     className: `chip ${period === p ? 'active' : ''}`,
     onClick: () => setPeriod(p)
   }, p)));
-  const tile = (label, value) => /*#__PURE__*/React.createElement("div", {
+  const tile = (label, value, highlight) => /*#__PURE__*/React.createElement("div", {
     key: label,
-    className: "stat-card"
+    className: "stat-card",
+    style: highlight ? {
+      border: '1.5px solid var(--accent)'
+    } : null
   }, /*#__PURE__*/React.createElement("div", {
     className: "stat-num"
   }, value), /*#__PURE__*/React.createElement("div", {
     className: "stat-label"
   }, label));
-  const tiles = [tile('新規接触数', kpi.newContact), tile('見込み客数', kpi.leads), tile('アポ打診数', kpi.apptOffer), tile('アポ獲得数', kpi.apptWon), tile('新規商談数', kpi.dealsStarted), tile('提案数', kpi.proposals), tile('成約数', kpi.deals), tile('成約率', kpi.closeRate === null ? '—' : `${Math.round(kpi.closeRate * 100)}%`)];
+  // 特に重視したい「新規接触→アポ確定→商談」を強調表示する
+  const tiles = [tile('新規接触数', kpi.newContact, true), tile('紹介依頼数', kpi.referralRequest), tile('アポ依頼数', kpi.apptRequest), tile('アポ確定数', kpi.apptConfirmed, true), tile('商談数', kpi.deal, true), tile('提案数', kpi.proposal), tile('成約数', kpi.close), tile('成約率', kpi.closeRate === null ? '—' : `${Math.round(kpi.closeRate * 100)}%`)];
   const statGrid = /*#__PURE__*/React.createElement("div", {
     className: "stat-grid"
   }, tiles);
@@ -5677,7 +6210,7 @@ function NexusSalesKpiCard({
       fontSize: 12,
       color: 'var(--text-sub)'
     }
-  }, /*#__PURE__*/React.createElement("span", null, "見込み売上（オープン案件）：", kpi.pipelineExpectedRevenue.toLocaleString(), "円"), target > 0 && /*#__PURE__*/React.createElement("span", null, "／確定売上：", current.toLocaleString(), "円／目標：", target.toLocaleString(), "円／残り：", remaining.toLocaleString(), "円"));
+  }, /*#__PURE__*/React.createElement("span", null, "見込み売上（オープン案件）：", pipelineExpectedRevenue.toLocaleString(), "円"), target > 0 && /*#__PURE__*/React.createElement("span", null, "／確定売上：", current.toLocaleString(), "円／目標：", target.toLocaleString(), "円／残り：", remaining.toLocaleString(), "円"));
   return /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
@@ -5694,7 +6227,9 @@ function DashboardTab({
   mission,
   tasks,
   setTasks,
-  sales
+  sales,
+  activityLogs,
+  setActivityLogs
 }) {
   const total = customers.length;
   const lineCount = customers.filter(c => c.lineRegistered).length;
@@ -5795,15 +6330,18 @@ function DashboardTab({
   };
   const kpi200 = calc(2000000);
   const kpi1000 = calc(10000000);
-  const commandCenter = tasks && setTasks && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(NexusTodayCommandCenter, {
+  const commandCenter = tasks && setTasks && activityLogs && setActivityLogs && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(NexusTodayCommandCenter, {
     tasks: tasks,
     customers: customers,
     onNavigate: onNavigate
-  }), /*#__PURE__*/React.createElement(NexusQuickActivityButtons, {
+  }), /*#__PURE__*/React.createElement(NexusQuickActivityPanel, {
+    activityLogs: activityLogs,
+    setActivityLogs: setActivityLogs,
+    customers: customers,
     tasks: tasks,
-    setTasks: setTasks,
-    customers: customers
+    setTasks: setTasks
   }), /*#__PURE__*/React.createElement(NexusSalesKpiCard, {
+    activityLogs: activityLogs,
     tasks: tasks,
     sales: sales
   }));
@@ -9806,8 +10344,6 @@ function nexusSaveSalesRankStyle(style) {
 
 // 営業ToDoのステータス（法人プランニングのNEXUS_CORP_ACTION_STATUSESと同じ語彙で統一）
 const NEXUS_TASK_STATUSES = ['未着手', '進行中', '完了', '保留'];
-// クイック営業活動登録ボタンの種類
-const NEXUS_SALES_ACTIVITY_TYPES = ['新規接触', '紹介依頼', 'アポ打診', 'アポ獲得', '商談', '提案', '成約'];
 // ランク別の入力候補（タップで題名を埋めるためのサジェスト。ユーザー要件の例をそのまま採用）
 const NEXUS_SALES_RANK_EXAMPLES = {
   S_見込み客づくり: ['紹介依頼', '紹介先への連絡', '交流会後のフォロー', '既契約者への声かけ', '新規接触', '見込み客探し'],
@@ -9851,45 +10387,110 @@ function nexusSalesTodoPriorityScore(task, todayStr) {
   if (task.salesRank === 'D') return 100;
   return 50;
 }
-// activityTypeでタグ付けされたタスクから、指定期間内のKPI件数を集計する。
-// periodStart/periodEndは 'YYYY-MM-DD' 文字列（両端含む）で、completedAtを比較する。
-function nexusSalesKpi(tasks, periodStart, periodEnd) {
-  const list = tasks || [];
-  const inPeriod = t => {
-    if (!t.completedAt) return false;
-    const d = t.completedAt.slice(0, 10);
-    return d >= periodStart && d <= periodEnd;
-  };
-  const countOf = type => list.filter(t => inPeriod(t) && t.activityType === type).length;
-  const newContact = countOf('新規接触');
-  const referralRequest = countOf('紹介依頼');
-  const apptOffer = countOf('アポ打診');
-  const apptWon = countOf('アポ獲得');
-  const dealsStarted = countOf('商談');
-  const proposals = countOf('提案');
-  const deals = countOf('成約');
-  const leads = newContact + referralRequest;
-  const closeRate = proposals > 0 ? deals / proposals : null;
-  const pipelineExpectedRevenue = list.filter(t => !t.completed && t.salesRank && t.expectedRevenue).reduce((s, t) => s + (Number(t.expectedRevenue) || 0), 0);
-  return {
-    newContact,
-    referralRequest,
-    apptOffer,
-    apptWon,
-    dealsStarted,
-    proposals,
-    deals,
-    leads,
-    closeRate,
-    pipelineExpectedRevenue
-  };
-}
 // 未完了かつ期限からthresholdDays以上経過したToDoを「停滞」とみなす。
 function nexusIsStaleTask(task, todayStr, thresholdDays) {
   if (task.completed || !task.date) return false;
   const d = nexusDaysBetween(task.date, todayStr);
   if (d === null) return false;
   return d >= thresholdDays;
+}
+// ── 営業活動履歴（activityLogs）：種類マスタ・KPI集計・論理削除フィルタ・二重タップ防止 ──
+// 「クイック活動登録」で作る活動は tasks に直接1件+1するのではなく、この履歴配列に保存し、
+// KPIは常にこの履歴から都度集計する（編集・削除してもKPIと履歴がズレない設計にするため）。
+const NEXUS_ACTIVITY_TYPES = [{
+  key: 'new_contact',
+  label: '新規接触',
+  category: 'sales'
+}, {
+  key: 'referral_request',
+  label: '紹介依頼',
+  category: 'sales'
+}, {
+  key: 'appt_request',
+  label: 'アポ依頼',
+  category: 'sales'
+}, {
+  key: 'appt_confirmed',
+  label: 'アポ確定',
+  category: 'sales'
+}, {
+  key: 'deal',
+  label: '商談',
+  category: 'sales'
+}, {
+  key: 'proposal',
+  label: '提案',
+  category: 'sales'
+}, {
+  key: 'close',
+  label: '成約',
+  category: 'sales'
+}, {
+  key: 'maintenance',
+  label: '保全',
+  category: 'customer'
+}, {
+  key: 'claim',
+  label: '給付・請求',
+  category: 'customer'
+}, {
+  key: 'followup',
+  label: '既契約フォロー',
+  category: 'customer'
+}, {
+  key: 'renewal',
+  label: '更新・満期',
+  category: 'customer'
+}];
+function nexusActivityTypeLabel(key) {
+  const t = NEXUS_ACTIVITY_TYPES.find(x => x.key === key);
+  return t ? t.label : key;
+}
+// 顧客を選びやすくすべき活動（商談・提案・成約・保全・給付請求）
+const NEXUS_ACTIVITY_TYPES_PREFER_CUSTOMER = ['deal', 'proposal', 'close', 'maintenance', 'claim'];
+function nexusActiveLogs(activityLogs) {
+  return (activityLogs || []).filter(a => !a.deletedAt);
+}
+// occurredAtが期間内（両端含む）かつ論理削除されていない活動をtype別に集計する。
+// KPIは常にログから再集計するため、編集・削除後もKPIと履歴が食い違うことがない。
+function nexusActivityKpi(activityLogs, periodStart, periodEnd) {
+  const active = nexusActiveLogs(activityLogs);
+  const inPeriod = a => {
+    if (!a.occurredAt) return false;
+    const d = a.occurredAt.slice(0, 10);
+    return d >= periodStart && d <= periodEnd;
+  };
+  const countOf = type => active.filter(a => inPeriod(a) && a.type === type).length;
+  const newContact = countOf('new_contact');
+  const referralRequest = countOf('referral_request');
+  const apptRequest = countOf('appt_request');
+  const apptConfirmed = countOf('appt_confirmed');
+  const deal = countOf('deal');
+  const proposal = countOf('proposal');
+  const close = countOf('close');
+  const leads = newContact + referralRequest;
+  const closeRate = proposal > 0 ? close / proposal : null;
+  return {
+    newContact,
+    referralRequest,
+    apptRequest,
+    apptConfirmed,
+    deal,
+    proposal,
+    close,
+    leads,
+    closeRate
+  };
+}
+// 直近windowMs以内に同種の活動が作成されていればtrue（二重タップ対策）。
+function nexusShouldBlockDuplicateActivity(activeLogs, type, nowMs, windowMs) {
+  const sameType = (activeLogs || []).filter(a => a.type === type);
+  if (sameType.length === 0) return false;
+  const mostRecent = sameType.reduce((latest, a) => {
+    const t = new Date(a.createdAt).getTime();
+    return t > latest ? t : latest;
+  }, 0);
+  return nowMs - mostRecent < windowMs;
 }
 // 'YYYY-MM-DD'整形（toISOStringはUTC変換で日付がずれる場合があるため、ローカルgetterのみで組み立てる）
 function nexusFmtYmd(d) {
@@ -11630,6 +12231,7 @@ function importJSON(file, handlers) {
         if (data.memos && handlers.setMemos) handlers.setMemos(data.memos);
         if (data.kpiSettings && handlers.setKpiSettings) handlers.setKpiSettings(data.kpiSettings);
         if (data.tasks && handlers.setTasks) handlers.setTasks(data.tasks);
+        if (data.activityLogs && handlers.setActivityLogs) handlers.setActivityLogs(data.activityLogs);
         if (data.clients && handlers.setClients) handlers.setClients(data.clients);
         if (data.vision && handlers.setVision) handlers.setVision(data.vision);
         if (data.suspects && handlers.setSuspects) handlers.setSuspects(data.suspects);
@@ -13669,6 +14271,7 @@ function exportJSON(state) {
     memos: state.memos,
     kpiSettings: state.kpiSettings,
     tasks: state.tasks,
+    activityLogs: state.activityLogs,
     clients: state.clients,
     vision: state.vision,
     suspects: state.suspects,
@@ -26546,6 +27149,8 @@ function App() {
   });
   // タスク・クライアント・その他（app.htmlと同じキーで引継ぎ）
   const [tasks, setTasks] = useLS('ml_tasks_v1', []);
+  // 営業活動履歴（新規）：クイック活動登録の記録。KPIは常にここから再集計する。
+  const [activityLogs, setActivityLogs] = useLS('nexus_activity_logs_v1', []);
   const [clients, setClients] = useLS('ml_clients_v1', []);
   const [vision, setVision] = useLS('ml_vision_v1', {});
   const [suspects, setSuspects] = useLS('ml_suspects_v1', []);
@@ -26724,6 +27329,7 @@ function App() {
         importJSON(e.target.files[0], {
           setCustomers,
           setTasks,
+          setActivityLogs,
           setClients,
           setVision,
           setSuspects,
@@ -26744,6 +27350,7 @@ function App() {
       memos,
       kpiSettings,
       tasks,
+      activityLogs,
       clients,
       vision,
       suspects,
@@ -26774,6 +27381,8 @@ function App() {
     tasks: tasks,
     setTasks: setTasks,
     sales: sales,
+    activityLogs: activityLogs,
+    setActivityLogs: setActivityLogs,
     onNavigate: (t, c) => {
       setTab(t === 'customers' ? 'list' : t);
       if (c) setSelectedCustomer(c);
