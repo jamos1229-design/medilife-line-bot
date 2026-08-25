@@ -5494,6 +5494,7 @@ function NexusActivityForm({
     id: '',
     type: '',
     customerId: '',
+    customerNameText: '',
     dealId: '',
     occurredAt: nowIso,
     memo: '',
@@ -5599,10 +5600,28 @@ function NexusActivityForm({
     className: "form-group"
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "顧客（任意）"), /*#__PURE__*/React.createElement(CustomerSelect, {
+  }, "顧客（登録済みの方はこちらから選択）"), /*#__PURE__*/React.createElement(CustomerSelect, {
     value: form.customerId,
-    onChange: s('customerId'),
+    onChange: v => setForm(f => ({
+      ...f,
+      customerId: v,
+      customerNameText: v ? '' : f.customerNameText
+    })),
     customers: customers || []
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "お客様のお名前（未登録の場合はこちらに直接入力）"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    value: form.customerNameText,
+    placeholder: "例：山田太郎",
+    disabled: !!form.customerId,
+    onChange: e => setForm(f => ({
+      ...f,
+      customerNameText: e.target.value,
+      customerId: e.target.value ? '' : f.customerId
+    }))
   })), revenueField, /*#__PURE__*/React.createElement("div", {
     className: "form-group"
   }, /*#__PURE__*/React.createElement("label", {
@@ -5675,7 +5694,7 @@ function NexusActivityHistoryList({
       fontWeight: 700,
       flexShrink: 0
     }
-  }, nexusActivityTypeLabel(a.type)), a.customerId && /*#__PURE__*/React.createElement("span", {
+  }, nexusActivityTypeLabel(a.type)), (a.customerId || a.customerNameText) && /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 12.5,
       color: 'var(--text-sub)',
@@ -5685,7 +5704,7 @@ function NexusActivityHistoryList({
       textOverflow: 'ellipsis',
       whiteSpace: 'nowrap'
     }
-  }, customerName(a.customerId))));
+  }, a.customerId ? customerName(a.customerId) : a.customerNameText)));
   const editDrawer = editingLog && /*#__PURE__*/React.createElement("div", {
     className: "overlay",
     onClick: () => setEditingLog(null)
