@@ -4029,7 +4029,9 @@ function CustomerDetail({
   onOpenCustomer,
   onOpenCorpPlanning,
   tasks,
-  setTasks
+  setTasks,
+  activityLogs,
+  setActivityLogs
 }) {
   const [confirmDel, setConfirmDel] = useState(false);
   const c = customer;
@@ -4250,7 +4252,20 @@ function CustomerDetail({
     customers: customers,
     defaultCustomerId: c.id,
     hideCustomerFilterHint: true
-  })), /*#__PURE__*/React.createElement("div", {
+  })), activityLogs && setActivityLogs && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "活動履歴"), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement(NexusActivityHistoryList, {
+    activityLogs: activityLogs,
+    setActivityLogs: setActivityLogs,
+    customers: customers,
+    defaultCustomerId: c.id
+  }))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       flexDirection: 'column',
@@ -5656,10 +5671,12 @@ function NexusActivityHistoryList({
   setActivityLogs,
   customers,
   limit,
-  onOpenCustomer
+  onOpenCustomer,
+  defaultCustomerId
 }) {
   const [editingLog, setEditingLog] = useState(null);
-  const active = nexusActiveLogs(activityLogs).sort((a, b) => (b.occurredAt || '').localeCompare(a.occurredAt || ''));
+  const filtered = defaultCustomerId ? nexusActiveLogs(activityLogs).filter(a => a.customerId === defaultCustomerId) : nexusActiveLogs(activityLogs);
+  const active = filtered.sort((a, b) => (b.occurredAt || '').localeCompare(a.occurredAt || ''));
   const list = limit ? active.slice(0, limit) : active;
   const customerName = id => {
     const c = (customers || []).find(x => x.id === id);
@@ -27482,6 +27499,8 @@ function App() {
     customers: customers,
     tasks: tasks,
     setTasks: setTasks,
+    activityLogs: activityLogs,
+    setActivityLogs: setActivityLogs,
     onEdit: () => openEditCustomer(selectedCustomer),
     onDelete: id => {
       deleteCustomer(id);
