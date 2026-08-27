@@ -5648,8 +5648,10 @@ function NexusActivityForm({
     memo: '',
     firstBusinessContact: false,
     marketSource: '',
+    marketSourceOther: '',
     relatedOpportunityId: '',
     nextAction: '',
+    nextActionOther: '',
     nextActionDate: '',
     createTask: false,
     expectedRevenue: '',
@@ -5682,6 +5684,7 @@ function NexusActivityForm({
     setForm(f => ({
       ...f,
       marketSource: linkedOpenOpportunity.marketSource,
+      marketSourceOther: linkedOpenOpportunity.sourceDetail || '',
       relatedOpportunityId: linkedOpenOpportunity.id
     }));
   }, [linkedOpenOpportunity && linkedOpenOpportunity.id]);
@@ -5691,27 +5694,32 @@ function NexusActivityForm({
     const now = new Date().toISOString();
     const logId = form.id || uid();
     let patch = {};
+    const marketSourceDetail = form.marketSource === 'その他' ? form.marketSourceOther || '' : '';
     if (showMarketSource) {
       const resolved = nexusResolveOpportunity(opportunities, {
         customerId: form.customerId,
         customerNameText: form.customerNameText,
         marketSource: form.marketSource,
+        sourceDetail: form.marketSource === 'その他' ? marketSourceDetail : undefined,
         stage: form.type,
         expectedRevenue: form.expectedRevenue
       });
       setOpportunities(resolved.opportunities);
       patch = {
         marketSource: resolved.marketSource,
+        marketSourceOther: marketSourceDetail,
         relatedOpportunityId: resolved.opportunityId
       };
     }
+    const nextActionLabel = form.nextAction === 'その他' && form.nextActionOther ? form.nextActionOther : form.nextAction;
+    patch.nextActionOther = form.nextAction === 'その他' ? form.nextActionOther || '' : '';
     // 「次のアクション」を既存のタスク（営業ToDo）ストアと同じ形で1件作成し、活動側にlinkedTaskIdで紐づける
     if (form.createTask && form.nextAction && setTasks) {
       const taskId = uid();
       setTasks(prev => [...prev, {
         id: taskId,
         source: 'salesTodo',
-        title: `${form.nextAction}（${nexusActivityTypeLabel(form.type)}のフォロー）`,
+        title: `${nextActionLabel}（${nexusActivityTypeLabel(form.type)}のフォロー）`,
         customerId: form.customerId,
         dealId: '',
         date: form.nextActionDate || '',
@@ -5782,18 +5790,17 @@ function NexusActivityForm({
     value: form.expectedRevenue,
     onChange: si('expectedRevenue')
   }));
-  const marketSourceField = showMarketSource && /*#__PURE__*/React.createElement("div", {
-    className: "form-group"
-  }, /*#__PURE__*/React.createElement("label", {
+  const marketSourceLabel = /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "商談元", marketSourceRequired ? "（必須）" : "（任意）"), linkedOpenOpportunity && !overrideMarketSource ? /*#__PURE__*/React.createElement("div", {
+  }, "商談元", marketSourceRequired ? "（必須）" : "（任意）");
+  const marketSourceLinkedRow = /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
       gap: 8,
       fontSize: 13.5
     }
-  }, /*#__PURE__*/React.createElement("span", null, form.marketSource || linkedOpenOpportunity.marketSource, "（自動引き継ぎ）"), /*#__PURE__*/React.createElement("button", {
+  }, /*#__PURE__*/React.createElement("span", null, form.marketSource || linkedOpenOpportunity && linkedOpenOpportunity.marketSource, (form.marketSourceOther || linkedOpenOpportunity && linkedOpenOpportunity.sourceDetail) && `（${form.marketSourceOther || linkedOpenOpportunity.sourceDetail}）`, "（自動引き継ぎ）"), /*#__PURE__*/React.createElement("button", {
     type: "button",
     onClick: () => setOverrideMarketSource(true),
     style: {
@@ -5803,7 +5810,8 @@ function NexusActivityForm({
       fontSize: 12.5,
       cursor: 'pointer'
     }
-  }, "変更")) : /*#__PURE__*/React.createElement("select", {
+  }, "変更"));
+  const marketSourceSelect = /*#__PURE__*/React.createElement("select", {
     className: "form-select",
     value: form.marketSource || '',
     onChange: si('marketSource')
@@ -5812,7 +5820,19 @@ function NexusActivityForm({
   }, "選択"), NEXUS_MARKET_SOURCES.map(ms => /*#__PURE__*/React.createElement("option", {
     key: ms,
     value: ms
-  }, ms))));
+  }, ms)));
+  const marketSourceOtherInput = form.marketSource === 'その他' && /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    style: {
+      marginTop: 8
+    },
+    value: form.marketSourceOther || '',
+    placeholder: "商談元の詳細を入力（例：セミナー開催・協業・提携・相談会など）",
+    onChange: si('marketSourceOther')
+  });
+  const marketSourceField = showMarketSource && /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, marketSourceLabel, linkedOpenOpportunity && !overrideMarketSource ? marketSourceLinkedRow : /*#__PURE__*/React.createElement(React.Fragment, null, marketSourceSelect, marketSourceOtherInput));
   const typeHint = form.type && NEXUS_ACTIVITY_TYPE_GUIDE[form.type] && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11.5,
@@ -5920,7 +5940,15 @@ function NexusActivityForm({
   }, "選択"), NEXUS_NEXT_ACTION_OPTIONS.map(o => /*#__PURE__*/React.createElement("option", {
     key: o,
     value: o
-  }, o))), form.nextAction && /*#__PURE__*/React.createElement("div", {
+  }, o))), form.nextAction === 'その他' && /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    style: {
+      marginTop: 8
+    },
+    value: form.nextActionOther || '',
+    placeholder: "次のアクションの詳細を入力",
+    onChange: si('nextActionOther')
+  }), form.nextAction && /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 8
     }
@@ -11946,6 +11974,10 @@ function createAnonymizedAnalyticsData({ customers, activityLogs, opportunities,
         marketSource: a.marketSource || null,
         nextAction: a.nextAction || null
       };
+      // marketSourceOther/nextActionOtherは自由記述（「その他」選択時の詳細）のため、
+      // メモと同じ扱いでincludeMemoがtrueのときだけ、氏名等をマスクしたうえで含める。
+      if (includeMemo && a.marketSourceOther) rec.marketSourceOther = nexusSanitizeMemoText(a.marketSourceOther, nameMapForMemo);
+      if (includeMemo && a.nextActionOther) rec.nextActionOther = nexusSanitizeMemoText(a.nextActionOther, nameMapForMemo);
       if (includeMemo && a.memo) rec.memo = nexusSanitizeMemoText(a.memo, nameMapForMemo);
       return rec;
     });
@@ -12036,9 +12068,11 @@ function generateAIAnalysisMarkdown(data) {
         // 「新規接触」自体の活動では、活動種別名が既に新規接触であることを示しているため
         // 冗長な初回接点フラグは付けない。他の主活動に同時付与された場合のみ明記する。
         const flag = a.firstBusinessContact && a.activityType !== '新規接触' ? ' / 初回営業接点：YES' : '';
-        const next = a.nextAction ? ` → 次のアクション: ${a.nextAction}` : '';
+        const marketSourceDetail = a.marketSource === 'その他' && a.marketSourceOther ? `（${a.marketSourceOther}）` : '';
+        const nextActionText = a.nextAction === 'その他' && a.nextActionOther ? a.nextActionOther : a.nextAction;
+        const next = a.nextAction ? ` → 次のアクション: ${nextActionText}` : '';
         const memo = a.memo ? ` / メモ: ${a.memo}` : '';
-        lines.push(`  - ${a.date} ${a.activityType}${flag}${next}${memo}`);
+        lines.push(`  - ${a.date} ${a.activityType}${marketSourceDetail}${flag}${next}${memo}`);
       });
       lines.push('');
     });
