@@ -5543,6 +5543,7 @@ function NexusActivityForm({
     dealId: '',
     occurredAt: nowIso,
     memo: '',
+    nextAction: '',
     expectedRevenue: '',
     linkedTaskId: '',
     createdAt: '',
@@ -5602,6 +5603,14 @@ function NexusActivityForm({
     value: form.expectedRevenue,
     onChange: si('expectedRevenue')
   }));
+  const typeHint = form.type && NEXUS_ACTIVITY_TYPE_GUIDE[form.type] && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--text-sub)',
+      marginTop: -6,
+      marginBottom: 10
+    }
+  }, NEXUS_ACTIVITY_TYPE_GUIDE[form.type].hint);
   const linkedTaskNote = form.linkedTaskId && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11.5,
@@ -5667,7 +5676,7 @@ function NexusActivityForm({
       customerNameText: e.target.value,
       customerId: e.target.value ? '' : f.customerId
     }))
-  })), revenueField, /*#__PURE__*/React.createElement("div", {
+  })), revenueField, typeHint, /*#__PURE__*/React.createElement("div", {
     className: "form-group"
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
@@ -5675,6 +5684,15 @@ function NexusActivityForm({
     className: "form-textarea",
     value: form.memo,
     onChange: si('memo')
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "次のアクション（任意）"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    value: form.nextAction,
+    placeholder: "例：返事がなければ1週間後にフォロー",
+    onChange: si('nextAction')
   })), linkedTaskNote, /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
@@ -5688,6 +5706,120 @@ function NexusActivityForm({
     onClick: save,
     disabled: !form.type
   }, "保存")), deleteBtn);
+}
+// ── 営業活動1分類の説明ボトムシート（ⓘタップで表示。意味／具体例／間違えやすい分類との違い） ──
+function NexusActivityGuideSheet({
+  typeKey,
+  onClose
+}) {
+  const g = NEXUS_ACTIVITY_TYPE_GUIDE[typeKey];
+  if (!g) return null;
+  const sectionLabel = text => /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: 'var(--text-sub)',
+      marginBottom: 4
+    }
+  }, text);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "overlay",
+    onClick: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "drawer",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "drawer-handle"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "drawer-title"
+  }, nexusActivityTypeLabel(typeKey)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 14
+    }
+  }, sectionLabel("この活動の意味"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13.5,
+      lineHeight: 1.6
+    }
+  }, g.meaning)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 14
+    }
+  }, sectionLabel("具体例"), /*#__PURE__*/React.createElement("ul", {
+    style: {
+      margin: 0,
+      paddingLeft: 18,
+      fontSize: 13,
+      lineHeight: 1.8
+    }
+  }, g.examples.map((ex, i) => /*#__PURE__*/React.createElement("li", {
+    key: i
+  }, ex)))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 16
+    }
+  }, sectionLabel("間違えやすい分類との違い"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      lineHeight: 1.6,
+      color: 'var(--text-sub)'
+    }
+  }, g.distinction)), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    onClick: onClose
+  }, "閉じる")));
+}
+// ── 営業活動ガイド（9分類まとめて確認。「分類に迷ったら？」から開く） ──
+function NexusActivityGuideAllSheet({
+  onClose
+}) {
+  const salesTypes = NEXUS_ACTIVITY_TYPES.filter(t => t.category === 'sales');
+  return /*#__PURE__*/React.createElement("div", {
+    className: "overlay",
+    onClick: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "drawer",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "drawer-handle"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "drawer-title"
+  }, "営業活動ガイド"), salesTypes.map(t => {
+    const g = NEXUS_ACTIVITY_TYPE_GUIDE[t.key];
+    return /*#__PURE__*/React.createElement("div", {
+      key: t.key,
+      style: {
+        marginBottom: 16,
+        paddingBottom: 14,
+        borderBottom: '1px solid var(--border)'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 14.5,
+        fontWeight: 700,
+        marginBottom: 4
+      }
+    }, t.label), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 13,
+        lineHeight: 1.6,
+        marginBottom: 6
+      }
+    }, g.meaning), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        color: 'var(--text-sub)'
+      }
+    }, "例：", g.examples.join('／')));
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: {
+      marginTop: 4
+    },
+    onClick: onClose
+  }, "閉じる")));
 }
 // ── 活動履歴の行表示（ホームのミニ一覧・全件表示画面の両方から使う） ──
 function NexusActivityHistoryList({
@@ -5850,6 +5982,8 @@ function NexusQuickActivityPanel({
   const [dealPrompt, setDealPrompt] = useState(null); // 商談登録直後の次回アポ確認用
   const [showApptForm, setShowApptForm] = useState(false);
   const [editingLog, setEditingLog] = useState(null);
+  const [guideType, setGuideType] = useState(null);
+  const [showAllGuide, setShowAllGuide] = useState(false);
   const add = typeKey => {
     if (busy) return;
     const active = nexusActiveLogs(activityLogs);
@@ -5941,16 +6075,52 @@ function NexusQuickActivityPanel({
   };
   const salesTypes = NEXUS_ACTIVITY_TYPES.filter(t => t.category === 'sales');
   const customerTypes = NEXUS_ACTIVITY_TYPES.filter(t => t.category === 'customer');
-  const activityBtn = t => /*#__PURE__*/React.createElement("button", {
-    key: t.key,
-    type: "button",
-    className: "btn btn-outline",
-    disabled: busy,
-    style: t.key === 'close' ? {
-      gridColumn: '1 / -1'
-    } : null,
-    onClick: () => add(t.key)
-  }, "＋", t.label);
+  const activityBtn = t => {
+    const mainBtn = /*#__PURE__*/React.createElement("button", {
+      key: "btn",
+      type: "button",
+      className: "btn btn-outline",
+      disabled: busy,
+      style: {
+        flex: 1,
+        minWidth: 0
+      },
+      onClick: () => add(t.key)
+    }, "＋", t.label);
+    if (t.category !== 'sales') {
+      return /*#__PURE__*/React.createElement("div", {
+        key: t.key,
+        style: t.key === 'close' ? {
+          gridColumn: '1 / -1'
+        } : null
+      }, mainBtn);
+    }
+    // 説明アイコンは本体ボタンと独立した兄弟ボタンなので、ⓘを押しても活動登録は発火しない
+    const infoBtn = /*#__PURE__*/React.createElement("button", {
+      key: "info",
+      type: "button",
+      "aria-label": `${t.label}の説明`,
+      onClick: () => setGuideType(t.key),
+      style: {
+        flexShrink: 0,
+        width: 30,
+        border: '1.5px solid var(--border)',
+        borderRadius: 8,
+        background: 'var(--surface)',
+        color: 'var(--text-sub)',
+        fontSize: 13,
+        cursor: 'pointer'
+      }
+    }, "ⓘ");
+    return /*#__PURE__*/React.createElement("div", {
+      key: t.key,
+      style: {
+        display: 'flex',
+        gap: 4,
+        gridColumn: t.key === 'close' ? '1 / -1' : null
+      }
+    }, mainBtn, infoBtn);
+  };
   const salesGrid = /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'grid',
@@ -6080,11 +6250,40 @@ function NexusQuickActivityPanel({
     customers: customers,
     onClose: () => setShowHistory(false)
   });
+  const salesCardTitle = /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card-title",
+    style: {
+      marginBottom: 0
+    }
+  }, "🔥 売上・商談を作る"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setShowAllGuide(true),
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--accent)',
+      fontSize: 12,
+      cursor: 'pointer',
+      padding: 0
+    }
+  }, "分類に迷ったら？"));
   const salesCard = /*#__PURE__*/React.createElement("div", {
     className: "card"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card-title"
-  }, "🔥 売上・商談を作る"), salesGrid, toast, dealPromptCard, apptFormCard);
+  }, salesCardTitle, salesGrid, toast, dealPromptCard, apptFormCard);
+  const guideSheet = guideType && /*#__PURE__*/React.createElement(NexusActivityGuideSheet, {
+    typeKey: guideType,
+    onClose: () => setGuideType(null)
+  });
+  const allGuideSheet = showAllGuide && /*#__PURE__*/React.createElement(NexusActivityGuideAllSheet, {
+    onClose: () => setShowAllGuide(false)
+  });
   const customerCard = /*#__PURE__*/React.createElement("div", {
     className: "card",
     style: {
@@ -6121,7 +6320,7 @@ function NexusQuickActivityPanel({
       cursor: 'pointer'
     }
   }, "すべて見る →")), recentList);
-  return /*#__PURE__*/React.createElement(React.Fragment, null, salesCard, customerCard, recentCard, editDrawer, historyScreen);
+  return /*#__PURE__*/React.createElement(React.Fragment, null, salesCard, customerCard, recentCard, editDrawer, historyScreen, guideSheet, allGuideSheet);
 }
 // 「次回アポを設定」用の簡易フォーム（日付・開始/終了時刻・内容・顧客）。
 // 保存すると既存のtasksストアへ1件ToDoを作る（新しいストアは増やさない）。
@@ -6263,7 +6462,7 @@ function NexusSalesKpiCard({
     className: "stat-label"
   }, label));
   // 特に重視したい「新規接触→アポ確定→商談」を強調表示する
-  const tiles = [tile('新規接触数', kpi.newContact, true), tile('紹介依頼数', kpi.referralRequest), tile('アポ依頼数', kpi.apptRequest), tile('アポ確定数', kpi.apptConfirmed, true), tile('商談数', kpi.deal, true), tile('提案数', kpi.proposal), tile('成約数', kpi.close), tile('成約率', kpi.closeRate === null ? '—' : `${Math.round(kpi.closeRate * 100)}%`)];
+  const tiles = [tile('新規接触数', kpi.newContact, true), tile('見込フォロー数', kpi.leadFollowUp), tile('紹介依頼数', kpi.referralRequest), tile('案件打診数', kpi.opportunityPitch), tile('アポ依頼数', kpi.apptRequest), tile('アポ確定数', kpi.apptConfirmed, true), tile('商談数', kpi.deal, true), tile('提案数', kpi.proposal), tile('成約数', kpi.close), tile('成約率', kpi.closeRate === null ? '—' : `${Math.round(kpi.closeRate * 100)}%`)];
   const statGrid = /*#__PURE__*/React.createElement("div", {
     className: "stat-grid"
   }, tiles);
@@ -10468,8 +10667,16 @@ const NEXUS_ACTIVITY_TYPES = [{
   label: '新規接触',
   category: 'sales'
 }, {
+  key: 'lead_follow_up',
+  label: '見込フォロー',
+  category: 'sales'
+}, {
   key: 'referral_request',
   label: '紹介依頼',
+  category: 'sales'
+}, {
+  key: 'opportunity_pitch',
+  label: '案件打診',
   category: 'sales'
 }, {
   key: 'appt_request',
@@ -10514,6 +10721,64 @@ function nexusActivityTypeLabel(key) {
 }
 // 顧客を選びやすくすべき活動（商談・提案・成約・保全・給付請求）
 const NEXUS_ACTIVITY_TYPES_PREFER_CUSTOMER = ['deal', 'proposal', 'close', 'maintenance', 'claim'];
+// 営業活動9分類（sales）の意味・具体例・間違えやすい分類との違い・登録画面用の一言ヒント。
+// NEXUS上で「案件打診とアポ依頼、どっちだっけ？」を後から確認できるようにするための説明データ。
+const NEXUS_ACTIVITY_TYPE_GUIDE = {
+  new_contact: {
+    meaning: '今まで営業上の接点がなかった人・会社・団体に、初めて接触したこと。「未契約者」という意味ではなく、すでに面識や連絡履歴がある未契約者への連絡は含みません。',
+    examples: ['初めて経営者へDMを送った', '初めて電話した', '交流会で初めて名刺交換した', 'LinkedInで初めて接点を作った', '初めて税理士へ連絡した', '初めて企業へ営業連絡した', '初めてPTAや公民館などへ連絡した'],
+    distinction: '既に面識がある相手への案件提案は「案件打診」、既存の見込み客への情報提供は「見込フォロー」です。',
+    hint: '例：初めてDM・電話・名刺交換などで接点を作った'
+  },
+  lead_follow_up: {
+    meaning: 'すでに接点のある見込み客・既存顧客・知人などとの関係を深め、将来の相談・アポ・商談につなげる活動（種まき）。直接アポをお願いしていなくても対象です。',
+    examples: ['noteやYouTubeを送った', 'セミナー情報を送った', '役立ちそうな記事を送った', 'LINEで近況確認した', 'SNS投稿へコメントした', '誕生日や節目で連絡した'],
+    distinction: '「一度お会いしませんか？」までお願いしたら「アポ依頼」です。',
+    hint: '例：note送付・情報提供・近況連絡など、将来の商談につながる種まき'
+  },
+  referral_request: {
+    meaning: '既存顧客・知人・協業先などへ、新しい人を紹介してもらうよう自分からお願いしたこと。',
+    examples: ['「同じ悩みの方がいたらご紹介ください」と伝えた', '「経営者の方をご紹介いただけませんか」とお願いした', '「税理士さんをご紹介いただけませんか」とお願いした'],
+    distinction: '自然に紹介された結果ではなく、自分から紹介をお願いした行動のみを記録します。',
+    hint: '例：「ご紹介ください」と自分からお願いした'
+  },
+  opportunity_pitch: {
+    meaning: 'セミナー・協業・提携・相談会など、具体的な営業機会や案件を作るための提案をしたこと。個人のお客様への単純なアポ依頼とは分けます。',
+    examples: ['公民館・自治会等へセミナー開催を打診した', '税理士へ共同セミナーを提案した', '司法書士へ協業を提案した', '企業へ従業員向けFP相談会を提案した', '法人へ福利厚生セミナーを提案した'],
+    distinction: '相手が未契約者でも、すでに面識・接点があれば「新規接触」ではありません。個人向けの単純な日程調整は「アポ依頼」です。',
+    hint: '例：セミナー開催・協業・提携・相談会などを具体的に提案'
+  },
+  appt_request: {
+    meaning: '実際に会う・電話する・Zoomするための日程調整をお願いしたこと。まだ日時は決まっていない段階です。',
+    examples: ['「一度30分ほどお話ししませんか」', '「来週お時間いただけませんか」', '「Zoomで一度お話ししませんか」', '「詳しくご説明したいので日程いかがですか」'],
+    distinction: '情報提供だけなら「見込フォロー」、日時まで決まったら「アポ確定」です。',
+    hint: '例：日程調整をお願いした（日時はまだ未確定）'
+  },
+  appt_confirmed: {
+    meaning: '会う日時・場所・Zoom日時などが具体的に決まったこと。',
+    examples: ['9月5日14時にZoom', '9月10日10時に訪問', '9月15日13時に事務所で面談'],
+    distinction: '「今度話しましょう」だけでは対象外です。具体的な日時まで決まった段階で登録します。',
+    hint: '例：日時・場所が具体的に決まった'
+  },
+  deal: {
+    meaning: '実際に相手と話し、相手の悩み・課題・希望・状況などを具体的にヒアリングしたこと。',
+    examples: ['FP相談', '保険相談', '法人相談', '相続相談', 'ライフプラン相談', 'セミナー開催の打合せ', '経営者への課題ヒアリング'],
+    distinction: '単なる雑談・挨拶ではなく、具体的な仕事や案件につながる話をした場合のみです。',
+    hint: '例：課題や希望を具体的にヒアリングした'
+  },
+  proposal: {
+    meaning: '相手の課題に対して、具体的な解決策・プラン・商品・条件などを提示したこと。',
+    examples: ['保険設計書を提示', 'ライフプランを提示', '法人プランニングを提示', '相続対策案を提示', 'セミナー企画書を提示', '協業条件を提示'],
+    distinction: 'ヒアリングのみなら「商談」、具体的な解決策の提示まで進んだら「提案」です。',
+    hint: '例：設計書・プラン・企画書など具体的な解決策を提示'
+  },
+  close: {
+    meaning: '契約・受注が決まり、売上につながったこと。',
+    examples: ['保険契約', '法人案件受注', 'コンサル契約', '有料相談', 'セミナー案件受注'],
+    distinction: '提案しただけではまだ成約ではありません。契約・受注が確定した時点で登録します。',
+    hint: '例：契約・受注が確定し、売上につながった'
+  }
+};
 function nexusActiveLogs(activityLogs) {
   return (activityLogs || []).filter(a => !a.deletedAt);
 }
@@ -10528,7 +10793,9 @@ function nexusActivityKpi(activityLogs, periodStart, periodEnd) {
   };
   const countOf = type => active.filter(a => inPeriod(a) && a.type === type).length;
   const newContact = countOf('new_contact');
+  const leadFollowUp = countOf('lead_follow_up');
   const referralRequest = countOf('referral_request');
+  const opportunityPitch = countOf('opportunity_pitch');
   const apptRequest = countOf('appt_request');
   const apptConfirmed = countOf('appt_confirmed');
   const deal = countOf('deal');
@@ -10536,16 +10803,24 @@ function nexusActivityKpi(activityLogs, periodStart, periodEnd) {
   const close = countOf('close');
   const leads = newContact + referralRequest;
   const closeRate = proposal > 0 ? close / proposal : null;
+  // 分類ごとの件数マップ（将来分類が増えてもこの関数を変更せずファネル分析に使える）
+  const countsByType = {};
+  NEXUS_ACTIVITY_TYPES.forEach(t => {
+    countsByType[t.key] = countOf(t.key);
+  });
   return {
     newContact,
+    leadFollowUp,
     referralRequest,
+    opportunityPitch,
     apptRequest,
     apptConfirmed,
     deal,
     proposal,
     close,
     leads,
-    closeRate
+    closeRate,
+    countsByType
   };
 }
 // 直近windowMs以内に同種の活動が作成されていればtrue（二重タップ対策）。
