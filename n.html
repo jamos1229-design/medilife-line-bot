@@ -6265,7 +6265,9 @@ function NexusQuickActivityPanel({
       dealId: '',
       occurredAt: now,
       memo: '',
-      firstBusinessContact: false,
+      // 「＋新規接触」から登録した場合は、この活動自体が初めての営業接点なので自動的にtrueにする
+      // （他の主活動ボタンから登録した場合は、ユーザーが後からチェック/フォームでON可能）
+      firstBusinessContact: typeKey === 'new_contact',
       marketSource: '',
       relatedOpportunityId: '',
       expectedRevenue: '',
@@ -6349,9 +6351,11 @@ function NexusQuickActivityPanel({
     } : x));
     setEditingLog(null);
   };
-  // 新規接触は他の主活動と同時カウントするフラグ方式に変更したため、ホームのクイックボタンからは外す
-  // （NEXUS_ACTIVITY_TYPES自体からは削除しない＝過去データのラベル解決・全ガイド一覧は従来通り）
-  const salesTypes = NEXUS_ACTIVITY_TYPES.filter(t => t.category === 'sales' && t.key !== 'new_contact');
+  // 新規接触は単独でも登録できるボタンとして表示しつつ、他の主活動（案件打診・アポ依頼等）にも
+  // firstBusinessContactフラグとして同時付与できる（下のadd()・NexusActivityFormを参照）。
+  // KPI集計（nexusActivityKpi）はtype==='new_contact'とfirstBusinessContact===trueをOR条件で
+  // 数えるため、新規接触ボタンから登録した1件が二重カウントされることはない。
+  const salesTypes = NEXUS_ACTIVITY_TYPES.filter(t => t.category === 'sales');
   const customerTypes = NEXUS_ACTIVITY_TYPES.filter(t => t.category === 'customer');
   const activityBtn = t => {
     // アポ確定・商談・提案・成約は商談元の入力が必要なため、即時1タップ登録ではなく登録フォームを開く
@@ -6429,7 +6433,7 @@ function NexusQuickActivityPanel({
       updatedAt: new Date().toISOString()
     } : a));
   };
-  const firstContactChip = justAddedLog && (justAddedLog.firstBusinessContact ? /*#__PURE__*/React.createElement("div", {
+  const firstContactChip = justAddedLog && justAddedLog.type !== 'new_contact' && (justAddedLog.firstBusinessContact ? /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12,
       color: 'var(--text-sub)',
@@ -11558,9 +11562,9 @@ function nexusResolveOpportunity(opportunities, {
 // NEXUS上で「案件打診とアポ依頼、どっちだっけ？」を後から確認できるようにするための説明データ。
 const NEXUS_ACTIVITY_TYPE_GUIDE = {
   new_contact: {
-    meaning: 'これまで仕事・営業上の接点がなかった人・会社・団体に、初めて仕事につながる接触をしたこと。私的な面識や過去の挨拶程度の連絡があっても、初めて営業・仕事上の接点を作った場合は新規接触として扱います。現在は単独のボタンではなく、他の主活動（案件打診・アポ依頼など）を登録するときに「初めての営業接点でしたか？」にチェックすることで、その活動と同時に1件としてカウントされます。',
-    examples: ['初めて経営者へDMを送った', '初めて電話した', '交流会で初めて名刺交換した', 'LinkedInで初めて仕事上の接点を作った', '初めて税理士へ仕事の連絡をした', '初めて企業へ営業連絡した', 'PTAで以前から知っていた人へ初めて仕事としてセミナー相談をした', '公民館へ初めてセミナー開催相談をした'],
-    distinction: '以前営業の話をした人への再連絡、既存見込客へのLINE、既契約者への連絡、一度商談した人への再アプローチ、以前セミナー提案した団体への再連絡は新規接触ではありません。これらは「見込フォロー」または「既契約フォロー」で管理してください。',
+    meaning: 'これまで仕事・営業上の接点がなかった人・会社・団体に、初めて仕事につながる接触をしたこと。私的な面識や過去の挨拶程度の関係があっても、初めて仕事・営業上の接点を作った場合は新規接触として扱います。新規接触だけで終わった場合は「＋新規接触」で単独登録し、他の主活動（案件打診・アポ依頼など）と同時に初めての接点だった場合は、その活動を登録するときに「今回が初めての営業接点でしたか？」にチェックすることで、その活動と同時に1件としてカウントされます（＋新規接触から登録した場合はこのチェックは自動でONになります）。',
+    examples: ['初めて経営者へDMを送った', '初めて電話した', '交流会で初めて名刺交換した', 'LinkedInで初めて仕事上の接点を作った', '初めて税理士へ仕事の連絡をした', '初めて企業へ営業連絡した', 'PTAで以前から知っていた人へ初めて仕事の話をした', '初めて公民館・自治会担当者と営業上の接点を作った'],
+    distinction: '初めて接点を作っただけなら「新規接触」です。初接点と同時に「一度お話ししませんか」までお願いした場合は「アポ依頼」を登録し「今回が初めての営業接点」をONにします。初接点と同時にセミナー・協業・提携など具体的な案件を提案した場合は「案件打診」を登録し「今回が初めての営業接点」をONにします。以前営業の話をした人への再連絡、既存見込客へのLINE、既契約者への連絡、一度商談した人への再アプローチ、以前セミナー提案した団体への再連絡は新規接触ではありません。これらは「見込フォロー」または「既契約フォロー」で管理してください。',
     hint: '例：初めて仕事上の接点を作った（私的な面識があっても、営業として初めてなら新規接触）'
   },
   lead_follow_up: {
@@ -11625,9 +11629,10 @@ function nexusActivityKpi(activityLogs, periodStart, periodEnd) {
     return d >= periodStart && d <= periodEnd;
   };
   const countOf = type => active.filter(a => inPeriod(a) && a.type === type).length;
-  // 新規接触：旧データ（type==='new_contact'）と新データ（他の主活動＋firstBusinessContactフラグ）の
-  // どちらも数える。1件の活動が両方の条件を満たすことは無い（新規登録では'new_contact'をtypeに
-  // 設定しないため）ので、二重カウントの心配はない。
+  // 新規接触：type==='new_contact'（＋新規接触ボタンからの単独登録）と、firstBusinessContact===true
+  // （他の主活動と同時に初めての接点だった場合）のどちらかを満たす活動を数える。OR条件の.filter()を
+  // 1回通すだけなので、＋新規接触から登録した活動（type==='new_contact'かつfirstBusinessContact===true）
+  // が両方の条件を満たしていても1件としてしかカウントされない（二重カウントなし）。
   const newContact = active.filter(a => inPeriod(a) && (a.type === 'new_contact' || a.firstBusinessContact)).length;
   const leadFollowUp = countOf('lead_follow_up');
   const referralRequest = countOf('referral_request');
@@ -12028,7 +12033,9 @@ function generateAIAnalysisMarkdown(data) {
       lines.push(`- 確定売上: ${fmtYen(c.confirmedRevenue)}${c.expectedRevenue ? ` / 見込売上: ${fmtYen(c.expectedRevenue)}` : ''}`);
       lines.push('- 活動履歴:');
       (c.activities || []).forEach(a => {
-        const flag = a.firstBusinessContact ? '（初めての営業接点）' : '';
+        // 「新規接触」自体の活動では、活動種別名が既に新規接触であることを示しているため
+        // 冗長な初回接点フラグは付けない。他の主活動に同時付与された場合のみ明記する。
+        const flag = a.firstBusinessContact && a.activityType !== '新規接触' ? ' / 初回営業接点：YES' : '';
         const next = a.nextAction ? ` → 次のアクション: ${a.nextAction}` : '';
         const memo = a.memo ? ` / メモ: ${a.memo}` : '';
         lines.push(`  - ${a.date} ${a.activityType}${flag}${next}${memo}`);
