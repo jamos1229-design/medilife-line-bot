@@ -349,7 +349,11 @@
     .print-doc table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 10px; }
     .print-doc th, .print-doc td { border: 1px solid #999; padding: 4px 6px; text-align: center; }
     .print-doc th { background: #eee; }
+    .print-doc table.contract-table { table-layout: fixed; font-size: 10.5px; }
+    .print-doc table.contract-table th, .print-doc table.contract-table td { padding: 3px 4px; overflow-wrap: break-word; word-break: break-word; }
     .print-doc .print-section { break-inside: avoid; page-break-inside: avoid; }
+    .print-doc .print-page-break { break-before: page; page-break-before: always; }
+    .print-doc .print-page-title { font-size: 13px; font-weight: 700; color: #b98a3d; margin: 0 0 6px; }
     .print-doc h2, .print-doc h3, .print-doc p { break-after: avoid; page-break-after: avoid; }
     .print-doc table { break-inside: auto; }
     .print-doc tr { break-inside: avoid; page-break-inside: avoid; }
@@ -369,6 +373,7 @@
       .ml-print-overlay { position: static !important; }
       .print-doc .print-section { break-inside: avoid; page-break-inside: avoid; }
       .print-doc tr { break-inside: avoid; page-break-inside: avoid; }
+      .print-doc .print-page-break { break-before: page; page-break-before: always; }
     }
   </style>
 </head>
@@ -20999,6 +21004,71 @@ function nexusPurposeSummary(contracts, fallbackInsuredAge) {
     dailyTotal
   };
 }
+// 保障集計（本人・配偶者）の集計済み結果を合算して世帯合算を作る。世帯合算では収入保障保険の
+// 月額×残存期間換算に使う前提年齢が本人・配偶者で異なるため、契約を混ぜてから一括集計するのでは
+// なく、本人・配偶者それぞれを正しいfallback年齢（ageSelf/ageSpouse）で個別に集計してから、
+// 集計済みの結果同士を合算する（世帯合算だけfallback年齢を渡し忘れて収入保障の月額換算が
+// 効かず、月額同士がそのまま合算されてしまっていた不具合の修正）。
+function nexusMergePurposeSummaries(a, b) {
+  const byPurpose = {};
+  const dailyByPurpose = {};
+  CONTRACT_PURPOSES.forEach(p => {
+    byPurpose[p] = (a.byPurpose[p] || 0) + (b.byPurpose[p] || 0);
+    dailyByPurpose[p] = (a.dailyByPurpose[p] || 0) + (b.dailyByPurpose[p] || 0);
+  });
+  return {
+    incomeProtectionConverted: !!a.incomeProtectionConverted || !!b.incomeProtectionConverted,
+    byPurpose,
+    deathTotal: (a.deathTotal || 0) + (b.deathTotal || 0),
+    medicalTotal: byPurpose['医療保障'] || 0,
+    criticalIllnessTotal: byPurpose['特定疾病（ガン）'] || 0,
+    disabilityTotal: byPurpose['介護・就労不能保障'] || 0,
+    unclassified: (a.unclassified || 0) + (b.unclassified || 0),
+    unconvertibleContracts: [...(a.unconvertibleContracts || []), ...(b.unconvertibleContracts || [])],
+    dailyByPurpose,
+    dailyTotal: (a.dailyTotal || 0) + (b.dailyTotal || 0)
+  };
+}
+// 保障診断表の「現在保障額」表示用。医療保障等は一時金ではなく入院日額で登録されることが多いため、
+// 一時金（byPurpose）だけを見ると実際は保障があるのに0円と誤解される。一時金・日額の両方がある
+// 場合は併記し、どちらか一方のみの場合もそのまま表示する（両方0のときのみ実際に0円として扱う）。
+function nexusCoverageAmountDisplay(lump, daily) {
+  const l = lump || 0;
+  const d = daily || 0;
+  if (l > 0 && d > 0) return `${l.toLocaleString()}円（＋入院日額${d.toLocaleString()}円）`;
+  if (l > 0) return `${l.toLocaleString()}円`;
+  if (d > 0) return `日額${d.toLocaleString()}円`;
+  return '0円';
+}
+// ── 印刷1ページ目「重要指標」カード用の表示ヘルパー群 ──
+// 「未入力」と「実際の0円」を混同しないよう、それぞれ元データ（配列の有無・入力欄の有無）を
+// 確認してから表示を決める。金額を計算できないときに0円と表示すると、実際には未入力なのに
+// 「保障・資産が0である」という誤った診断に見えてしまうため、必ず「未入力」等の文言に置き換える。
+function nexusMonthlyTargetDisplay(categories, categoryKeys, monthlyTarget) {
+  const hasInput = categoryKeys.some(key => parseFloat((categories[key] || {}).years) > 0);
+  return hasInput ? monthlyTarget.toLocaleString() + '円／月' : '未入力';
+}
+function nexusEducationStatusDisplay(kids, kidsWithEducation) {
+  if (kids.length === 0) return '対象者なし';
+  const hasInput = kidsWithEducation.some(({
+    plan
+  }) => (parseFloat(plan && plan.preparedJpy) || 0) > 0 || plan && plan.assetProjections && plan.assetProjections.length > 0);
+  if (!hasInput) return '未入力';
+  const hasShortfall = kidsWithEducation.some(({
+    summary
+  }) => summary.shortfallJpy > 0);
+  return hasShortfall ? '要確認（不足あり）' : '準備順調';
+}
+function nexusLoanBalanceDisplay(loans, totalLoanBalance) {
+  return loans.length === 0 ? '未登録' : totalLoanBalance.toLocaleString() + '円';
+}
+function nexusPortfolioRegisteredDisplay(assetClassChart, portfolioTotal) {
+  return assetClassChart.length === 0 ? '未登録' : portfolioTotal.toLocaleString() + '円';
+}
+function nexusPremiumDisplay(contractsLen, spouseContractsLen, isCoupleScope, monthlyTotal) {
+  const hasAny = contractsLen > 0 || isCoupleScope && spouseContractsLen > 0;
+  return hasAny ? monthlyTotal.toLocaleString() + '円／月' : '未登録';
+}
 function NexusPurposeSummaryTable({
   title,
   contracts,
@@ -23443,6 +23513,42 @@ function NexusPlanningSection({
       }
     });
   };
+  // 「今後やること」：優先度・対応内容・期限・完了未完了を持つ構造化リスト。保険商品の自動提案は
+  // 行わず、あくまでFPが自分で入力・編集・削除する行動計画のメモとして機能する。法人プランニングの
+  // アクションプランと同じ語彙（NEXUS_CORP_ACTION_PRIORITIES/STATUSES）・同じ汎用CRUD部品を再利用する。
+  const actionItems = lp.actionItems || [];
+  const actionItemOps = nexusCorpArrayOps(lp, updateLp, 'actionItems', () => ({
+    id: uid(),
+    title: '',
+    priority: '中',
+    dueDate: '',
+    status: '未着手',
+    memo: ''
+  }));
+  const actionItemFields = [{
+    key: 'title',
+    label: '対応内容',
+    wide: true
+  }, {
+    key: 'priority',
+    label: '優先度',
+    type: 'select',
+    options: NEXUS_CORP_ACTION_PRIORITIES
+  }, {
+    key: 'status',
+    label: 'ステータス',
+    type: 'select',
+    options: NEXUS_CORP_ACTION_STATUSES
+  }, {
+    key: 'dueDate',
+    label: '期限',
+    type: 'date'
+  }, {
+    key: 'memo',
+    label: 'メモ',
+    type: 'textarea',
+    wide: true
+  }];
   // 教育資金プランニングは子供（サスペクト）ごとに進学トラック・準備状況を保持する。
   // 子供が配偶者側の顧客レコードにだけ登録されている場合もあるため、キーはサスペクトIDを使う。
   const updateLpEducation = (kidId, patch) => {
@@ -23654,6 +23760,9 @@ function NexusPlanningSection({
   const eventIncome = parseFloat(budget.eventIncome) || 0;
   const eventExpense = parseFloat(budget.eventExpense) || 0;
   const computedAnnualSavings = totalIncome - totalExpense + eventIncome - eventExpense;
+  const hasBudgetInput = incomeItems.length > 0 || expenseItems.length > 0 || !!budget.eventIncome || !!budget.eventExpense;
+  const totalIncomeDisplay = incomeItems.length ? totalIncome.toLocaleString() + '円' : '未入力';
+  const totalExpenseDisplay = expenseItems.length ? totalExpense.toLocaleString() + '円' : '未入力';
   const ageSelf = customer.birthdate ? calcAge(customer.birthdate) : calcStoredAge(customer.age, customer.ageYear);
   const spouseSp = (customer.suspects || []).find(sp => sp.relation === '配偶者');
   const forwardLinkedSpouseCustomer = spouseSp && spouseSp.linkedCustomerId ? customers.find(x => x.id === spouseSp.linkedCustomerId) : null;
@@ -23837,7 +23946,10 @@ function NexusPlanningSection({
     unconvertibleSavingsContracts,
     insuranceSavingsSeparateAccountJpy
   };
-  const buildPurposeRowsForPrint = (title, list, ownerName, insuredAge) => {
+  // 集計済みのnexusPurposeSummary結果を描画するだけの関数（契約リストの再集計は行わない）。
+  // 世帯合算は本人・配偶者を個別に正しい年齢で集計した後、nexusMergePurposeSummariesで
+  // 合算した結果をここに渡す。
+  const buildPurposeRowsFromSummary = (title, summary) => {
     const {
       byPurpose,
       deathTotal,
@@ -23847,7 +23959,7 @@ function NexusPlanningSection({
       dailyByPurpose,
       dailyTotal,
       incomeProtectionConverted
-    } = nexusPurposeSummary(ownerName ? nexusOwnCoverageContracts(list, ownerName) : list, insuredAge);
+    } = summary;
     const rows = CONTRACT_PURPOSES.filter(p => byPurpose[p] > 0).map(p => `<tr><td>${p}</td><td>${byPurpose[p].toLocaleString()}円</td></tr>`).join('');
     const dailyRows = CONTRACT_PURPOSES.filter(p => dailyByPurpose[p] > 0);
     return `<div class="print-section">
@@ -23858,6 +23970,7 @@ function NexusPlanningSection({
       ${incomeProtectionConverted ? '<p style="font-size:11px;color:#666;">※ 死亡時収入保障（収入保障保険）は保険金額が月額のため、保険期間終了年齢までの残り月数×月額で換算した金額で集計しています</p>' : ''}
       </div>`;
   };
+  const buildPurposeRowsForPrint = (title, list, ownerName, insuredAge) => buildPurposeRowsFromSummary(title, nexusPurposeSummary(ownerName ? nexusOwnCoverageContracts(list, ownerName) : list, insuredAge));
   const buildPrintHtml = () => {
     const rowsHtml = list => list.length ? list.map((r, i) => `
       <tr><td>${i + 1}</td><td>${escapeHtmlForPrint(nexusContractPurposes(r).join('、'))}</td><td>${escapeHtmlForPrint(r.type)}</td><td>${escapeHtmlForPrint(r.company)}</td><td>${escapeHtmlForPrint(r.policyNum)}</td>
@@ -23943,63 +24056,109 @@ function NexusPlanningSection({
       });
       return map;
     };
+    // 世帯の月払保険料（本人＋配偶者。関連法人の保険料は法人自身の費用のため家計の指標には含めない）
+    const householdMonthlyPremium = nexusPremiumTotals(contracts).monthly + (isCoupleScope ? nexusPremiumTotals(spouseContracts).monthly : 0);
     const html = `
       <h2>${titleName}　プランニング資料</h2>
       <p style="font-size:11px;color:#666;">出力日：${new Date().toLocaleDateString('ja-JP')}${isCoupleScope ? '　／　夫婦合算版' : ''}</p>
+      <div class="print-page-title">1. 総合診断</div>
+      <div class="print-section">
+        <h3>家族情報</h3>
+        <table>
+          <tr><th>本人年齢</th><td>${ageSelf !== null ? ageSelf + '歳' : ''}</td><th>配偶者年齢</th><td>${ageSpouse !== null ? ageSpouse + '歳' : ''}</td></tr>
+          <tr><th>お子様</th><td colspan="3">${escapeHtmlForPrint(kidsSummary)}</td></tr>
+        </table>
+      </div>
       <div class="print-section">
         <h3>ライフプラン タイムライン</h3>
         ${nexusTimelineHtmlForPrint(ageSelf, ageSpouse, categories)}
       </div>
       <div class="print-section">
-        <h3>LPシート要約</h3>
+        <h3>重要指標</h3>
         <table>
-          <tr><th>本人年齢</th><td>${ageSelf !== null ? ageSelf + '歳' : ''}</td><th>配偶者年齢</th><td>${ageSpouse !== null ? ageSpouse + '歳' : ''}</td></tr>
-          <tr><th>お子様</th><td colspan="3">${escapeHtmlForPrint(kidsSummary)}</td></tr>
-          <tr><th>理想月間貯蓄額</th><td colspan="3">${monthlyTarget.toLocaleString()}円／月</td></tr>
+          <tr><th>住宅ローン残高</th><td>${nexusLoanBalanceDisplay(loans, totalLoanBalance)}</td><th>必要積立額（月額）</th><td>${nexusMonthlyTargetDisplay(categories, Object.keys(LP_CATEGORY_LABELS), monthlyTarget)}</td></tr>
+          <tr><th>教育資金準備状況</th><td>${nexusEducationStatusDisplay(kids, kidsWithEducation)}</td><th>月払保険料</th><td>${nexusPremiumDisplay(contracts.length, spouseContracts.length, isCoupleScope, householdMonthlyPremium)}</td></tr>
+          <tr><th>登録済み金融資産</th><td colspan="3">${nexusPortfolioRegisteredDisplay(pAssetClassChart, pPortfolioTotal)}</td></tr>
         </table>
+        <p style="font-size:11px;color:#666;">※ 未入力の項目は「未入力」「未登録」等と表示し、0円とはみなしていません。詳細は各ページをご確認ください。</p>
+      </div>
+      <div class="print-page-break print-page-title">2. 家計・将来資金</div>
+      <div class="print-section">
+        <h3>家計収支</h3>
+        ${!hasBudgetInput ? '<p>家計情報：未入力<br/>家計情報を入力すると、年間収支・貯蓄余力・必要積立額との差・将来資金の過不足を確認できます。</p>' : `
+        <table><tr><th>収入の種類</th><th>金額</th></tr>${incomeItems.length ? incomeItems.map(x => `<tr><td>${escapeHtmlForPrint(x.type)}</td><td>${x.amount ? Number(x.amount).toLocaleString() + '円' : ''}</td></tr>`).join('') : '<tr><td colspan="2">登録なし</td></tr>'}</table>
+        <table><tr><th>支出の費目</th><th>金額</th></tr>${expenseItems.length ? expenseItems.map(x => `<tr><td>${escapeHtmlForPrint(x.category)}</td><td>${x.amount ? Number(x.amount).toLocaleString() + '円' : ''}</td></tr>`).join('') : '<tr><td colspan="2">登録なし</td></tr>'}</table>
+        <table>
+          <tr><th>収入合計</th><td>${totalIncomeDisplay}</td><th>支出合計</th><td>${totalExpenseDisplay}</td></tr>
+          <tr><th>イベント収入</th><td>${eventIncome.toLocaleString()}円</td><th>イベント支出</th><td>${eventExpense.toLocaleString()}円</td></tr>
+          <tr><th>年間貯蓄（自動計算）</th><td colspan="3">${computedAnnualSavings.toLocaleString()}円</td></tr>
+        </table>
+        `}
       </div>
       <div class="print-section">
         <h3>ローン明細（基本項目）</h3>
         <table><tr><th>区分</th><th>名称</th><th>残高</th><th>金利</th><th>金利タイプ</th><th>毎月返済額</th><th>ボーナス払い</th><th>返済方式</th><th>完済予定／残り年数</th></tr>${loanBasicRows}</table>
         <p style="font-size:12px;"><b>ローン残高合計：${totalLoanBalance.toLocaleString()}円</b></p>
       </div>
+      ${kidsWithEducation.length === 0 ? '' : `
       <div class="print-section">
-        <h3>ローン明細（詳細）</h3>
-        <table><tr><th>名称</th><th>借入先</th><th>借入年月日</th><th>借入当初の金額</th><th>団信</th><th>担保</th><th>連帯保証人等</th></tr>${loanDetailRows}</table>
-      </div>
+        <h3>教育資金プランニング</h3>
+        ${kidsWithEducation.map(({
+      kid,
+      age,
+      plan,
+      rows,
+      summary
+    }) => `
+        <p style="font-size:12px;margin:6px 0 2px;"><b>${escapeHtmlForPrint(nexusChildDisplayName(kid) || '子')}${age !== null ? `（${age}歳）` : ''}</b></p>
+        <table><tr><th>費目</th><th>進学先</th><th>年齢</th><th>状況</th><th>費用（残り）</th></tr>${rows.map(r => `<tr><td>${r.label}</td><td>${escapeHtmlForPrint(r.selected)}</td><td>${r.startAge}〜${r.endAge}歳</td><td>${r.status === 'done' ? '終了' : r.status === 'ongoing' ? '進行中' : 'これから'}</td><td>${r.status === 'done' ? '—' : r.remainingCostJpy.toLocaleString() + '円'}</td></tr>`).join('')}</table>
+        ${nexusAssetProjectionTableHtml(plan.assetProjections)}
+        <p style="font-size:11px;">大学入学までに必要な準備額：<b>${summary.universityNeededJpy.toLocaleString()}円</b>　／　現在の準備額：<b>${summary.prepared.toLocaleString()}円</b>${summary.hasAssetProjections ? `　／　資産ごとの大学入学時の予想額 合計：<b>${summary.projectedPreparedJpy.toLocaleString()}円</b>` : summary.isManual ? `　／　大学入学時の予想準備額（直接入力）：<b>${summary.projectedPreparedJpy.toLocaleString()}円</b>` : summary.assetReturnRate > 0 ? `　／　大学入学時の予想準備額（年率${summary.assetReturnRate}%で運用）：<b>${summary.projectedPreparedJpy.toLocaleString()}円</b>` : ''}　／　不足額：<b>${summary.shortfallJpy.toLocaleString()}円</b>${summary.monthsToUniversity !== null && summary.monthlySavingsNeeded !== null ? `　／　大学入学（${Math.floor(summary.monthsToUniversity / 12)}年後）までの毎月積立目安：<b>${summary.monthlySavingsNeeded.toLocaleString()}円／月</b>` : ''}</p>`).join('')}
+      </div>`}
+      ${housingCalc.homePrice > 0 ? `
       <div class="print-section">
-        <h3>家計収支</h3>
-        <table><tr><th>収入の種類</th><th>金額</th></tr>${incomeItems.length ? incomeItems.map(x => `<tr><td>${escapeHtmlForPrint(x.type)}</td><td>${x.amount ? Number(x.amount).toLocaleString() + '円' : ''}</td></tr>`).join('') : '<tr><td colspan="2">登録なし</td></tr>'}</table>
-        <table><tr><th>支出の費目</th><th>金額</th></tr>${expenseItems.length ? expenseItems.map(x => `<tr><td>${escapeHtmlForPrint(x.category)}</td><td>${x.amount ? Number(x.amount).toLocaleString() + '円' : ''}</td></tr>`).join('') : '<tr><td colspan="2">登録なし</td></tr>'}</table>
+        <h3>住宅資金プランニング</h3>
+        ${nexusAssetProjectionTableHtml(housingInputs.assetProjections)}
         <table>
-          <tr><th>収入合計</th><td>${totalIncome.toLocaleString()}円</td><th>支出合計</th><td>${totalExpense.toLocaleString()}円</td></tr>
-          <tr><th>イベント収入</th><td>${eventIncome.toLocaleString()}円</td><th>イベント支出</th><td>${eventExpense.toLocaleString()}円</td></tr>
-          <tr><th>年間貯蓄（自動計算）</th><td colspan="3">${computedAnnualSavings.toLocaleString()}円</td></tr>
+          <tr><th>頭金必要額</th><td>${housingCalc.downPaymentNeededJpy.toLocaleString()}円（${housingCalc.downPaymentRatio}%）</td><th>頭金の不足額</th><td>${housingCalc.shortfallJpy.toLocaleString()}円${housingCalc.yearsToPurchase !== null ? `（購入まで${housingCalc.yearsToPurchase}年）` : ''}${housingCalc.monthlySavingsNeeded !== null ? '　→　毎月の積立目安：' + housingCalc.monthlySavingsNeeded.toLocaleString() + '円／月' : ''}</td></tr>
+          ${housingCalc.hasAssetProjections ? `<tr><th>資産ごとの購入時の予想額 合計</th><td colspan="3">${housingCalc.projectedSavedJpy.toLocaleString()}円</td></tr>` : housingCalc.isManual ? `<tr><th>購入時の予想準備額（直接入力）</th><td colspan="3">${housingCalc.projectedSavedJpy.toLocaleString()}円</td></tr>` : housingCalc.assetReturnRate > 0 ? `<tr><th>購入時の予想準備額（年率${housingCalc.assetReturnRate}%で運用）</th><td colspan="3">${housingCalc.projectedSavedJpy.toLocaleString()}円</td></tr>` : ''}
+          <tr><th>借入予定額（概算）</th><td>${housingCalc.loanAmountJpy.toLocaleString()}円</td><th>月々の返済額目安</th><td>${housingCalc.estimatedMonthlyPayment !== null ? housingCalc.estimatedMonthlyPayment.toLocaleString() + `円／月（${housingCalc.loanYears}年・年率${housingCalc.loanRate}%）` : ''}</td></tr>
         </table>
-      </div>
+        <p style="font-size:11px;color:#666;">※ 既存の住宅ローンは「ローン明細」欄に別途記載しています。これから住宅購入を検討する場合のシミュレーションです</p>
+      </div>` : ''}
+      ${(() => {
+      const rc = nexusComputeRetirement(retirementInputs, ageSelf, pLiquidPortfolioTotal);
+      if (rc.yearsInRetirement === null) return '';
+      return `
+      <div class="print-section">
+        <h3>老後プランニング${isCoupleScope ? '｜夫婦合算' : ''}</h3>
+        ${nexusAssetProjectionTableHtml(retirementInputs.assetProjections)}
+        <table>
+          <tr><th>老後期間</th><td>${rc.yearsInRetirement}年（${rc.retirementAge}歳〜${rc.lifeExpectancy}歳）</td><th>月あたり${rc.monthlyShortfall >= 0 ? '不足額' : '黒字額'}</th><td>${Math.abs(Math.round(rc.monthlyShortfall)).toLocaleString()}円／月</td></tr>
+          <tr><th>老後資金 必要総額</th><td>${rc.totalNeededJpy.toLocaleString()}円</td><th>${rc.hasAssetProjections ? '資産ごとの退職時の予想額 合計' : '現在の資産（自社株除く）'}</th><td>${rc.hasAssetProjections ? rc.projectedAssetsJpy.toLocaleString() : rc.currentAssetsJpy.toLocaleString()}円</td></tr>
+          ${!rc.hasAssetProjections && rc.assetReturnRate > 0 ? `<tr><th>退職時の予想資産額（年率${rc.assetReturnRate}%で運用）</th><td colspan="3">${rc.projectedAssetsJpy.toLocaleString()}円</td></tr>` : ''}
+          <tr><th>不足額（資産控除後）</th><td>${rc.shortfallAfterAssetsJpy.toLocaleString()}円</td><th>退職までに必要な毎月積立額</th><td>${rc.yearsToRetirement !== null ? rc.yearsToRetirement + '年' : ''}${rc.requiredMonthlySavings !== null ? '　→　' + rc.requiredMonthlySavings.toLocaleString() + '円／月' : ''}</td></tr>
+        </table>
+        <p style="font-size:11px;color:#666;">※ 自社株（非上場）は換金できないため対象外にしています。不動産等その他資産の流動性も考慮していない概算です</p>
+      </div>`;
+    })()}
+      <div class="print-page-break print-page-title">3. 保障診断</div>
+      ${(() => {
+      const coverageDiagnosisSummary = isCoupleScope ? nexusMergePurposeSummaries(nexusPurposeSummary(nexusOwnCoverageContracts(contracts, customer.name), ageSelf), nexusPurposeSummary(nexusOwnCoverageContracts(spouseContracts, linkedSpouseCustomer.name), ageSpouse)) : nexusPurposeSummary(nexusOwnCoverageContracts(contracts, customer.name), ageSelf);
+      const diagnosisRows = [['死亡保障', '死亡保障'], ['死亡時収入保障', '死亡時収入保障'], ['医療保障', '医療保障'], ['がん・特定疾病', '特定疾病（ガン）'], ['介護・就業不能保障', '介護・就労不能保障']];
+      const diagnosisRowsHtml = diagnosisRows.map(([label, key]) => `<tr><td>${label}</td><td>未算出</td><td>${nexusCoverageAmountDisplay(coverageDiagnosisSummary.byPurpose[key], coverageDiagnosisSummary.dailyByPurpose[key])}</td><td>判定不可</td><td>未判定</td></tr>`).join('');
+      return `
+      <div class="print-section">
+        <h3>保障診断${isCoupleScope ? '｜世帯合算' : ''}</h3>
+        <p style="font-size:11px;color:#666;margin:2px 0 6px;">※必要保障額の算定ロジックは現時点でMEDiLIFE NEXUSに実装されていないため、必要保障額・過不足・評価は表示していません。現在保障額は、実際に登録されている契約内容から機械的に集計した金額です。</p>
+        <table><tr><th>保障項目</th><th>必要保障額</th><th>現在保障額</th><th>過不足</th><th>評価</th></tr>${diagnosisRowsHtml}</table>
+      </div>`;
+      })()}
       ${insuredGroups.map(g => buildPurposeRowsForPrint(`被保険者別 保障集計：${g.name}`, g.contracts, null, g.name === customer.name ? ageSelf : linkedSpouseCustomer && g.name === linkedSpouseCustomer.name ? ageSpouse : null)).join('')}
-      <div class="print-section">
-        <h3>既契約一覧（本人）</h3>
-        <table><tr><th>No</th><th>目的</th><th>保険種類</th><th>保険会社</th><th>証券番号</th><th>契約日</th><th>保険期間</th><th>払込期間</th><th>保険金額（加入当初）</th><th>現在の解約返戻金</th><th>保険料</th></tr>${rowsHtml(contracts)}</table>
-        ${notesHtml(contracts)}
-      </div>
       ${buildPurposeRowsForPrint('保障集計（本人）', contracts, customer.name, ageSelf)}
-      ${linkedCorp ? `
-      <div class="print-section">
-        <h3>既契約一覧（関連法人：${escapeHtmlForPrint(linkedCorp.corporateName)}）</h3>
-        <table><tr><th>No</th><th>目的</th><th>保険種類</th><th>保険会社</th><th>証券番号</th><th>契約日</th><th>保険期間</th><th>払込期間</th><th>保険金額（加入当初）</th><th>現在の解約返戻金</th><th>保険料</th></tr>${rowsHtml(corpContracts)}</table>
-        ${notesHtml(corpContracts)}
-      </div>
-        ${buildPurposeRowsForPrint('保障集計（法人）', corpContracts)}
-      ` : ''}
       ${isCoupleScope ? `
-      <div class="print-section">
-        <h3>既契約一覧（配偶者：${escapeHtmlForPrint(linkedSpouseCustomer.name)}）</h3>
-        <table><tr><th>No</th><th>目的</th><th>保険種類</th><th>保険会社</th><th>証券番号</th><th>契約日</th><th>保険期間</th><th>払込期間</th><th>保険金額（加入当初）</th><th>現在の解約返戻金</th><th>保険料</th></tr>${rowsHtml(spouseContracts)}</table>
-        ${notesHtml(spouseContracts)}
-      </div>
         ${buildPurposeRowsForPrint('保障集計（配偶者）', spouseContracts, linkedSpouseCustomer.name, ageSpouse)}
-        ${buildPurposeRowsForPrint('保障集計（世帯合算）', [...nexusOwnCoverageContracts(contracts, customer.name), ...nexusOwnCoverageContracts(spouseContracts, linkedSpouseCustomer.name)])}
+        ${buildPurposeRowsFromSummary('保障集計（世帯合算）', nexusMergePurposeSummaries(nexusPurposeSummary(nexusOwnCoverageContracts(contracts, customer.name), ageSelf), nexusPurposeSummary(nexusOwnCoverageContracts(spouseContracts, linkedSpouseCustomer.name), ageSpouse)))}
       ` : ''}
       <div class="print-section">
         <h3>契約者別 保険料合計</h3>
@@ -24007,6 +24166,20 @@ function NexusPlanningSection({
         <table><tr><th>契約者</th><th>月払保険料</th><th>一時払・前納額（別枠）</th></tr>
           ${premiumByContractor.map(p => `<tr><td>${escapeHtmlForPrint(p.label)}</td><td>${p.monthly.toLocaleString()}円${p.unconvertibleCount > 0 ? `（円換算未設定${p.unconvertibleCount}件を除く）` : ''}</td><td>${p.lump > 0 ? p.lump.toLocaleString() + '円' : '—'}</td></tr>`).join('')}
         </table>
+      </div>
+      <div class="print-page-break print-page-title">4. 資産診断</div>
+      <div class="print-section">
+        <h3>登録済み資産ポートフォリオ（資産クラス別）${isCoupleScope ? '｜夫婦合算' : ''}</h3>
+        ${nexusPieChartBlockHtml(pAssetClassChart)}
+        <table><tr><th>区分</th><th>金額</th><th>割合</th></tr>${assetClassRowsHtml}</table>
+        <p style="font-size:11px;color:#999;">※本グラフはMEDiLIFE NEXUSに登録されている資産のみを集計しています。預貯金・株式・投資信託・不動産等が未入力の場合、実際の資産配分とは異なります。</p>
+      </div>
+      <div class="print-section">
+        <h3>登録済み資産ポートフォリオ（通貨別：円建て／外貨建て）${isCoupleScope ? '｜夫婦合算' : ''}</h3>
+        ${nexusPieChartBlockHtml(pCurrencyChart)}
+        <table><tr><th>区分</th><th>金額</th></tr>${currencyRowsHtml}</table>
+        ${pInsuranceSavingsUnconvertible > 0 || pCurrencyUnconvertible > 0 ? '<p style="font-size:11px;color:#b98a3d;">※ 外貨建て契約のうち適用レート未入力のものは円換算できず、上記には含まれていません</p>' : ''}
+        <p style="font-size:11px;color:#999;">※本グラフはMEDiLIFE NEXUSに登録されている資産のみを集計しています。預貯金・株式・投資信託・不動産等が未入力の場合、実際の資産配分とは異なります。</p>
       </div>
       ${(() => {
       const stocksAll = isCoupleScope ? [...(portfolio.stocks || []), ...(spousePortfolioInputs.stocks || [])] : portfolio.stocks || [];
@@ -24047,65 +24220,47 @@ function NexusPlanningSection({
         <table><tr><th>区分</th><th>名称</th><th>名義</th><th>評価額</th></tr>${allRows.join('')}</table>
       </div>`;
     })()}
+      <div class="print-page-break print-page-title">5. FP所見・今後やること</div>
+      ${NEXUS_FINDING_TOPICS.map(t => nexusFindingBlockHtml(t.label, findings[t.key])).join('')}
+      ${nexusOverallFindingBlockHtml(overallFinding)}
+      ${nexusActionItemsBlockHtml(actionItems)}
+      <div class="print-page-break print-page-title">6. 詳細資料</div>
       <div class="print-section">
-        <h3>ポートフォリオ（資産クラス別）${isCoupleScope ? '｜夫婦合算' : ''}</h3>
-        ${nexusPieChartBlockHtml(pAssetClassChart)}
-        <table><tr><th>区分</th><th>金額</th><th>割合</th></tr>${assetClassRowsHtml}</table>
+        <h3>LPシート要約</h3>
+        <table>
+          <tr><th>本人年齢</th><td>${ageSelf !== null ? ageSelf + '歳' : ''}</td><th>配偶者年齢</th><td>${ageSpouse !== null ? ageSpouse + '歳' : ''}</td></tr>
+          <tr><th>お子様</th><td colspan="3">${escapeHtmlForPrint(kidsSummary)}</td></tr>
+          <tr><th>必要積立額（月額）</th><td colspan="3">${monthlyTarget.toLocaleString()}円／月</td></tr>
+        </table>
       </div>
       <div class="print-section">
-        <h3>ポートフォリオ（通貨別：円建て／外貨建て）${isCoupleScope ? '｜夫婦合算' : ''}</h3>
-        ${nexusPieChartBlockHtml(pCurrencyChart)}
-        <table><tr><th>区分</th><th>金額</th></tr>${currencyRowsHtml}</table>
-        ${pInsuranceSavingsUnconvertible > 0 || pCurrencyUnconvertible > 0 ? '<p style="font-size:11px;color:#b98a3d;">※ 外貨建て契約のうち適用レート未入力のものは円換算できず、上記には含まれていません</p>' : ''}
+        <h3>ローン明細（詳細）</h3>
+        <table><tr><th>名称</th><th>借入先</th><th>借入年月日</th><th>借入当初の金額</th><th>団信</th><th>担保</th><th>連帯保証人等</th></tr>${loanDetailRows}</table>
       </div>
-      ${(() => {
-      const rc = nexusComputeRetirement(retirementInputs, ageSelf, pLiquidPortfolioTotal);
-      if (rc.yearsInRetirement === null) return '';
-      return `
       <div class="print-section">
-        <h3>老後プランニング${isCoupleScope ? '｜夫婦合算' : ''}</h3>
-        ${nexusAssetProjectionTableHtml(retirementInputs.assetProjections)}
-        <table>
-          <tr><th>老後期間</th><td>${rc.yearsInRetirement}年（${rc.retirementAge}歳〜${rc.lifeExpectancy}歳）</td><th>月あたり${rc.monthlyShortfall >= 0 ? '不足額' : '黒字額'}</th><td>${Math.abs(Math.round(rc.monthlyShortfall)).toLocaleString()}円／月</td></tr>
-          <tr><th>老後資金 必要総額</th><td>${rc.totalNeededJpy.toLocaleString()}円</td><th>${rc.hasAssetProjections ? '資産ごとの退職時の予想額 合計' : '現在の資産（自社株除く）'}</th><td>${rc.hasAssetProjections ? rc.projectedAssetsJpy.toLocaleString() : rc.currentAssetsJpy.toLocaleString()}円</td></tr>
-          ${!rc.hasAssetProjections && rc.assetReturnRate > 0 ? `<tr><th>退職時の予想資産額（年率${rc.assetReturnRate}%で運用）</th><td colspan="3">${rc.projectedAssetsJpy.toLocaleString()}円</td></tr>` : ''}
-          <tr><th>不足額（資産控除後）</th><td>${rc.shortfallAfterAssetsJpy.toLocaleString()}円</td><th>退職までに必要な毎月積立額</th><td>${rc.yearsToRetirement !== null ? rc.yearsToRetirement + '年' : ''}${rc.requiredMonthlySavings !== null ? '　→　' + rc.requiredMonthlySavings.toLocaleString() + '円／月' : ''}</td></tr>
-        </table>
-        <p style="font-size:11px;color:#666;">※ 自社株（非上場）は換金できないため対象外にしています。不動産等その他資産の流動性も考慮していない概算です</p>
-      </div>`;
-    })()}
-      ${kidsWithEducation.length === 0 ? '' : `
+        <h3>既契約一覧（本人）</h3>
+        <table class="contract-table"><colgroup><col style="width:3%"><col style="width:12%"><col style="width:12%"><col style="width:10%"><col style="width:10%"><col style="width:8%"><col style="width:9%"><col style="width:9%"><col style="width:10%"><col style="width:9%"><col style="width:8%"></colgroup><tr><th>No</th><th>目的</th><th>保険種類</th><th>保険会社</th><th>証券番号</th><th>契約日</th><th>保険期間</th><th>払込期間</th><th>保険金額（加入当初）</th><th>現在の解約返戻金</th><th>保険料</th></tr>${rowsHtml(contracts)}</table>
+        ${notesHtml(contracts)}
+      </div>
+      ${linkedCorp ? `
       <div class="print-section">
-        <h3>教育資金プランニング</h3>
-        ${kidsWithEducation.map(({
-      kid,
-      age,
-      plan,
-      rows,
-      summary
-    }) => `
-        <p style="font-size:12px;margin:6px 0 2px;"><b>${escapeHtmlForPrint(nexusChildDisplayName(kid) || '子')}${age !== null ? `（${age}歳）` : ''}</b></p>
-        <table><tr><th>費目</th><th>進学先</th><th>年齢</th><th>状況</th><th>費用（残り）</th></tr>${rows.map(r => `<tr><td>${r.label}</td><td>${escapeHtmlForPrint(r.selected)}</td><td>${r.startAge}〜${r.endAge}歳</td><td>${r.status === 'done' ? '終了' : r.status === 'ongoing' ? '進行中' : 'これから'}</td><td>${r.status === 'done' ? '—' : r.remainingCostJpy.toLocaleString() + '円'}</td></tr>`).join('')}</table>
-        ${nexusAssetProjectionTableHtml(plan.assetProjections)}
-        <p style="font-size:11px;">大学入学までに必要な準備額：<b>${summary.universityNeededJpy.toLocaleString()}円</b>　／　現在の準備額：<b>${summary.prepared.toLocaleString()}円</b>${summary.hasAssetProjections ? `　／　資産ごとの大学入学時の予想額 合計：<b>${summary.projectedPreparedJpy.toLocaleString()}円</b>` : summary.isManual ? `　／　大学入学時の予想準備額（直接入力）：<b>${summary.projectedPreparedJpy.toLocaleString()}円</b>` : summary.assetReturnRate > 0 ? `　／　大学入学時の予想準備額（年率${summary.assetReturnRate}%で運用）：<b>${summary.projectedPreparedJpy.toLocaleString()}円</b>` : ''}　／　不足額：<b>${summary.shortfallJpy.toLocaleString()}円</b>${summary.monthsToUniversity !== null && summary.monthlySavingsNeeded !== null ? `　／　大学入学（${Math.floor(summary.monthsToUniversity / 12)}年後）までの毎月積立目安：<b>${summary.monthlySavingsNeeded.toLocaleString()}円／月</b>` : ''}</p>`).join('')}
-      </div>`}
-      ${housingCalc.homePrice > 0 ? `
+        <h3>既契約一覧（関連法人：${escapeHtmlForPrint(linkedCorp.corporateName)}）</h3>
+        <table class="contract-table"><colgroup><col style="width:3%"><col style="width:12%"><col style="width:12%"><col style="width:10%"><col style="width:10%"><col style="width:8%"><col style="width:9%"><col style="width:9%"><col style="width:10%"><col style="width:9%"><col style="width:8%"></colgroup><tr><th>No</th><th>目的</th><th>保険種類</th><th>保険会社</th><th>証券番号</th><th>契約日</th><th>保険期間</th><th>払込期間</th><th>保険金額（加入当初）</th><th>現在の解約返戻金</th><th>保険料</th></tr>${rowsHtml(corpContracts)}</table>
+        ${notesHtml(corpContracts)}
+      </div>
+        ${buildPurposeRowsForPrint('保障集計（法人）', corpContracts)}
+      ` : ''}
+      ${isCoupleScope ? `
       <div class="print-section">
-        <h3>住宅資金プランニング</h3>
-        ${nexusAssetProjectionTableHtml(housingInputs.assetProjections)}
-        <table>
-          <tr><th>頭金必要額</th><td>${housingCalc.downPaymentNeededJpy.toLocaleString()}円（${housingCalc.downPaymentRatio}%）</td><th>頭金の不足額</th><td>${housingCalc.shortfallJpy.toLocaleString()}円${housingCalc.yearsToPurchase !== null ? `（購入まで${housingCalc.yearsToPurchase}年）` : ''}${housingCalc.monthlySavingsNeeded !== null ? '　→　毎月の積立目安：' + housingCalc.monthlySavingsNeeded.toLocaleString() + '円／月' : ''}</td></tr>
-          ${housingCalc.hasAssetProjections ? `<tr><th>資産ごとの購入時の予想額 合計</th><td colspan="3">${housingCalc.projectedSavedJpy.toLocaleString()}円</td></tr>` : housingCalc.isManual ? `<tr><th>購入時の予想準備額（直接入力）</th><td colspan="3">${housingCalc.projectedSavedJpy.toLocaleString()}円</td></tr>` : housingCalc.assetReturnRate > 0 ? `<tr><th>購入時の予想準備額（年率${housingCalc.assetReturnRate}%で運用）</th><td colspan="3">${housingCalc.projectedSavedJpy.toLocaleString()}円</td></tr>` : ''}
-          <tr><th>借入予定額（概算）</th><td>${housingCalc.loanAmountJpy.toLocaleString()}円</td><th>月々の返済額目安</th><td>${housingCalc.estimatedMonthlyPayment !== null ? housingCalc.estimatedMonthlyPayment.toLocaleString() + `円／月（${housingCalc.loanYears}年・年率${housingCalc.loanRate}%）` : ''}</td></tr>
-        </table>
-        <p style="font-size:11px;color:#666;">※ 既存の住宅ローンは「ローン明細」欄に別途記載しています。これから住宅購入を検討する場合のシミュレーションです</p>
-      </div>` : ''}
+        <h3>既契約一覧（配偶者：${escapeHtmlForPrint(linkedSpouseCustomer.name)}）</h3>
+        <table class="contract-table"><colgroup><col style="width:3%"><col style="width:12%"><col style="width:12%"><col style="width:10%"><col style="width:10%"><col style="width:8%"><col style="width:9%"><col style="width:9%"><col style="width:10%"><col style="width:9%"><col style="width:8%"></colgroup><tr><th>No</th><th>目的</th><th>保険種類</th><th>保険会社</th><th>証券番号</th><th>契約日</th><th>保険期間</th><th>払込期間</th><th>保険金額（加入当初）</th><th>現在の解約返戻金</th><th>保険料</th></tr>${rowsHtml(spouseContracts)}</table>
+        ${notesHtml(spouseContracts)}
+      </div>
+      ` : ''}
       <div class="print-section">
         <h3>家族構成</h3>
         <table><tr><th>お名前</th><th>続柄</th><th>年齢</th><th>既契約</th><th>メモ</th></tr>${famRows}</table>
       </div>
-      ${NEXUS_FINDING_TOPICS.map(t => nexusFindingBlockHtml(t.label, findings[t.key])).join('')}
-      ${nexusOverallFindingBlockHtml(overallFinding)}
     `;
     return anonymizeNames ? nexusAnonymizeNames(html, buildAnonymizeMap()) : html;
   };
@@ -24346,7 +24501,7 @@ function NexusPlanningSection({
     });
     ws.mergeCells(row, 1, row, legendColStart - 1 + legendColSpan * 3);
     const totalLabelCell = ws.getCell(row, 1);
-    totalLabelCell.value = '理想月間貯蓄額（4区分合計）';
+    totalLabelCell.value = '必要積立額（月額・4区分合計）';
     totalLabelCell.font = {
       bold: true
     };
@@ -24391,7 +24546,7 @@ function NexusPlanningSection({
     // LPシート要約
     row = nexusXlsxSubTitle(ws, row, 'LPシート要約', 2);
     row = nexusXlsxHeaderRow(ws, row, ['項目', '内容']);
-    row = nexusXlsxDataRows(ws, row, [['本人年齢', ageSelf !== null ? ageSelf + '歳' : ''], ['配偶者年齢', ageSpouse !== null ? ageSpouse + '歳' : ''], ['お子様', kidsSummary], ['理想月間貯蓄額（円/月）', monthlyTarget]], [2]);
+    row = nexusXlsxDataRows(ws, row, [['本人年齢', ageSelf !== null ? ageSelf + '歳' : ''], ['配偶者年齢', ageSpouse !== null ? ageSpouse + '歳' : ''], ['お子様', kidsSummary], ['必要積立額（月額・円/月）', monthlyTarget]], [2]);
     row += 2;
 
     // ローン明細（基本項目）
@@ -24433,13 +24588,13 @@ function NexusPlanningSection({
     row = nexusXlsxHeaderRow(ws, row, ['支出の費目', '金額']);
     row = nexusXlsxDataRows(ws, row, expenseItems.length ? expenseItems.map(x => [x.category, x.amount ? Number(x.amount) : '']) : [['登録なし', '']], [2]);
     row += 1;
-    row = nexusXlsxDataRows(ws, row, [['収入合計', totalIncome], ['支出合計', totalExpense], ['イベント収入', eventIncome], ['イベント支出', eventExpense], ['年間貯蓄（自動計算）', computedAnnualSavings]], [2]);
+    row = nexusXlsxDataRows(ws, row, [['収入合計', incomeItems.length ? totalIncome : '未入力'], ['支出合計', expenseItems.length ? totalExpense : '未入力'], ['イベント収入', eventIncome], ['イベント支出', eventExpense], ['年間貯蓄（自動計算）', hasBudgetInput ? computedAnnualSavings : '未入力']], [2]);
     row += 2;
 
     // 既契約一覧＋保障集計（本人／法人／配偶者）、世帯合算は保障集計のみ
     const contractHeaders = ['No', '目的', '保険種類', '保険会社', '証券番号', '契約日', '保険期間', '払込期間', '保険金額(加入当初)', '通貨', '現在の解約返戻金', '保険料', '払込方法'];
     const contractRows = list => list.map((r, i) => [i + 1, nexusContractPurposes(r).join('、'), r.type || '', r.company || '', r.policyNum || '', r.date || '', r.termNote || r.termEnd || '', r.paymentTermNote || r.paymentTermEnd || '', r.coverageAmount ? Number(r.coverageAmount) : '', r.currency || '円', r.currentSurrenderValue ? Number(r.currentSurrenderValue) : '', r.premium ? Number(r.premium) : '', r.paymentCycle || '']);
-    const addPurposeSummary = (list, insuredAge) => {
+    const addPurposeSummaryFromSummary = summary => {
       const {
         byPurpose,
         deathTotal,
@@ -24449,7 +24604,7 @@ function NexusPlanningSection({
         dailyByPurpose,
         dailyTotal,
         incomeProtectionConverted
-      } = nexusPurposeSummary(list, insuredAge);
+      } = summary;
       const purposeRows = CONTRACT_PURPOSES.filter(p => byPurpose[p] > 0).map(p => [p, byPurpose[p]]);
       row = nexusXlsxHeaderRow(ws, row, ['目的', '保険金額合計']);
       row = nexusXlsxDataRows(ws, row, purposeRows.length ? purposeRows : [['データなし', '']], [2]);
@@ -24467,6 +24622,7 @@ function NexusPlanningSection({
         row = nexusXlsxDataRows(ws, row, [['※死亡時収入保障は月額×残り月数で換算', '']], []);
       }
     };
+    const addPurposeSummary = (list, insuredAge) => addPurposeSummaryFromSummary(nexusPurposeSummary(list, insuredAge));
     const addContractBlock = (title, list, ownerName, insuredAge) => {
       row = nexusXlsxSubTitle(ws, row, title, contractHeaders.length);
       row = nexusXlsxHeaderRow(ws, row, contractHeaders);
@@ -24480,7 +24636,7 @@ function NexusPlanningSection({
     if (isCoupleScope) {
       addContractBlock(`既契約一覧・保障集計（配偶者：${linkedSpouseCustomer.name}）`, spouseContracts, linkedSpouseCustomer.name, ageSpouse);
       row = nexusXlsxSubTitle(ws, row, '保障集計（世帯合算）', 2);
-      addPurposeSummary([...nexusOwnCoverageContracts(contracts, customer.name), ...nexusOwnCoverageContracts(spouseContracts, linkedSpouseCustomer.name)]);
+      addPurposeSummaryFromSummary(nexusMergePurposeSummaries(nexusPurposeSummary(nexusOwnCoverageContracts(contracts, customer.name), ageSelf), nexusPurposeSummary(nexusOwnCoverageContracts(spouseContracts, linkedSpouseCustomer.name), ageSpouse)));
       row += 2;
     }
 
@@ -24522,13 +24678,17 @@ function NexusPlanningSection({
         row += 1;
       }
     }
-    row = nexusXlsxSubTitle(ws, row, `ポートフォリオ（資産クラス別）${scopeNote}`, 3);
+    row = nexusXlsxSubTitle(ws, row, `登録済み資産ポートフォリオ（資産クラス別）${scopeNote}`, 3);
     row = nexusXlsxHeaderRow(ws, row, ['区分', '金額', '割合']);
     row = nexusXlsxDataRows(ws, row, scopedPortfolio.assetClassChart.length ? scopedPortfolio.assetClassChart.map(i => [i.label, i.value, scopedPortfolio.portfolioTotal > 0 ? Math.round(i.value / scopedPortfolio.portfolioTotal * 100) + '%' : '']) : [['データなし', '', '']], [2]);
     row += 1;
-    row = nexusXlsxSubTitle(ws, row, `ポートフォリオ（通貨別：円建て／外貨建て）${scopeNote}`, 2);
+    row = nexusXlsxDataRows(ws, row, [['※本表はMEDiLIFE NEXUSに登録されている資産のみを集計しています。預貯金・株式・投資信託・不動産等が未入力の場合、実際の資産配分とは異なります。']], []);
+    row += 1;
+    row = nexusXlsxSubTitle(ws, row, `登録済み資産ポートフォリオ（通貨別：円建て／外貨建て）${scopeNote}`, 2);
     row = nexusXlsxHeaderRow(ws, row, ['区分', '金額']);
     row = nexusXlsxDataRows(ws, row, scopedPortfolio.currencyChart.length ? scopedPortfolio.currencyChart.map(i => [i.label, i.value]) : [['データなし', '']], [2]);
+    row += 1;
+    row = nexusXlsxDataRows(ws, row, [['※本表はMEDiLIFE NEXUSに登録されている資産のみを集計しています。預貯金・株式・投資信託・不動産等が未入力の場合、実際の資産配分とは異なります。']], []);
     row += 2;
 
     // 老後プランニング
@@ -24619,7 +24779,13 @@ function NexusPlanningSection({
     if ((overallFinding.rating || '').trim() || (overallFinding.comment || '').trim() || (overallFinding.priorities || '').trim() || (overallFinding.direction || '').trim()) {
       row = nexusXlsxSubTitle(ws, row, '総合所見', 2);
       row = nexusXlsxHeaderRow(ws, row, ['項目', '内容']);
-      nexusXlsxDataRows(ws, row, [['総合評価', overallFinding.rating || ''], ['総合所見', overallFinding.comment || ''], ['優先して確認すること', overallFinding.priorities || ''], ['今後の方向性', overallFinding.direction || '']], [2]);
+      row = nexusXlsxDataRows(ws, row, [['総合評価', overallFinding.rating || ''], ['総合所見', overallFinding.comment || ''], ['優先して確認すること', overallFinding.priorities || ''], ['今後の方向性', overallFinding.direction || '']], [2]);
+      row += 2;
+    }
+    if (actionItems.length > 0) {
+      row = nexusXlsxSubTitle(ws, row, '今後やること', 5);
+      row = nexusXlsxHeaderRow(ws, row, ['優先度', '対応内容', '期限', 'ステータス', 'メモ']);
+      row = nexusXlsxDataRows(ws, row, actionItems.map(a => [a.priority || '—', a.title || '', a.dueDate || '—', a.status || '未着手', a.memo || '']), []);
     }
     return wb;
   };
@@ -25231,7 +25397,7 @@ function NexusPlanningSection({
       fontSize: 13,
       marginTop: 4
     }
-  }, "理想月間貯蓄額（4区分合計）：", /*#__PURE__*/React.createElement("b", {
+  }, "必要積立額（月額・4区分合計）：", /*#__PURE__*/React.createElement("b", {
     style: {
       color: 'var(--accent)'
     }
@@ -25305,7 +25471,7 @@ function NexusPlanningSection({
     style: {
       color: 'var(--accent)'
     }
-  }, totalIncome.toLocaleString(), "円／年")), /*#__PURE__*/React.createElement("div", {
+  }, incomeItems.length ? totalIncome.toLocaleString() + '円／年' : '未入力')), /*#__PURE__*/React.createElement("div", {
     style: {
       fontWeight: 700,
       fontSize: 12.5,
@@ -25374,7 +25540,7 @@ function NexusPlanningSection({
     style: {
       color: 'var(--danger)'
     }
-  }, totalExpense.toLocaleString(), "円／年")), /*#__PURE__*/React.createElement("div", {
+  }, expenseItems.length ? totalExpense.toLocaleString() + '円／年' : '未入力')), /*#__PURE__*/React.createElement("div", {
     className: "form-row",
     style: {
       marginTop: 16
@@ -26133,10 +26299,16 @@ function NexusPlanningSection({
       fontSize: 12.5,
       marginBottom: 8
     }
-  }, "資産クラス別 割合"), /*#__PURE__*/React.createElement(NexusPlanningBarChart, {
+  }, "登録済み資産ポートフォリオ（資産クラス別）"), /*#__PURE__*/React.createElement(NexusPlanningBarChart, {
     items: assetClassChart,
     unit: "円"
-  })), currencyChart.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      marginTop: 6
+    }
+  }, "※MEDiLIFE NEXUSに登録されている資産のみを集計しています。未入力の資産がある場合、実際の資産配分とは異なります。")), currencyChart.length > 0 && /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -26144,10 +26316,16 @@ function NexusPlanningSection({
       fontSize: 12.5,
       marginBottom: 8
     }
-  }, "通貨別 割合（円建て／外貨建て）"), /*#__PURE__*/React.createElement(NexusPlanningBarChart, {
+  }, "登録済み資産ポートフォリオ（通貨別：円建て／外貨建て）"), /*#__PURE__*/React.createElement(NexusPlanningBarChart, {
     items: currencyChart,
     unit: "円"
-  })), /*#__PURE__*/React.createElement("div", {
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      marginTop: 6
+    }
+  }, "※MEDiLIFE NEXUSに登録されている資産のみを集計しています。未入力の資産がある場合、実際の資産配分とは異なります。")), /*#__PURE__*/React.createElement("div", {
     className: "section-header"
   }, "老後プランニング"), /*#__PURE__*/React.createElement("div", {
     className: "card"
@@ -26759,7 +26937,7 @@ function NexusPlanningSection({
       color: 'var(--text-sub)',
       textAlign: 'right'
     }
-  }, "理想月間貯蓄額"), /*#__PURE__*/React.createElement("div", {
+  }, "必要積立額（月額）"), /*#__PURE__*/React.createElement("div", {
     style: {
       flex: 1,
       background: 'var(--bg)',
@@ -26921,6 +27099,22 @@ function NexusPlanningSection({
       direction: e.target.value
     })
   }))), /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "今後やること"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--text-sub)',
+      marginBottom: 8,
+      marginTop: -4
+    }
+  }, "優先度・対応内容・期限・完了未完了を管理します。保険商品の自動提案は行いません。最終的な提案内容はFPご自身でご判断ください。"), /*#__PURE__*/React.createElement(NexusCorpItemList, {
+    title: "今後やること",
+    items: actionItems,
+    fields: actionItemFields,
+    ops: actionItemOps,
+    summaryFn: a => `${a.title || '（対応内容未入力）'}／優先度${a.priority || '—'}／${a.status || '未着手'}${a.dueDate ? '／期限' + a.dueDate : ''}`,
+    emptyText: "今後やることが登録されていません"
+  }), /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, linkedSpouseCustomer && /*#__PURE__*/React.createElement("div", {
     className: "form-group",
@@ -27057,6 +27251,18 @@ function nexusOverallFindingBlockHtml(overall) {
         ${comment ? `<p class="finding-text"><b>総合所見</b><br>${nexusMultilineHtmlForPrint(comment)}</p>` : ''}
         ${priorities ? `<p class="finding-text"><b>優先して確認すること</b><br>${nexusMultilineHtmlForPrint(priorities)}</p>` : ''}
         ${direction ? `<p class="finding-text"><b>今後の方向性</b><br>${nexusMultilineHtmlForPrint(direction)}</p>` : ''}
+      </div>`;
+}
+// 「今後やること」（優先度・対応内容・期限・完了未完了）を印刷に反映する。保険商品の自動提案は
+// 行わず、FPが入力した対応内容をそのまま一覧表示するのみ。1件も登録されていなければ非表示にする。
+function nexusActionItemsBlockHtml(actionItems) {
+  const list = actionItems || [];
+  if (list.length === 0) return '';
+  const rows = list.map(a => `<tr><td>${escapeHtmlForPrint(a.priority || '—')}</td><td>${escapeHtmlForPrint(a.title || '')}</td><td>${escapeHtmlForPrint(a.dueDate || '—')}</td><td>${escapeHtmlForPrint(a.status || '未着手')}</td><td>${escapeHtmlForPrint(a.memo || '')}</td></tr>`).join('');
+  return `
+      <div class="print-section">
+        <h3>今後やること</h3>
+        <table><tr><th>優先度</th><th>対応内容</th><th>期限</th><th>ステータス</th><th>メモ</th></tr>${rows}</table>
       </div>`;
 }
 
