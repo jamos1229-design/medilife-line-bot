@@ -457,6 +457,8 @@ const statusInfo = key => STATUSES.find(s => s.key === key) || STATUSES[0];
 const CONTACT_METHODS = ['電話', '個人LINE', 'その他'];
 // 接点＝最初にどうやって知り合ったか（対面で会ったことがない人脈も記録できるように）
 const CONTACT_CHANNELS = ['対面', 'LINE', 'Zoom', '紹介', 'その他'];
+// 流入元＝営業KPIの紹介獲得数・商談元別実績の集計に使う獲得チャネル（既存のCONTACT_CHANNELSとは別軸）
+const NEXUS_ACQUISITION_SOURCES = ['紹介', '既契約者から', 'セミナー', 'SNS', 'note', 'YouTube', 'LinkedIn', '交流会', '新規開拓', 'Web', 'その他'];
 
 // ── StatusBadge ───────────────────────────────────────────────
 const StatusBadge = ({
@@ -2847,7 +2849,11 @@ function CustomerForm({
     referredByName: '',
     // 紹介元が顧客未登録の場合の名前直接入力（referredByと併用可）
     referredTo: [], // 複数可・IDの配列
-    linkedCorpId: '' // 役員・従業員として法人契約と合わせて見るための手動連携（代表者は自動連携されるため通常はそれ以外向け）
+    linkedCorpId: '', // 役員・従業員として法人契約と合わせて見るための手動連携（代表者は自動連携されるため通常はそれ以外向け）
+    acquisitionSource: '', // 流入元（紹介／既契約者から／セミナー／SNS等）。紹介の場合の紹介者はreferredBy/referredByNameを使う
+    createdAt: '',
+    contractDiagnosisCompleted: false,
+    assetDiagnosisCompleted: false
   };
   const [form, setForm] = useState({
     ...blank,
@@ -2938,7 +2944,8 @@ function CustomerForm({
     }
     onSave({
       ...form,
-      id: form.id || uid()
+      id: form.id || uid(),
+      createdAt: form.createdAt || new Date().toISOString()
     });
     onClose();
   };
@@ -3776,7 +3783,20 @@ function CustomerForm({
     className: "section-header"
   }, "紹介管理"), /*#__PURE__*/React.createElement("div", {
     className: "card"
-  }, /*#__PURE__*/React.createElement(CustomerSelect, {
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "流入元（営業KPIの紹介獲得数の集計に使用）"), /*#__PURE__*/React.createElement("select", {
+    className: "form-select",
+    value: form.acquisitionSource || '',
+    onChange: si('acquisitionSource')
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "選択"), NEXUS_ACQUISITION_SOURCES.map(s2 => /*#__PURE__*/React.createElement("option", {
+    key: s2,
+    value: s2
+  }, s2)))), /*#__PURE__*/React.createElement(CustomerSelect, {
     label: "紹介元（誰から紹介されたか）",
     value: form.referredBy,
     onChange: v => s('referredBy')(v),
@@ -4045,6 +4065,7 @@ function CustomerSelect({
 function CustomerDetail({
   customer,
   customers,
+  onUpdateCustomer,
   onEdit,
   onDelete,
   onClose,
@@ -4055,7 +4076,9 @@ function CustomerDetail({
   tasks,
   setTasks,
   activityLogs,
-  setActivityLogs
+  setActivityLogs,
+  opportunities,
+  setOpportunities
 }) {
   const [confirmDel, setConfirmDel] = useState(false);
   const c = customer;
@@ -4264,7 +4287,32 @@ function CustomerDetail({
       marginBottom: 10
     },
     onClick: () => onOpenCorpPlanning(c.id)
-  }, "📊 法人プランニングを開く"), tasks && setTasks && /*#__PURE__*/React.createElement("div", {
+  }, "📊 法人プランニングを開く"), onUpdateCustomer && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "診断状況"), /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: `btn btn-sm ${c.contractDiagnosisCompleted ? 'btn-primary' : 'btn-outline'}`,
+    onClick: () => onUpdateCustomer({
+      contractDiagnosisCompleted: !c.contractDiagnosisCompleted
+    })
+  }, c.contractDiagnosisCompleted ? "✓ 既契約診断 実施済み" : "既契約診断 実施済みにする"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: `btn btn-sm ${c.assetDiagnosisCompleted ? 'btn-primary' : 'btn-outline'}`,
+    onClick: () => onUpdateCustomer({
+      assetDiagnosisCompleted: !c.assetDiagnosisCompleted
+    })
+  }, c.assetDiagnosisCompleted ? "✓ 資産診断 実施済み" : "資産診断 実施済みにする"))), tasks && setTasks && /*#__PURE__*/React.createElement("div", {
     style: {
       marginBottom: 10
     }
@@ -4288,7 +4336,10 @@ function CustomerDetail({
     activityLogs: activityLogs,
     setActivityLogs: setActivityLogs,
     customers: customers,
-    defaultCustomerId: c.id
+    defaultCustomerId: c.id,
+    opportunities: opportunities,
+    setOpportunities: setOpportunities,
+    setTasks: setTasks
   }))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
@@ -5526,13 +5577,65 @@ function NexusTodayCommandCenter({
     className: "card-title"
   }, "🎯 今日の最重要行動"), groupCards);
 }
+// ── 🔥今日の商談創出：新規接触/見込フォロー/紹介依頼/案件打診/アポ依頼の当日件数を見える化 ──
+function NexusTodayOpportunityCard({
+  activityLogs
+}) {
+  const c = nexusTodayOpportunityCreationCount(activityLogs, todayStr());
+  const rowStyle = {
+    display: 'flex',
+    justifyContent: 'space-between',
+    padding: '4px 0',
+    fontSize: 13
+  };
+  const row = (label, value) => /*#__PURE__*/React.createElement("div", {
+    key: label,
+    style: rowStyle
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--text-sub)'
+    }
+  }, label), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 700
+    }
+  }, value));
+  const rows = [row('新規接触', c.newContact), row('見込フォロー', c.leadFollowUp), row('紹介依頼', c.referralRequest), row('案件打診', c.opportunityPitch), row('アポ依頼', c.apptRequest)];
+  const summary = c.total === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      color: 'var(--text-sub)'
+    }
+  }, "今日はまだ商談を生む行動をしていません") : /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 14,
+      fontWeight: 700,
+      color: 'var(--accent)'
+    }
+  }, "本日", c.total, "件の商談創出行動");
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card-title"
+  }, "🔥 今日の商談創出"), summary, /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 6
+    }
+  }, rows));
+}
 // ── 営業活動履歴の追加・編集・削除フォーム（.overlay/.drawerパターン） ──
 function NexusActivityForm({
   editing,
   onSave,
   onDelete,
   onClose,
-  customers
+  customers,
+  opportunities,
+  setOpportunities,
+  setTasks
 }) {
   const nowIso = new Date().toISOString();
   const blank = {
@@ -5543,7 +5646,12 @@ function NexusActivityForm({
     dealId: '',
     occurredAt: nowIso,
     memo: '',
+    firstBusinessContact: false,
+    marketSource: '',
+    relatedOpportunityId: '',
     nextAction: '',
+    nextActionDate: '',
+    createTask: false,
     expectedRevenue: '',
     linkedTaskId: '',
     createdAt: '',
@@ -5554,6 +5662,7 @@ function NexusActivityForm({
     ...blank,
     ...(editing || {})
   });
+  const [overrideMarketSource, setOverrideMarketSource] = useState(false);
   const s = k => v => setForm(f => ({
     ...f,
     [k]: v
@@ -5563,12 +5672,82 @@ function NexusActivityForm({
   const timeVal = (form.occurredAt || nowIso).slice(11, 16);
   const setDate = d => s('occurredAt')(`${d}T${timeVal}`);
   const setTime = t => s('occurredAt')(`${dateVal}T${t}`);
+  // 商談元（マーケット）：アポ確定/商談/提案/成約は必須、案件打診/アポ依頼は任意で入力できる。
+  // 同一顧客のopen案件が既にあれば、その商談元を自動引き継ぎして聞き直さない。
+  const marketSourceRequired = NEXUS_ACTIVITY_MARKET_SOURCE_REQUIRED.includes(form.type);
+  const showMarketSource = marketSourceRequired || NEXUS_ACTIVITY_MARKET_SOURCE_OPTIONAL.includes(form.type);
+  const linkedOpenOpportunity = showMarketSource ? (opportunities || []).find(o => o.status === 'open' && (form.customerId && o.customerId === form.customerId || !form.customerId && form.customerNameText && o.customerNameText === form.customerNameText)) : null;
+  React.useEffect(() => {
+    if (!linkedOpenOpportunity || form.marketSource || overrideMarketSource) return;
+    setForm(f => ({
+      ...f,
+      marketSource: linkedOpenOpportunity.marketSource,
+      relatedOpportunityId: linkedOpenOpportunity.id
+    }));
+  }, [linkedOpenOpportunity && linkedOpenOpportunity.id]);
   const save = () => {
     if (!form.type) return;
+    if (marketSourceRequired && !form.marketSource) return;
     const now = new Date().toISOString();
+    const logId = form.id || uid();
+    let patch = {};
+    if (showMarketSource) {
+      const resolved = nexusResolveOpportunity(opportunities, {
+        customerId: form.customerId,
+        customerNameText: form.customerNameText,
+        marketSource: form.marketSource,
+        stage: form.type,
+        expectedRevenue: form.expectedRevenue
+      });
+      setOpportunities(resolved.opportunities);
+      patch = {
+        marketSource: resolved.marketSource,
+        relatedOpportunityId: resolved.opportunityId
+      };
+    }
+    // 「次のアクション」を既存のタスク（営業ToDo）ストアと同じ形で1件作成し、活動側にlinkedTaskIdで紐づける
+    if (form.createTask && form.nextAction && setTasks) {
+      const taskId = uid();
+      setTasks(prev => [...prev, {
+        id: taskId,
+        source: 'salesTodo',
+        title: `${form.nextAction}（${nexusActivityTypeLabel(form.type)}のフォロー）`,
+        customerId: form.customerId,
+        dealId: '',
+        date: form.nextActionDate || '',
+        startAt: '',
+        endAt: '',
+        status: '未着手',
+        salesRank: 'B',
+        salesSubType: '',
+        revenueImpact: 0,
+        expectedRevenue: '',
+        nextAction: '',
+        calendarSync: false,
+        activityType: '',
+        memo: form.customerNameText || '',
+        completed: false,
+        importance: 0,
+        urgency: 0,
+        clientId: '',
+        rowType: 'work',
+        axis: '',
+        recurrence: 'none',
+        steps: [],
+        completedAt: '',
+        createdAt: now,
+        updatedAt: now
+      }]);
+      patch.linkedTaskId = taskId;
+    }
+    const {
+      createTask,
+      ...formToSave
+    } = form;
     onSave({
-      ...form,
-      id: form.id || uid(),
+      ...formToSave,
+      ...patch,
+      id: logId,
       createdAt: form.createdAt || now,
       updatedAt: now
     });
@@ -5603,6 +5782,37 @@ function NexusActivityForm({
     value: form.expectedRevenue,
     onChange: si('expectedRevenue')
   }));
+  const marketSourceField = showMarketSource && /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "商談元", marketSourceRequired ? "（必須）" : "（任意）"), linkedOpenOpportunity && !overrideMarketSource ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      fontSize: 13.5
+    }
+  }, /*#__PURE__*/React.createElement("span", null, form.marketSource || linkedOpenOpportunity.marketSource, "（自動引き継ぎ）"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setOverrideMarketSource(true),
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--accent)',
+      fontSize: 12.5,
+      cursor: 'pointer'
+    }
+  }, "変更")) : /*#__PURE__*/React.createElement("select", {
+    className: "form-select",
+    value: form.marketSource || '',
+    onChange: si('marketSource')
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "選択"), NEXUS_MARKET_SOURCES.map(ms => /*#__PURE__*/React.createElement("option", {
+    key: ms,
+    value: ms
+  }, ms))));
   const typeHint = form.type && NEXUS_ACTIVITY_TYPE_GUIDE[form.type] && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11.5,
@@ -5634,7 +5844,20 @@ function NexusActivityForm({
     className: "form-label"
   }, "🔥 売上・商談を作る"), salesTypeRow, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "🤝 お客様対応"), customerTypeRow), /*#__PURE__*/React.createElement("div", {
+  }, "🤝 お客様対応"), customerTypeRow, form.type && form.type !== 'new_contact' && /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      marginTop: 4,
+      fontSize: 13,
+      cursor: 'pointer'
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: !!form.firstBusinessContact,
+    onChange: e => s('firstBusinessContact')(e.target.checked)
+  }), "今回が、この相手との初めての営業上の接点でしたか？")), /*#__PURE__*/React.createElement("div", {
     className: "form-row"
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
@@ -5676,7 +5899,7 @@ function NexusActivityForm({
       customerNameText: e.target.value,
       customerId: e.target.value ? '' : f.customerId
     }))
-  })), revenueField, typeHint, /*#__PURE__*/React.createElement("div", {
+  })), revenueField, marketSourceField, typeHint, /*#__PURE__*/React.createElement("div", {
     className: "form-group"
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
@@ -5688,12 +5911,40 @@ function NexusActivityForm({
     className: "form-group"
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "次のアクション（任意）"), /*#__PURE__*/React.createElement("input", {
-    className: "form-input",
-    value: form.nextAction,
-    placeholder: "例：返事がなければ1週間後にフォロー",
+  }, "次のアクション（任意）"), /*#__PURE__*/React.createElement("select", {
+    className: "form-select",
+    value: form.nextAction || '',
     onChange: si('nextAction')
-  })), linkedTaskNote, /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "選択"), NEXUS_NEXT_ACTION_OPTIONS.map(o => /*#__PURE__*/React.createElement("option", {
+    key: o,
+    value: o
+  }, o))), form.nextAction && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "期限"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    type: "date",
+    value: form.nextActionDate || '',
+    onChange: si('nextActionDate')
+  })), form.nextAction && setTasks && /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      marginTop: 8,
+      fontSize: 13,
+      cursor: 'pointer'
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: !!form.createTask,
+    onChange: e => s('createTask')(e.target.checked)
+  }), "この内容でタスク（営業ToDo）を作成する")), linkedTaskNote, /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       gap: 8
@@ -5704,7 +5955,7 @@ function NexusActivityForm({
   }, "キャンセル"), /*#__PURE__*/React.createElement("button", {
     className: "btn btn-primary btn-full",
     onClick: save,
-    disabled: !form.type
+    disabled: !form.type || marketSourceRequired && !form.marketSource
   }, "保存")), deleteBtn);
 }
 // ── 営業活動1分類の説明ボトムシート（ⓘタップで表示。意味／具体例／間違えやすい分類との違い） ──
@@ -5828,7 +6079,10 @@ function NexusActivityHistoryList({
   customers,
   limit,
   onOpenCustomer,
-  defaultCustomerId
+  defaultCustomerId,
+  opportunities,
+  setOpportunities,
+  setTasks
 }) {
   const [editingLog, setEditingLog] = useState(null);
   const filtered = defaultCustomerId ? nexusActiveLogs(activityLogs).filter(a => a.customerId === defaultCustomerId) : nexusActiveLogs(activityLogs);
@@ -5899,7 +6153,10 @@ function NexusActivityHistoryList({
     customers: customers,
     onSave: saveLog,
     onDelete: deleteLog,
-    onClose: () => setEditingLog(null)
+    onClose: () => setEditingLog(null),
+    opportunities: opportunities,
+    setOpportunities: setOpportunities,
+    setTasks: setTasks
   })));
   return /*#__PURE__*/React.createElement("div", null, rows, editDrawer);
 }
@@ -5908,7 +6165,10 @@ function NexusActivityHistoryScreen({
   activityLogs,
   setActivityLogs,
   customers,
-  onClose
+  onClose,
+  opportunities,
+  setOpportunities,
+  setTasks
 }) {
   const active = nexusActiveLogs(activityLogs).sort((a, b) => (b.occurredAt || '').localeCompare(a.occurredAt || ''));
   const byDate = {};
@@ -5934,7 +6194,10 @@ function NexusActivityHistoryScreen({
   }, /*#__PURE__*/React.createElement(NexusActivityHistoryList, {
     activityLogs: byDate[d],
     setActivityLogs: setActivityLogs,
-    customers: customers
+    customers: customers,
+    opportunities: opportunities,
+    setOpportunities: setOpportunities,
+    setTasks: setTasks
   }))));
   return /*#__PURE__*/React.createElement("div", {
     className: "full-screen"
@@ -5975,7 +6238,9 @@ function NexusQuickActivityPanel({
   setActivityLogs,
   customers,
   tasks,
-  setTasks
+  setTasks,
+  opportunities,
+  setOpportunities
 }) {
   const [busy, setBusy] = useState(false);
   const [justAdded, setJustAdded] = useState(null); // {id, label}
@@ -5984,6 +6249,7 @@ function NexusQuickActivityPanel({
   const [editingLog, setEditingLog] = useState(null);
   const [guideType, setGuideType] = useState(null);
   const [showAllGuide, setShowAllGuide] = useState(false);
+  const [marketSourcePromptOpen, setMarketSourcePromptOpen] = useState(false);
   const add = typeKey => {
     if (busy) return;
     const active = nexusActiveLogs(activityLogs);
@@ -5999,6 +6265,9 @@ function NexusQuickActivityPanel({
       dealId: '',
       occurredAt: now,
       memo: '',
+      firstBusinessContact: false,
+      marketSource: '',
+      relatedOpportunityId: '',
       expectedRevenue: '',
       linkedTaskId: '',
       createdAt: now,
@@ -6063,7 +6332,14 @@ function NexusQuickActivityPanel({
     setDealPrompt(null);
   };
   const saveEditedLog = a => {
-    setActivityLogs(prev => prev.map(x => x.id === a.id ? a : x));
+    // editingLogは既存の活動を編集する場合と、アポ確定/商談/提案/成約ボタンから新規作成する場合の
+    // 両方で使われるため、既存IDが無ければ新規追加、あれば更新する（安全なupsert）。
+    const isNew = !activityLogs.some(x => x.id === a.id);
+    setActivityLogs(prev => {
+      const idx = prev.findIndex(x => x.id === a.id);
+      return idx >= 0 ? prev.map((x, i) => i === idx ? a : x) : [a, ...prev];
+    });
+    if (isNew && a.type === 'deal') setDealPrompt(a.id);
     setEditingLog(null);
   };
   const deleteLog = id => {
@@ -6073,9 +6349,14 @@ function NexusQuickActivityPanel({
     } : x));
     setEditingLog(null);
   };
-  const salesTypes = NEXUS_ACTIVITY_TYPES.filter(t => t.category === 'sales');
+  // 新規接触は他の主活動と同時カウントするフラグ方式に変更したため、ホームのクイックボタンからは外す
+  // （NEXUS_ACTIVITY_TYPES自体からは削除しない＝過去データのラベル解決・全ガイド一覧は従来通り）
+  const salesTypes = NEXUS_ACTIVITY_TYPES.filter(t => t.category === 'sales' && t.key !== 'new_contact');
   const customerTypes = NEXUS_ACTIVITY_TYPES.filter(t => t.category === 'customer');
   const activityBtn = t => {
+    // アポ確定・商談・提案・成約は商談元の入力が必要なため、即時1タップ登録ではなく登録フォームを開く
+    // （customerIdが決まっていないと商談元の自動引き継ぎ判定ができないため）。
+    const needsForm = NEXUS_ACTIVITY_MARKET_SOURCE_REQUIRED.includes(t.key);
     const mainBtn = /*#__PURE__*/React.createElement("button", {
       key: "btn",
       type: "button",
@@ -6085,7 +6366,9 @@ function NexusQuickActivityPanel({
         flex: 1,
         minWidth: 0
       },
-      onClick: () => add(t.key)
+      onClick: () => needsForm ? setEditingLog({
+        type: t.key
+      }) : add(t.key)
     }, "＋", t.label);
     if (t.category !== 'sales') {
       return /*#__PURE__*/React.createElement("div", {
@@ -6137,6 +6420,72 @@ function NexusQuickActivityPanel({
   }, customerTypes.map(activityBtn));
   const isPreferCustomerType = justAdded && (activityLogs.find(a => a.id === justAdded.id) || {}).type;
   const showBigCustomerLink = isPreferCustomerType && NEXUS_ACTIVITY_TYPES_PREFER_CUSTOMER.includes(isPreferCustomerType);
+  const justAddedLog = justAdded && activityLogs.find(a => a.id === justAdded.id);
+  const markFirstContact = () => {
+    if (!justAdded) return;
+    setActivityLogs(prev => prev.map(a => a.id === justAdded.id ? {
+      ...a,
+      firstBusinessContact: true,
+      updatedAt: new Date().toISOString()
+    } : a));
+  };
+  const firstContactChip = justAddedLog && (justAddedLog.firstBusinessContact ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text-sub)',
+      marginTop: 6
+    }
+  }, "✓ 初めての営業接点として記録しました") : /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: markFirstContact,
+    className: "btn btn-outline btn-sm",
+    style: {
+      marginTop: 8,
+      fontSize: 12
+    }
+  }, "初めての営業接点でしたか？"));
+  const setMarketSourceForJustAdded = source => {
+    if (!justAddedLog) return;
+    const result = nexusResolveOpportunity(opportunities, {
+      customerId: justAddedLog.customerId,
+      customerNameText: justAddedLog.customerNameText,
+      marketSource: source,
+      stage: justAddedLog.type
+    });
+    setOpportunities(result.opportunities);
+    setActivityLogs(prev => prev.map(a => a.id === justAddedLog.id ? {
+      ...a,
+      marketSource: result.marketSource,
+      relatedOpportunityId: result.opportunityId,
+      updatedAt: new Date().toISOString()
+    } : a));
+    setMarketSourcePromptOpen(false);
+  };
+  const marketSourceChip = justAddedLog && NEXUS_ACTIVITY_MARKET_SOURCE_OPTIONAL.includes(justAddedLog.type) && !justAddedLog.marketSource && (marketSourcePromptOpen ? /*#__PURE__*/React.createElement("select", {
+    className: "form-select",
+    style: {
+      marginTop: 8,
+      fontSize: 12.5
+    },
+    value: "",
+    onChange: e => {
+      if (e.target.value) setMarketSourceForJustAdded(e.target.value);
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "商談元を選択"), NEXUS_MARKET_SOURCES.map(ms => /*#__PURE__*/React.createElement("option", {
+    key: ms,
+    value: ms
+  }, ms))) : /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setMarketSourcePromptOpen(true),
+    className: "btn btn-outline btn-sm",
+    style: {
+      marginTop: 8,
+      marginLeft: 6,
+      fontSize: 12
+    }
+  }, "📍 商談元を設定"));
   const toast = justAdded && /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 10,
@@ -6178,7 +6527,7 @@ function NexusQuickActivityPanel({
       padding: '6px 0 0',
       display: 'block'
     }
-  }, "顧客を紐づける"));
+  }, "顧客を紐づける"), firstContactChip, marketSourceChip);
   const dealPromptCard = dealPrompt && !showApptForm && /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 10,
@@ -6224,7 +6573,10 @@ function NexusQuickActivityPanel({
     activityLogs: activityLogs,
     setActivityLogs: setActivityLogs,
     customers: customers,
-    limit: 5
+    limit: 5,
+    opportunities: opportunities,
+    setOpportunities: setOpportunities,
+    setTasks: setTasks
   });
   const [showHistory, setShowHistory] = useState(false);
   const editDrawer = editingLog && /*#__PURE__*/React.createElement("div", {
@@ -6242,13 +6594,19 @@ function NexusQuickActivityPanel({
     customers: customers,
     onSave: saveEditedLog,
     onDelete: deleteLog,
-    onClose: () => setEditingLog(null)
+    onClose: () => setEditingLog(null),
+    opportunities: opportunities,
+    setOpportunities: setOpportunities,
+    setTasks: setTasks
   })));
   const historyScreen = showHistory && /*#__PURE__*/React.createElement(NexusActivityHistoryScreen, {
     activityLogs: activityLogs,
     setActivityLogs: setActivityLogs,
     customers: customers,
-    onClose: () => setShowHistory(false)
+    onClose: () => setShowHistory(false),
+    opportunities: opportunities,
+    setOpportunities: setOpportunities,
+    setTasks: setTasks
   });
   const salesCardTitle = /*#__PURE__*/React.createElement("div", {
     style: {
@@ -6423,7 +6781,9 @@ const NEXUS_KPI_PERIODS = ['今日', '今週', '今月'];
 function NexusSalesKpiCard({
   activityLogs,
   tasks,
-  sales
+  sales,
+  customers,
+  onOpenAIAnalysis
 }) {
   const [period, setPeriod] = useState('今日');
   const today = todayStr();
@@ -6436,6 +6796,7 @@ function NexusSalesKpiCard({
     end: today
   };
   const kpi = nexusActivityKpi(activityLogs, range.start, range.end);
+  const referralAcquired = nexusReferralAcquiredCount(customers, range.start, range.end);
   const pipelineExpectedRevenue = (tasks || []).filter(t => !t.completed && t.salesRank && t.expectedRevenue).reduce((s, t) => s + (Number(t.expectedRevenue) || 0), 0);
   const target = Number((sales || {}).target) || 0;
   const current = Number((sales || {}).current) || 0;
@@ -6462,10 +6823,66 @@ function NexusSalesKpiCard({
     className: "stat-label"
   }, label));
   // 特に重視したい「新規接触→アポ確定→商談」を強調表示する
-  const tiles = [tile('新規接触数', kpi.newContact, true), tile('見込フォロー数', kpi.leadFollowUp), tile('紹介依頼数', kpi.referralRequest), tile('案件打診数', kpi.opportunityPitch), tile('アポ依頼数', kpi.apptRequest), tile('アポ確定数', kpi.apptConfirmed, true), tile('商談数', kpi.deal, true), tile('提案数', kpi.proposal), tile('成約数', kpi.close), tile('成約率', kpi.closeRate === null ? '—' : `${Math.round(kpi.closeRate * 100)}%`)];
+  const tiles = [tile('新規接触数', kpi.newContact, true), tile('見込フォロー数', kpi.leadFollowUp), tile('紹介依頼数', kpi.referralRequest), tile('紹介獲得数', referralAcquired), tile('案件打診数', kpi.opportunityPitch), tile('アポ依頼数', kpi.apptRequest), tile('アポ確定数', kpi.apptConfirmed, true), tile('商談数', kpi.deal, true), tile('提案数', kpi.proposal), tile('成約数', kpi.close), tile('成約率', kpi.closeRate === null ? '—' : `${Math.round(kpi.closeRate * 100)}%`)];
   const statGrid = /*#__PURE__*/React.createElement("div", {
     className: "stat-grid"
   }, tiles);
+  const fmtRate = r => r === null ? '—' : `${Math.round(r * 100)}%`;
+  const rateTiles = [tile('アポ獲得率', fmtRate(nexusFunnelRate(kpi.apptConfirmed, kpi.apptRequest))), tile('商談実施率', fmtRate(nexusFunnelRate(kpi.deal, kpi.apptConfirmed))), tile('提案率', fmtRate(nexusFunnelRate(kpi.proposal, kpi.deal))), tile('成約率', fmtRate(kpi.closeRate)), tile('紹介獲得率', fmtRate(nexusFunnelRate(referralAcquired, kpi.referralRequest)))];
+  const rateGrid = /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: 'var(--text-sub)',
+      margin: '12px 0 8px'
+    }
+  }, "営業ファネル率"), /*#__PURE__*/React.createElement("div", {
+    className: "stat-grid"
+  }, rateTiles));
+  const marketSourceRows = period === '今月' ? nexusMarketSourceBreakdown(activityLogs, range.start, range.end) : [];
+  const marketSourceCard = period === '今月' && marketSourceRows.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: 'var(--text-sub)',
+      marginBottom: 8
+    }
+  }, "商談元別実績（今月）"), marketSourceRows.map(r => /*#__PURE__*/React.createElement("div", {
+    key: r.marketSource,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      padding: '8px 0',
+      borderBottom: '1px solid var(--border)',
+      fontSize: 12.5
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 700,
+      flexShrink: 0,
+      width: 88
+    }
+  }, r.marketSource), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--text-sub)',
+      flex: 1
+    }
+  }, "商談", r.deal, "／提案", r.proposal, "／成約", r.close), /*#__PURE__*/React.createElement("span", {
+    style: {
+      textAlign: 'right',
+      flexShrink: 0
+    }
+  }, r.confirmedRevenue.toLocaleString(), "円", r.revenuePerDeal !== null && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)'
+    }
+  }, "1商談あたり", r.revenuePerDeal.toLocaleString(), "円")))));
   const salesRow = /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
@@ -6476,11 +6893,230 @@ function NexusSalesKpiCard({
       color: 'var(--text-sub)'
     }
   }, /*#__PURE__*/React.createElement("span", null, "見込み売上（オープン案件）：", pipelineExpectedRevenue.toLocaleString(), "円"), target > 0 && /*#__PURE__*/React.createElement("span", null, "／確定売上：", current.toLocaleString(), "円／目標：", target.toLocaleString(), "円／残り：", remaining.toLocaleString(), "円"));
+  const aiAnalysisBtn = onOpenAIAnalysis && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: {
+      marginTop: 10
+    },
+    onClick: onOpenAIAnalysis
+  }, "🤖 AI分析用データ");
   return /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "card-title"
-  }, "📊 営業KPI"), periodChips, statGrid, salesRow);
+  }, "📊 営業KPI"), periodChips, statGrid, rateGrid, marketSourceCard, salesRow, aiAnalysisBtn);
+}
+
+// ── AI分析用データ（匿名化エクスポート）画面（改修11）。
+// 期間選択→匿名化データ作成→プレビュー（必ず目視確認）→コピー／ダウンロードの順で進む。
+// ボタンを押しただけで外部AIへ自動送信することは一切しない（コピー・ダウンロードのみ）。
+function NexusAIAnalysisScreen({
+  customers,
+  activityLogs,
+  opportunities,
+  tasks,
+  sales,
+  onClose
+}) {
+  const AI_PERIODS = ['今日', '今週', '今月', '過去30日', '過去90日', '期間指定'];
+  const today = todayStr();
+  const [period, setPeriod] = useState('今月');
+  const [customStart, setCustomStart] = useState(today.slice(0, 7) + '-01');
+  const [customEnd, setCustomEnd] = useState(today);
+  const [includeMemo, setIncludeMemo] = useState(false);
+  const [data, setData] = useState(null);
+  const [previewMode, setPreviewMode] = useState('md');
+  const [toast, setToast] = useState('');
+  const showToast = msg => {
+    setToast(msg);
+    setTimeout(() => setToast(''), 3000);
+  };
+  const daysAgo = n => {
+    const d = new Date();
+    d.setDate(d.getDate() - n);
+    return nexusFmtYmd(d);
+  };
+  const range = period === '今日' ? { start: today, end: today } : period === '今週' ? nexusWeekRange(today) : period === '今月' ? { start: today.slice(0, 7) + '-01', end: today } : period === '過去30日' ? { start: daysAgo(29), end: today } : period === '過去90日' ? { start: daysAgo(89), end: today } : { start: customStart, end: customEnd };
+  const generate = () => {
+    const pipelineExpectedRevenue = (tasks || []).filter(t => !t.completed && t.salesRank && t.expectedRevenue).reduce((s, t) => s + (Number(t.expectedRevenue) || 0), 0);
+    const result = createAnonymizedAnalyticsData({
+      customers,
+      activityLogs,
+      opportunities,
+      periodStart: range.start,
+      periodEnd: range.end,
+      includeMemo,
+      sales: {
+        target: Number((sales || {}).target) || 0,
+        confirmed: Number((sales || {}).current) || 0,
+        expected: pipelineExpectedRevenue
+      },
+      today
+    });
+    setData(result);
+    setPreviewMode('md');
+  };
+  const copyText = (text, msg) => {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(() => showToast(msg));
+    } else {
+      const el = document.createElement('textarea');
+      el.value = text;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand('copy');
+      document.body.removeChild(el);
+      showToast(msg);
+    }
+  };
+  const downloadFile = (filename, content, mime) => {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+  const periodChips = /*#__PURE__*/React.createElement("div", {
+    className: "filter-chips",
+    style: { marginBottom: 10, flexWrap: 'wrap' }
+  }, AI_PERIODS.map(p => /*#__PURE__*/React.createElement("button", {
+    key: p,
+    className: `chip ${period === p ? 'active' : ''}`,
+    onClick: () => setPeriod(p)
+  }, p)));
+  const customRangeRow = period === '期間指定' && /*#__PURE__*/React.createElement("div", {
+    style: { display: 'flex', gap: 8, marginBottom: 10 }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    className: "form-input",
+    value: customStart,
+    onChange: e => setCustomStart(e.target.value)
+  }), /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    className: "form-input",
+    value: customEnd,
+    onChange: e => setCustomEnd(e.target.value)
+  }));
+  const memoToggleRow = /*#__PURE__*/React.createElement("label", {
+    style: { display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: includeMemo,
+    onChange: e => setIncludeMemo(e.target.checked)
+  }), "匿名化したメモも含める（氏名・電話番号・メールアドレス等は自動でマスクされます）");
+  const selectCard = /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: { marginBottom: 10 }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card-title"
+  }, "分析期間"), periodChips, customRangeRow, memoToggleRow, /*#__PURE__*/React.createElement("div", {
+    style: { fontSize: 11.5, color: 'var(--text-sub)', margin: '10px 0' }
+  }, "💡 氏名・電話番号・メールアドレス・住所・生年月日・証券番号などの個人情報は一切出力されません。ボタンを押しただけで外部（ChatGPT/Claude/Geminiなど）へ送信されることはありません。次の画面で内容を確認してからコピーしてください。"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-full",
+    onClick: generate
+  }, "匿名化データを作成"));
+  const selectScreen = !data && /*#__PURE__*/React.createElement("div", {
+    className: "full-content"
+  }, selectCard);
+  const previewModeChips = /*#__PURE__*/React.createElement("div", {
+    className: "filter-chips",
+    style: { marginBottom: 10 }
+  }, [['md', 'Markdown'], ['json', 'JSON']].map(([key, label]) => /*#__PURE__*/React.createElement("button", {
+    key: key,
+    className: `chip ${previewMode === key ? 'active' : ''}`,
+    onClick: () => setPreviewMode(key)
+  }, label)));
+  const previewText = data ? (previewMode === 'md' ? generateAIAnalysisMarkdown(data) : generateAIAnalysisJSON(data)) : '';
+  const previewBox = /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: { marginBottom: 10 }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: { fontSize: 12.5, fontWeight: 700, color: 'var(--warning)', marginBottom: 8 }
+  }, "⚠️ AIへ渡す内容を確認してください（氏名・電話番号・住所などが含まれていないこと）"), previewModeChips, /*#__PURE__*/React.createElement("pre", {
+    style: {
+      whiteSpace: 'pre-wrap',
+      wordBreak: 'break-word',
+      fontSize: 11.5,
+      lineHeight: 1.6,
+      background: 'var(--bg)',
+      border: '1px solid var(--border)',
+      borderRadius: 10,
+      padding: 10,
+      maxHeight: 360,
+      overflowY: 'auto'
+    }
+  }, previewText));
+  const actionBtnStyle = { width: '100%', padding: '12px 14px', borderRadius: 10, border: '1.5px solid var(--accent)', background: '#fff', fontSize: 14, fontWeight: 700, color: 'var(--accent)', cursor: 'pointer', textAlign: 'left' };
+  const actionButtons = data && /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: { display: 'flex', flexDirection: 'column', gap: 8 }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    style: actionBtnStyle,
+    onClick: () => copyText(generateAIAnalysisMarkdown(data), '📋 Markdownをコピーしました！ChatGPT/Claude/Geminiに貼り付けてください')
+  }, "📋 Markdownをコピー"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    style: actionBtnStyle,
+    onClick: () => copyText(generateAIAnalysisJSON(data), '📋 JSONをコピーしました')
+  }, "📋 JSONをコピー"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    style: actionBtnStyle,
+    onClick: () => copyText(generateAIAnalysisPrompt(data), '📋 分析プロンプトをコピーしました！この下にMarkdownを貼り付けて使ってください')
+  }, "📋 分析プロンプトをコピー"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    style: actionBtnStyle,
+    onClick: () => downloadFile(`nexus_ai分析データ_${range.start}_${range.end}.md`, generateAIAnalysisMarkdown(data), 'text/markdown')
+  }, "⬇️ Markdownをダウンロード"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    style: actionBtnStyle,
+    onClick: () => downloadFile(`nexus_ai分析データ_${range.start}_${range.end}.json`, generateAIAnalysisJSON(data), 'application/json')
+  }, "⬇️ JSONをダウンロード"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    onClick: () => setData(null)
+  }, "← 期間選択に戻る"));
+  const previewScreen = data && /*#__PURE__*/React.createElement("div", {
+    className: "full-content"
+  }, previewBox, actionButtons);
+  const headerTitle = /*#__PURE__*/React.createElement("div", {
+    style: { flex: 1, fontSize: 16, fontWeight: 700 }
+  }, data ? 'プレビュー（AIへ渡す内容を確認）' : 'AI分析用データ');
+  const backBtn = /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    style: {
+      background: 'none',
+      border: 'none',
+      cursor: 'pointer',
+      fontSize: 15,
+      color: 'var(--text-sub)',
+      fontWeight: 600,
+      padding: '4px 8px'
+    }
+  }, "← 戻る");
+  const header = /*#__PURE__*/React.createElement("div", {
+    className: "full-header"
+  }, backBtn, headerTitle);
+  const toastEl = toast && /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: 'fixed',
+      bottom: 20,
+      left: '50%',
+      transform: 'translateX(-50%)',
+      background: '#111',
+      color: '#fff',
+      padding: '10px 18px',
+      borderRadius: 20,
+      fontSize: 13,
+      zIndex: 100
+    }
+  }, toast);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "full-screen"
+  }, header, selectScreen, previewScreen, toastEl);
 }
 
 // ── Tab: Dashboard ────────────────────────────────────────────
@@ -6494,7 +7130,9 @@ function DashboardTab({
   setTasks,
   sales,
   activityLogs,
-  setActivityLogs
+  setActivityLogs,
+  opportunities,
+  setOpportunities
 }) {
   const total = customers.length;
   const lineCount = customers.filter(c => c.lineRegistered).length;
@@ -6503,7 +7141,118 @@ function DashboardTab({
   const apptThisMonth = customers.filter(c => c.nextAppt && c.nextAppt.startsWith(thisMonth)).length;
   const noContact = customers.filter(c => !c.status || c.status === '未接触').length;
   const [showKpi, setShowKpi] = useState(false);
+  const [showAIAnalysis, setShowAIAnalysis] = useState(false);
   const today = todayStr();
+  const insightBuckets = nexusCustomerInsightBuckets(customers, today);
+  const [insightListKey, setInsightListKey] = useState(null);
+  const insightRows = [{
+    key: 'stale180',
+    label: '180日以上未接触',
+    list: insightBuckets.stale180
+  }, {
+    key: 'notFollowedThisYear',
+    label: '今年未フォロー',
+    list: insightBuckets.notFollowedThisYear
+  }, {
+    key: 'noNextAppt',
+    label: '次回予定なし',
+    list: insightBuckets.noNextAppt
+  }, {
+    key: 'contractDiagnosisPending',
+    label: '既契約診断 未実施',
+    list: insightBuckets.contractDiagnosisPending
+  }, {
+    key: 'assetDiagnosisPending',
+    label: '資産診断 未実施',
+    list: insightBuckets.assetDiagnosisPending
+  }];
+  const insightRowBtn = r => /*#__PURE__*/React.createElement("button", {
+    key: r.key,
+    type: "button",
+    onClick: () => setInsightListKey(r.key),
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      width: '100%',
+      padding: '8px 0',
+      border: 'none',
+      borderBottom: '1px solid var(--border)',
+      background: 'none',
+      cursor: 'pointer',
+      fontSize: 13,
+      color: 'var(--text)'
+    }
+  }, /*#__PURE__*/React.createElement("span", null, r.label), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 700,
+      color: r.list.length > 0 ? 'var(--warning)' : 'var(--text-sub)'
+    }
+  }, r.list.length, "人 ›"));
+  const insightCardTitle = /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "顧客インサイト");
+  const insightCard = /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginTop: 12
+    }
+  }, insightCardTitle, insightRows.map(insightRowBtn));
+  const activeInsightRow = insightRows.find(r => r.key === insightListKey);
+  const insightBackBtn = /*#__PURE__*/React.createElement("button", {
+    onClick: () => setInsightListKey(null),
+    style: {
+      background: 'none',
+      border: 'none',
+      cursor: 'pointer',
+      fontSize: 15,
+      color: 'var(--text-sub)',
+      fontWeight: 600
+    }
+  }, "← 戻る");
+  const insightHeaderTitle = activeInsightRow && /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      fontSize: 16,
+      fontWeight: 700
+    }
+  }, activeInsightRow.label);
+  const insightHeader = activeInsightRow && /*#__PURE__*/React.createElement("div", {
+    className: "full-header"
+  }, insightBackBtn, insightHeaderTitle);
+  const insightCustomerRow = c => /*#__PURE__*/React.createElement("div", {
+    key: c.id,
+    className: "card",
+    style: {
+      marginBottom: 8,
+      cursor: 'pointer'
+    },
+    onClick: () => {
+      setInsightListKey(null);
+      onNavigate('customers', c);
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700
+    }
+  }, nexusDisplayName(c)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text-sub)'
+    }
+  }, c.lastContact ? `最終接触：${c.lastContact}` : '最終接触：未記録'));
+  const insightListBody = activeInsightRow && (activeInsightRow.list.length === 0 ? /*#__PURE__*/React.createElement(EmptyState, {
+    icon: "✅",
+    text: "該当する顧客はいません"
+  }) : activeInsightRow.list.map(insightCustomerRow));
+  const insightListBodyWrap = activeInsightRow && /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 16
+    }
+  }, insightListBody);
+  const insightListScreen = activeInsightRow && /*#__PURE__*/React.createElement("div", {
+    className: "full-screen"
+  }, insightHeader, insightListBodyWrap);
   const upcoming = customers.filter(c => c.nextAppt && c.nextAppt >= today).sort((a, b) => a.nextAppt.localeCompare(b.nextAppt)).slice(0, 5);
 
   // 今月誕生日（契約者本人）
@@ -6595,21 +7344,35 @@ function DashboardTab({
   };
   const kpi200 = calc(2000000);
   const kpi1000 = calc(10000000);
-  const commandCenter = tasks && setTasks && activityLogs && setActivityLogs && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(NexusTodayCommandCenter, {
+  const commandCenter = tasks && setTasks && activityLogs && setActivityLogs && opportunities && setOpportunities && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(NexusTodayCommandCenter, {
     tasks: tasks,
     customers: customers,
     onNavigate: onNavigate
+  }), /*#__PURE__*/React.createElement(NexusTodayOpportunityCard, {
+    activityLogs: activityLogs
   }), /*#__PURE__*/React.createElement(NexusQuickActivityPanel, {
     activityLogs: activityLogs,
     setActivityLogs: setActivityLogs,
     customers: customers,
     tasks: tasks,
-    setTasks: setTasks
+    setTasks: setTasks,
+    opportunities: opportunities,
+    setOpportunities: setOpportunities
   }), /*#__PURE__*/React.createElement(NexusSalesKpiCard, {
     activityLogs: activityLogs,
     tasks: tasks,
-    sales: sales
+    sales: sales,
+    customers: customers,
+    onOpenAIAnalysis: () => setShowAIAnalysis(true)
   }));
+  const aiAnalysisScreen = showAIAnalysis && /*#__PURE__*/React.createElement(NexusAIAnalysisScreen, {
+    customers: customers,
+    activityLogs: activityLogs,
+    opportunities: opportunities,
+    tasks: tasks,
+    sales: sales,
+    onClose: () => setShowAIAnalysis(false)
+  });
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(MissionBanner, {
     mission: mission
   }), commandCenter, /*#__PURE__*/React.createElement("div", {
@@ -6647,7 +7410,7 @@ function DashboardTab({
     }
   }, noContact), /*#__PURE__*/React.createElement("div", {
     className: "stat-label"
-  }, "未接触顧客"))), (birthdayThisMonth.length > 0 || insuredBirthdayThisMonth.length > 0 || contractThisMonth.length > 0 || expiryAlert.length > 0) && /*#__PURE__*/React.createElement("div", {
+  }, "未接触顧客"))), insightCard, insightListScreen, aiAnalysisScreen, (birthdayThisMonth.length > 0 || insuredBirthdayThisMonth.length > 0 || contractThisMonth.length > 0 || expiryAlert.length > 0) && /*#__PURE__*/React.createElement("div", {
     className: "card",
     style: {
       borderLeft: '4px solid var(--warning)',
@@ -10721,14 +11484,84 @@ function nexusActivityTypeLabel(key) {
 }
 // 顧客を選びやすくすべき活動（商談・提案・成約・保全・給付請求）
 const NEXUS_ACTIVITY_TYPES_PREFER_CUSTOMER = ['deal', 'proposal', 'close', 'maintenance', 'claim'];
+// 商談元（マーケット）の選択肢。案件（opportunity）単位で一度決めたら以後は自動引き継ぎする。
+const NEXUS_MARKET_SOURCES = ['既契約者', '現在の見込客', '紹介', '新規個人', '新規経営者', 'セミナー・団体', 'SNS・Web', 'その他'];
+// 商談元を必須で記録する活動分類（この4分類はクイックタップではなく登録フォームを開く）
+const NEXUS_ACTIVITY_MARKET_SOURCE_REQUIRED = ['appt_confirmed', 'deal', 'proposal', 'close'];
+// 商談元を任意で後付けできる活動分類（登録直後のトーストにチップを出す）
+const NEXUS_ACTIVITY_MARKET_SOURCE_OPTIONAL = ['opportunity_pitch', 'appt_request'];
+// 「次のアクション」の選択肢
+const NEXUS_NEXT_ACTION_OPTIONS = ['再連絡', 'アポ依頼', '資料送付', '商談', '提案', 'その他'];
+// 商談元（marketSource）を案件（opportunity）単位で自動引き継ぐ。同一顧客のopen案件が既にあれば
+// その案件を再利用し、marketSourceを聞き直さない（引数のmarketSourceは「変更」時のみ渡す想定で、
+// 渡されなければ既存の値をそのまま使う）。close段階では案件をclosedにし、確定売上を記録する。
+function nexusResolveOpportunity(opportunities, {
+  customerId,
+  customerNameText,
+  marketSource,
+  sourceDetail,
+  stage,
+  expectedRevenue
+}) {
+  const now = new Date().toISOString();
+  const list = opportunities || [];
+  const matchesCustomer = o => o.status === 'open' && (customerId && o.customerId === customerId || !customerId && customerNameText && o.customerNameText === customerNameText);
+  const existing = customerId || customerNameText ? list.find(matchesCustomer) : null;
+  if (existing) {
+    const nextMarketSource = marketSource || existing.marketSource;
+    const updated = {
+      ...existing,
+      marketSource: nextMarketSource,
+      updatedAt: now
+    };
+    if (sourceDetail !== undefined) updated.sourceDetail = sourceDetail;
+    if (stage === 'close') {
+      updated.status = 'closed';
+      updated.confirmedRevenue = Number(expectedRevenue) || 0;
+    } else if (expectedRevenue) {
+      updated.expectedRevenue = Number(expectedRevenue) || 0;
+    }
+    const nextOpportunities = list.map(o => o.id === existing.id ? updated : o);
+    return {
+      opportunities: nextOpportunities,
+      opportunityId: existing.id,
+      marketSource: nextMarketSource
+    };
+  }
+  if (!marketSource || !customerId && !customerNameText) {
+    return {
+      opportunities: list,
+      opportunityId: '',
+      marketSource: marketSource || ''
+    };
+  }
+  const id = uid();
+  const created = {
+    id,
+    customerId: customerId || '',
+    customerNameText: customerId ? '' : customerNameText || '',
+    marketSource,
+    sourceDetail: sourceDetail || '',
+    status: stage === 'close' ? 'closed' : 'open',
+    expectedRevenue: stage === 'close' ? 0 : Number(expectedRevenue) || 0,
+    confirmedRevenue: stage === 'close' ? Number(expectedRevenue) || 0 : 0,
+    createdAt: now,
+    updatedAt: now
+  };
+  return {
+    opportunities: [created, ...list],
+    opportunityId: id,
+    marketSource
+  };
+}
 // 営業活動9分類（sales）の意味・具体例・間違えやすい分類との違い・登録画面用の一言ヒント。
 // NEXUS上で「案件打診とアポ依頼、どっちだっけ？」を後から確認できるようにするための説明データ。
 const NEXUS_ACTIVITY_TYPE_GUIDE = {
   new_contact: {
-    meaning: '今まで営業上の接点がなかった人・会社・団体に、初めて接触したこと。「未契約者」という意味ではなく、すでに面識や連絡履歴がある未契約者への連絡は含みません。',
-    examples: ['初めて経営者へDMを送った', '初めて電話した', '交流会で初めて名刺交換した', 'LinkedInで初めて接点を作った', '初めて税理士へ連絡した', '初めて企業へ営業連絡した', '初めてPTAや公民館などへ連絡した'],
-    distinction: '既に面識がある相手への案件提案は「案件打診」、既存の見込み客への情報提供は「見込フォロー」です。',
-    hint: '例：初めてDM・電話・名刺交換などで接点を作った'
+    meaning: 'これまで仕事・営業上の接点がなかった人・会社・団体に、初めて仕事につながる接触をしたこと。私的な面識や過去の挨拶程度の連絡があっても、初めて営業・仕事上の接点を作った場合は新規接触として扱います。現在は単独のボタンではなく、他の主活動（案件打診・アポ依頼など）を登録するときに「初めての営業接点でしたか？」にチェックすることで、その活動と同時に1件としてカウントされます。',
+    examples: ['初めて経営者へDMを送った', '初めて電話した', '交流会で初めて名刺交換した', 'LinkedInで初めて仕事上の接点を作った', '初めて税理士へ仕事の連絡をした', '初めて企業へ営業連絡した', 'PTAで以前から知っていた人へ初めて仕事としてセミナー相談をした', '公民館へ初めてセミナー開催相談をした'],
+    distinction: '以前営業の話をした人への再連絡、既存見込客へのLINE、既契約者への連絡、一度商談した人への再アプローチ、以前セミナー提案した団体への再連絡は新規接触ではありません。これらは「見込フォロー」または「既契約フォロー」で管理してください。',
+    hint: '例：初めて仕事上の接点を作った（私的な面識があっても、営業として初めてなら新規接触）'
   },
   lead_follow_up: {
     meaning: 'すでに接点のある見込み客・既存顧客・知人などとの関係を深め、将来の相談・アポ・商談につなげる活動（種まき）。直接アポをお願いしていなくても対象です。',
@@ -10761,10 +11594,10 @@ const NEXUS_ACTIVITY_TYPE_GUIDE = {
     hint: '例：日時・場所が具体的に決まった'
   },
   deal: {
-    meaning: '実際に相手と話し、相手の悩み・課題・希望・状況などを具体的にヒアリングしたこと。',
-    examples: ['FP相談', '保険相談', '法人相談', '相続相談', 'ライフプラン相談', 'セミナー開催の打合せ', '経営者への課題ヒアリング'],
-    distinction: '単なる雑談・挨拶ではなく、具体的な仕事や案件につながる話をした場合のみです。',
-    hint: '例：課題や希望を具体的にヒアリングした'
+    meaning: '相手の悩み・課題・希望・状況を具体的にヒアリングし、将来の提案・受注・案件化につながる話をしたこと。会場・日時・人数だけを決めた打合せは含まれません（商談数の水増しを防ぐため）。',
+    examples: ['FP相談', '保険相談', '法人相談', '相続相談', 'ライフプラン相談', '経営者への課題ヒアリング', '法人の福利厚生課題をヒアリング', 'セミナー主催者に具体的な課題や目的を聞き、開催内容を設計する打合せ', '協業相手と具体的な案件内容・顧客課題を話した'],
+    distinction: '挨拶・雑談・日程調整・Zoom URL送付・セミナー会場や日時だけの決定・資料送付・note送付・SNSコメント・「また話しましょう」と伝えただけ、は商談に含めません。これらは「見込フォロー」「アポ依頼」「アポ確定」またはタスクで管理してください。',
+    hint: '例：課題や希望を具体的にヒアリングし、提案・案件化につながる話をした'
   },
   proposal: {
     meaning: '相手の課題に対して、具体的な解決策・プラン・商品・条件などを提示したこと。',
@@ -10792,7 +11625,10 @@ function nexusActivityKpi(activityLogs, periodStart, periodEnd) {
     return d >= periodStart && d <= periodEnd;
   };
   const countOf = type => active.filter(a => inPeriod(a) && a.type === type).length;
-  const newContact = countOf('new_contact');
+  // 新規接触：旧データ（type==='new_contact'）と新データ（他の主活動＋firstBusinessContactフラグ）の
+  // どちらも数える。1件の活動が両方の条件を満たすことは無い（新規登録では'new_contact'をtypeに
+  // 設定しないため）ので、二重カウントの心配はない。
+  const newContact = active.filter(a => inPeriod(a) && (a.type === 'new_contact' || a.firstBusinessContact)).length;
   const leadFollowUp = countOf('lead_follow_up');
   const referralRequest = countOf('referral_request');
   const opportunityPitch = countOf('opportunity_pitch');
@@ -10808,6 +11644,7 @@ function nexusActivityKpi(activityLogs, periodStart, periodEnd) {
   NEXUS_ACTIVITY_TYPES.forEach(t => {
     countsByType[t.key] = countOf(t.key);
   });
+  countsByType.new_contact = newContact;
   return {
     newContact,
     leadFollowUp,
@@ -10833,6 +11670,408 @@ function nexusShouldBlockDuplicateActivity(activeLogs, type, nowMs, windowMs) {
   }, 0);
   return nowMs - mostRecent < windowMs;
 }
+// 紹介獲得数：流入元が「紹介」（または後方互換でreferredBy/referredByNameが入っている）の顧客のうち、
+// createdAtが期間内のものを数える。createdAtが無い（既存の古い顧客データ）は期間集計の対象外
+// （未入力を0件と混同しないための既存の一貫した方針に合わせる）。
+function nexusReferralAcquiredCount(customers, periodStart, periodEnd) {
+  const inPeriod = c => {
+    if (!c.createdAt) return false;
+    const d = c.createdAt.slice(0, 10);
+    return d >= periodStart && d <= periodEnd;
+  };
+  const isReferral = c => c.acquisitionSource === '紹介' || !!(c.referredBy || c.referredByName);
+  return (customers || []).filter(c => isReferral(c) && inPeriod(c)).length;
+}
+// 営業ファネル率：分母が0のときは「—」（NaN/Infinityを絶対に表示しない）
+function nexusFunnelRate(numerator, denominator) {
+  return denominator > 0 ? numerator / denominator : null;
+}
+// 商談元（マーケット）ごとの実績を集計する。marketSourceが空の活動は「未設定」バケットに入れる
+// （0円と混同しないよう、集計対象から漏らさず「未設定」として可視化する）。
+function nexusMarketSourceBreakdown(activityLogs, periodStart, periodEnd) {
+  const active = nexusActiveLogs(activityLogs);
+  const inPeriod = a => {
+    if (!a.occurredAt) return false;
+    const d = a.occurredAt.slice(0, 10);
+    return d >= periodStart && d <= periodEnd;
+  };
+  const buckets = {};
+  const order = [...NEXUS_MARKET_SOURCES, '未設定'];
+  order.forEach(key => {
+    buckets[key] = {
+      marketSource: key,
+      deal: 0,
+      proposal: 0,
+      close: 0,
+      confirmedRevenue: 0
+    };
+  });
+  active.forEach(a => {
+    if (!inPeriod(a)) return;
+    if (!['deal', 'proposal', 'close'].includes(a.type)) return;
+    const key = a.marketSource && buckets[a.marketSource] ? a.marketSource : '未設定';
+    buckets[key][a.type] += 1;
+    if (a.type === 'close') buckets[key].confirmedRevenue += Number(a.expectedRevenue) || 0;
+  });
+  return order.map(key => {
+    const b = buckets[key];
+    return {
+      ...b,
+      revenuePerDeal: b.deal > 0 ? Math.round(b.confirmedRevenue / b.deal) : null
+    };
+  }).filter(b => b.deal > 0 || b.proposal > 0 || b.close > 0);
+}
+function nexusDaysSince(dateStr, todayStr) {
+  if (!dateStr) return null;
+  const d1 = new Date(dateStr.slice(0, 10));
+  const d2 = new Date(todayStr);
+  if (isNaN(d1.getTime())) return null;
+  return Math.floor((d2 - d1) / 86400000);
+}
+// 顧客インサイト：実用的な行動指標のバケット分け。「未接触顧客」だけでは何をすべきか分かりにくいため、
+// 180日以上未接触／今年未フォロー／次回予定なし／既契約診断未実施／資産診断未実施、に分ける。
+function nexusCustomerInsightBuckets(customers, todayStr) {
+  const list = customers || [];
+  const thisYear = todayStr.slice(0, 4);
+  const stale180 = list.filter(c => {
+    const days = nexusDaysSince(c.lastContact, todayStr);
+    return days === null || days >= 180;
+  });
+  const notFollowedThisYear = list.filter(c => !c.lastContact || c.lastContact.slice(0, 4) !== thisYear);
+  const noNextAppt = list.filter(c => !c.nextAppt || c.nextAppt < todayStr);
+  const contractDiagnosisPending = list.filter(c => !c.contractDiagnosisCompleted);
+  const assetDiagnosisPending = list.filter(c => !c.assetDiagnosisCompleted);
+  return {
+    stale180,
+    notFollowedThisYear,
+    noNextAppt,
+    contractDiagnosisPending,
+    assetDiagnosisPending
+  };
+}
+// 今日の商談創出行動：新規接触（flagベース含む）／見込フォロー／紹介依頼／案件打診／アポ依頼、の当日件数。
+// 1件の活動が複数カテゴリで数えられることがある（例：案件打診＋初めての営業接点＝新規接触1件＋案件打診1件）。
+function nexusTodayOpportunityCreationCount(activityLogs, todayStr) {
+  const active = nexusActiveLogs(activityLogs);
+  const todayLogs = active.filter(a => (a.occurredAt || '').slice(0, 10) === todayStr);
+  const newContact = todayLogs.filter(a => a.type === 'new_contact' || a.firstBusinessContact).length;
+  const leadFollowUp = todayLogs.filter(a => a.type === 'lead_follow_up').length;
+  const referralRequest = todayLogs.filter(a => a.type === 'referral_request').length;
+  const opportunityPitch = todayLogs.filter(a => a.type === 'opportunity_pitch').length;
+  const apptRequest = todayLogs.filter(a => a.type === 'appt_request').length;
+  const total = newContact + leadFollowUp + referralRequest + opportunityPitch + apptRequest;
+  return {
+    newContact,
+    leadFollowUp,
+    referralRequest,
+    opportunityPitch,
+    apptRequest,
+    total
+  };
+}
+
+// ==== 匿名化AI分析エクスポート（改修11）====
+// 氏名・電話・メール・住所・生年月日・証券番号等は一切出力しない。UIから直接ベタ書きせず、
+// すべて独立したピュア関数として実装し、Node上でユニットテスト済み（詳細は各関数の呼び出し元を参照）。
+
+// 年齢→年代（生年月日そのものは出力しない）
+function nexusAgeBand(age) {
+  if (age === null || age === undefined || isNaN(age)) return null;
+  const n = Number(age);
+  if (n < 20) return '10代以下';
+  if (n < 30) return '20代';
+  if (n < 40) return '30代';
+  if (n < 50) return '40代';
+  if (n < 60) return '50代';
+  if (n < 70) return '60代';
+  return '70代以上';
+}
+
+// 職業の自由記述から大分類を簡易判定する（ヒューリスティック。完全な精度は保証しない）
+const NEXUS_OCCUPATION_KEYWORDS = {
+  '経営者': ['社長', '代表取締役', '代表', 'CEO', 'オーナー', '経営者', '会長', '役員'],
+  '士業': ['税理士', '弁護士', '司法書士', '公認会計士', '会計士', '社労士', '社会保険労務士', '行政書士', '弁理士', '医師', '歯科医師']
+};
+function nexusOccupationCategory(occupationText) {
+  const text = (occupationText || '').trim();
+  if (!text) return null;
+  for (const category of Object.keys(NEXUS_OCCUPATION_KEYWORDS)) {
+    if (NEXUS_OCCUPATION_KEYWORDS[category].some(k => text.includes(k))) return category;
+  }
+  if (/会社員|従業員|サラリーマン|正社員|会社勤務|公務員|パート|アルバイト|派遣/.test(text)) return '会社員';
+  return 'その他';
+}
+
+// 実顧客ID→匿名ID（個人=顧客A001.. 法人=法人B001..）。同一エクスポート内では同じ顧客に同じIDを使う。
+function nexusBuildAnonymousCustomerMap(customers) {
+  const map = {};
+  let indivIdx = 0, corpIdx = 0;
+  (customers || []).forEach(c => {
+    if (c.customerType === '法人') {
+      corpIdx++;
+      map[c.id] = `法人B${String(corpIdx).padStart(3, '0')}`;
+    } else {
+      indivIdx++;
+      map[c.id] = `顧客A${String(indivIdx).padStart(3, '0')}`;
+    }
+  });
+  return map;
+}
+
+// 未登録の相手（activityLogsのcustomerNameTextのみで記録されている人・団体・士業）にも匿名IDを振る。
+// 同一テキストは同一IDになる。
+function nexusBuildProspectNameMap(activityLogs) {
+  const map = {};
+  let idx = 0;
+  nexusActiveLogs(activityLogs).forEach(a => {
+    if (a.customerId) return;
+    const name = (a.customerNameText || '').trim();
+    if (!name || map[name]) return;
+    idx++;
+    map[name] = `見込M${String(idx).padStart(3, '0')}`;
+  });
+  return map;
+}
+
+// メモ等の自由記述に含まれうる電話番号・メールアドレス・郵便番号をマスクし、既知の実名（nameMap）を
+// 匿名IDへ置換する（nexusAnonymizeNamesと同じ「長い名前から順に置換」の規約に倣う）。
+function nexusSanitizeMemoText(memo, nameMap) {
+  let text = memo || '';
+  if (!text) return text;
+  text = text.replace(/0\d{1,4}-?\d{1,4}-?\d{3,4}/g, '［電話番号］');
+  text = text.replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, '［メールアドレス］');
+  text = text.replace(/\d{3}-\d{4}/g, '［郵便番号］');
+  const entries = Object.entries(nameMap || {}).filter(([name]) => name && name.trim()).sort((a, b) => b[0].length - a[0].length);
+  entries.forEach(([name, anonId]) => {
+    const re = new RegExp(nexusEscapeRegExp(name), 'g');
+    text = text.replace(re, anonId);
+  });
+  return text;
+}
+
+// 1顧客分の匿名化済みプロフィール（氏名・電話・メール・住所・生年月日・証券番号等は一切含めない）
+function sanitizePersonalData(customer, opts) {
+  const c = customer;
+  const isCorp = c.customerType === '法人';
+  const age = opts.age !== undefined ? opts.age : null;
+  const hasContracts = (c.contracts || []).length > 0;
+  const existingOrNew = hasContracts ? '既契約' : opts.hasActivity ? '見込' : '新規';
+  return {
+    anonId: opts.anonId,
+    type: isCorp ? '法人' : '個人',
+    existingOrNew,
+    occupationCategory: isCorp ? null : nexusOccupationCategory(c.occupation),
+    industry: isCorp ? c.industry || null : null,
+    ageBand: isCorp ? null : nexusAgeBand(age),
+    marketSource: opts.marketSource || null,
+    expectedRevenue: opts.expectedRevenue || 0,
+    confirmedRevenue: opts.confirmedRevenue || 0
+  };
+}
+
+// AI分析用データ本体を組み立てる（この時点で実名・電話・メール・住所・証券番号等は一切含まれない）
+function createAnonymizedAnalyticsData({ customers, activityLogs, opportunities, periodStart, periodEnd, includeMemo, sales, today }) {
+  const customerMap = nexusBuildAnonymousCustomerMap(customers);
+  const prospectMap = nexusBuildProspectNameMap(activityLogs);
+  // メモのマスキング用：実名→匿名IDの対応（顧客名・法人名・未登録相手名すべて）
+  const nameMapForMemo = {};
+  (customers || []).forEach(c => {
+    const realName = c.customerType === '法人' ? c.corporateName || c.name : c.name;
+    if (realName) nameMapForMemo[realName] = customerMap[c.id];
+  });
+  Object.keys(prospectMap).forEach(name => { nameMapForMemo[name] = prospectMap[name]; });
+
+  const active = nexusActiveLogs(activityLogs);
+  const inPeriod = a => { if (!a.occurredAt) return false; const d = a.occurredAt.slice(0, 10); return d >= periodStart && d <= periodEnd; };
+  const periodLogs = active.filter(inPeriod);
+
+  const kpi = nexusActivityKpi(activityLogs, periodStart, periodEnd);
+  const referralAcquired = nexusReferralAcquiredCount(customers, periodStart, periodEnd);
+  const rates = {
+    apptRate: nexusFunnelRate(kpi.apptConfirmed, kpi.apptRequest),
+    dealRate: nexusFunnelRate(kpi.deal, kpi.apptConfirmed),
+    proposalRate: nexusFunnelRate(kpi.proposal, kpi.deal),
+    closeRate: kpi.closeRate,
+    referralRate: nexusFunnelRate(referralAcquired, kpi.referralRequest)
+  };
+  const marketSourceBreakdown = nexusMarketSourceBreakdown(activityLogs, periodStart, periodEnd);
+
+  // 顧客・未登録相手ごとに、匿名化済みプロフィール＋期間内の匿名活動履歴をまとめる
+  const groupsById = {};
+  periodLogs.forEach(a => {
+    const anonId = a.customerId ? customerMap[a.customerId] : prospectMap[(a.customerNameText || '').trim()];
+    if (!anonId) return; // 顧客未紐付けの活動（匿名化のしようがない単発活動）は個人別履歴には含めない
+    if (!groupsById[anonId]) groupsById[anonId] = { anonId, customerId: a.customerId || null, activities: [] };
+    groupsById[anonId].activities.push(a);
+  });
+
+  const customersDetail = Object.values(groupsById).map(g => {
+    const custOpportunities = (opportunities || []).filter(o => g.customerId && o.customerId === g.customerId || !g.customerId && o.customerNameText && prospectMap[o.customerNameText] === g.anonId);
+    const openOpp = custOpportunities.filter(o => o.status === 'open').sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))[0];
+    const closedOpp = custOpportunities.filter(o => o.status === 'closed').sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))[0];
+    const expectedRevenue = custOpportunities.filter(o => o.status === 'open').reduce((s, o) => s + (Number(o.expectedRevenue) || 0), 0);
+    const confirmedRevenue = g.activities.filter(a => a.type === 'close').reduce((s, a) => s + (Number(a.expectedRevenue) || 0), 0);
+    // opportunitiesに記録が無い場合でも、活動ログ自体に付いているmarketSourceから拾えるようにする
+    const latestActivityWithSource = [...g.activities].sort((a, b) => (b.occurredAt || '').localeCompare(a.occurredAt || '')).find(a => a.marketSource);
+    const resolvedMarketSource = (openOpp || closedOpp || {}).marketSource || (latestActivityWithSource || {}).marketSource || null;
+    const customer = g.customerId ? (customers || []).find(c => c.id === g.customerId) : null;
+    const profile = customer ? sanitizePersonalData(customer, {
+      anonId: g.anonId,
+      age: customer.birthdate ? nexusAgeAtDate(customer.birthdate, today || periodEnd) : null,
+      hasActivity: true,
+      marketSource: resolvedMarketSource,
+      expectedRevenue,
+      confirmedRevenue
+    }) : {
+      anonId: g.anonId,
+      type: '未登録',
+      existingOrNew: '見込',
+      occupationCategory: null,
+      industry: null,
+      ageBand: null,
+      marketSource: resolvedMarketSource,
+      expectedRevenue,
+      confirmedRevenue
+    };
+    const activities = g.activities.sort((a, b) => (a.occurredAt || '').localeCompare(b.occurredAt || '')).map(a => {
+      const rec = {
+        date: (a.occurredAt || '').slice(0, 10),
+        activityType: nexusActivityTypeLabel(a.type),
+        firstBusinessContact: !!a.firstBusinessContact,
+        marketSource: a.marketSource || null,
+        nextAction: a.nextAction || null
+      };
+      if (includeMemo && a.memo) rec.memo = nexusSanitizeMemoText(a.memo, nameMapForMemo);
+      return rec;
+    });
+    return { ...profile, activities };
+  });
+
+  return {
+    period: { start: periodStart, end: periodEnd },
+    sales: sales || null,
+    kpi,
+    referralAcquired,
+    rates,
+    marketSourceBreakdown,
+    customers: customersDetail
+  };
+}
+
+// analyticsData（createAnonymizedAnalyticsDataの返り値）→ Claude/ChatGPT/Geminiへ貼り付けられるMarkdown文字列
+function generateAIAnalysisMarkdown(data) {
+  const fmtYen = n => `${(Number(n) || 0).toLocaleString('ja-JP')}円`;
+  const fmtRate = r => r === null || r === undefined ? '—' : `${Math.round(r * 1000) / 10}%`;
+  const lines = [];
+  lines.push('# MEDiLIFE NEXUS 営業活動データ（匿名化済み）');
+  lines.push('');
+  lines.push('## 分析期間');
+  lines.push(`${data.period.start} 〜 ${data.period.end}`);
+  lines.push('');
+  lines.push('## 売上');
+  if (data.sales) {
+    const target = Number(data.sales.target) || 0;
+    const confirmed = Number(data.sales.confirmed) || 0;
+    const expected = Number(data.sales.expected) || 0;
+    const remaining = Math.max(0, target - confirmed);
+    lines.push(`- 目標売上: ${fmtYen(target)}`);
+    lines.push(`- 確定売上: ${fmtYen(confirmed)}`);
+    lines.push(`- 見込売上（オープン案件）: ${fmtYen(expected)}`);
+    lines.push(`- 目標までの残り: ${fmtYen(remaining)}`);
+  } else {
+    lines.push('- 売上データ: 未指定');
+  }
+  lines.push('');
+  lines.push('## 営業KPI（件数）');
+  const k = data.kpi;
+  lines.push(`- 新規接触数: ${k.newContact}`);
+  lines.push(`- 見込フォロー数: ${k.leadFollowUp}`);
+  lines.push(`- 紹介依頼数: ${k.referralRequest}`);
+  lines.push(`- 紹介獲得数: ${data.referralAcquired}`);
+  lines.push(`- 案件打診数: ${k.opportunityPitch}`);
+  lines.push(`- アポ依頼数: ${k.apptRequest}`);
+  lines.push(`- アポ確定数: ${k.apptConfirmed}`);
+  lines.push(`- 商談数: ${k.deal}`);
+  lines.push(`- 提案数: ${k.proposal}`);
+  lines.push(`- 成約数: ${k.close}`);
+  lines.push('');
+  lines.push('## 転換率');
+  const r = data.rates;
+  lines.push(`- アポ獲得率（アポ確定÷アポ依頼）: ${fmtRate(r.apptRate)}`);
+  lines.push(`- 商談実施率（商談÷アポ確定）: ${fmtRate(r.dealRate)}`);
+  lines.push(`- 提案率（提案÷商談）: ${fmtRate(r.proposalRate)}`);
+  lines.push(`- 成約率（成約÷提案）: ${fmtRate(r.closeRate)}`);
+  lines.push(`- 紹介獲得率（紹介獲得÷紹介依頼）: ${fmtRate(r.referralRate)}`);
+  lines.push('');
+  lines.push('## 商談元別実績');
+  if (!data.marketSourceBreakdown || data.marketSourceBreakdown.length === 0) {
+    lines.push('（該当データなし）');
+  } else {
+    data.marketSourceBreakdown.forEach(m => {
+      const perDeal = m.revenuePerDeal === null || m.revenuePerDeal === undefined ? '—' : fmtYen(m.revenuePerDeal);
+      lines.push(`- ${m.marketSource}: 商談${m.deal}・提案${m.proposal}・成約${m.close}・確定売上${fmtYen(m.confirmedRevenue)}・1商談あたり売上${perDeal}`);
+    });
+  }
+  lines.push('');
+  lines.push('## 顧客別営業履歴（匿名化済み）');
+  if (!data.customers || data.customers.length === 0) {
+    lines.push('（該当データなし）');
+  } else {
+    data.customers.forEach(c => {
+      lines.push(`### ${c.anonId}`);
+      const attrs = [c.type, c.existingOrNew];
+      if (c.occupationCategory) attrs.push(c.occupationCategory);
+      if (c.industry) attrs.push(c.industry);
+      if (c.ageBand) attrs.push(c.ageBand);
+      if (c.marketSource) attrs.push(`商談元:${c.marketSource}`);
+      lines.push(`- 属性: ${attrs.join(' / ')}`);
+      lines.push(`- 確定売上: ${fmtYen(c.confirmedRevenue)}${c.expectedRevenue ? ` / 見込売上: ${fmtYen(c.expectedRevenue)}` : ''}`);
+      lines.push('- 活動履歴:');
+      (c.activities || []).forEach(a => {
+        const flag = a.firstBusinessContact ? '（初めての営業接点）' : '';
+        const next = a.nextAction ? ` → 次のアクション: ${a.nextAction}` : '';
+        const memo = a.memo ? ` / メモ: ${a.memo}` : '';
+        lines.push(`  - ${a.date} ${a.activityType}${flag}${next}${memo}`);
+      });
+      lines.push('');
+    });
+  }
+  return lines.join('\n');
+}
+
+// analyticsData → そのままJSON文字列（プログラム的な二次利用・将来のAPI連携用）
+function generateAIAnalysisJSON(data) {
+  return JSON.stringify(data, null, 2);
+}
+
+// analyticsData → AIへ分析を依頼するための固定フォーマットのプロンプト文字列
+// （このプロンプトの下にgenerateAIAnalysisMarkdownの出力を貼り付けて使う想定）
+function generateAIAnalysisPrompt(data) {
+  const period = data && data.period ? `${data.period.start} 〜 ${data.period.end}` : '（期間未指定）';
+  return [
+    `以下は、保険営業パーソン1名分の匿名化済み営業活動データです（対象期間: ${period}）。`,
+    'このデータを分析し、月間売上目標（500万円）の安定達成に向けて、以下の観点で具体的に教えてください。',
+    '',
+    '1. 目標売上（500万円）に届いていない最大の理由は何か',
+    '2. それは「活動量」の問題か「スキル（各段階の転換率）」の問題か',
+    '3. 営業ファネル（新規接触→アポ依頼→アポ確定→商談→提案→成約）の中で、最大のボトルネックはどの段階か。具体的な転換率の数字とともに指摘してください',
+    '4. 商談元（マーケット）別に見て、どこが最も効率が良いか／悪いか',
+    '5. 紹介からの営業の効率はどうか',
+    '6. 新規開拓の効率はどうか',
+    '7. 成約率を上げる余地はどこにあるか',
+    '8. 来月、増やすべき行動は何か',
+    '9. 来月、減らす・やめるべき行動は何か',
+    '10. 月500万円を安定達成するための、来月の具体的な行動目標（できる限り数値目標を含む）',
+    '',
+    '※ 数字が不足している場合は推測せず、「何のデータが不足しているか」を明示してください。',
+    '',
+    '---',
+    '',
+    '【データ】',
+    '（この下に、Nexusから出力したMarkdownデータを貼り付けてください）'
+  ].join('\n');
+}
+
 // 'YYYY-MM-DD'整形（toISOStringはUTC変換で日付がずれる場合があるため、ローカルgetterのみで組み立てる）
 function nexusFmtYmd(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -12573,6 +13812,7 @@ function importJSON(file, handlers) {
         if (data.kpiSettings && handlers.setKpiSettings) handlers.setKpiSettings(data.kpiSettings);
         if (data.tasks && handlers.setTasks) handlers.setTasks(data.tasks);
         if (data.activityLogs && handlers.setActivityLogs) handlers.setActivityLogs(data.activityLogs);
+        if (data.opportunities && handlers.setOpportunities) handlers.setOpportunities(data.opportunities);
         if (data.clients && handlers.setClients) handlers.setClients(data.clients);
         if (data.vision && handlers.setVision) handlers.setVision(data.vision);
         if (data.suspects && handlers.setSuspects) handlers.setSuspects(data.suspects);
@@ -14613,6 +15853,7 @@ function exportJSON(state) {
     kpiSettings: state.kpiSettings,
     tasks: state.tasks,
     activityLogs: state.activityLogs,
+    opportunities: state.opportunities,
     clients: state.clients,
     vision: state.vision,
     suspects: state.suspects,
@@ -27754,6 +28995,7 @@ function App() {
   const [tasks, setTasks] = useLS('ml_tasks_v1', []);
   // 営業活動履歴（新規）：クイック活動登録の記録。KPIは常にここから再集計する。
   const [activityLogs, setActivityLogs] = useLS('nexus_activity_logs_v1', []);
+  const [opportunities, setOpportunities] = useLS('nexus_opportunities_v1', []);
   const [clients, setClients] = useLS('ml_clients_v1', []);
   const [vision, setVision] = useLS('ml_vision_v1', {});
   const [suspects, setSuspects] = useLS('ml_suspects_v1', []);
@@ -27933,6 +29175,7 @@ function App() {
           setCustomers,
           setTasks,
           setActivityLogs,
+          setOpportunities,
           setClients,
           setVision,
           setSuspects,
@@ -27954,6 +29197,7 @@ function App() {
       kpiSettings,
       tasks,
       activityLogs,
+      opportunities,
       clients,
       vision,
       suspects,
@@ -27986,6 +29230,8 @@ function App() {
     sales: sales,
     activityLogs: activityLogs,
     setActivityLogs: setActivityLogs,
+    opportunities: opportunities,
+    setOpportunities: setOpportunities,
     onNavigate: (t, c) => {
       setTab(t === 'customers' ? 'list' : t);
       if (c) setSelectedCustomer(c);
@@ -28057,10 +29303,22 @@ function App() {
   }, "＋"), selectedCustomer && !showCustomerForm && /*#__PURE__*/React.createElement(CustomerDetail, {
     customer: selectedCustomer,
     customers: customers,
+    onUpdateCustomer: patch => {
+      setCustomers(prev => prev.map(x => x.id === selectedCustomer.id ? {
+        ...x,
+        ...patch
+      } : x));
+      setSelectedCustomer(prev => prev ? {
+        ...prev,
+        ...patch
+      } : prev);
+    },
     tasks: tasks,
     setTasks: setTasks,
     activityLogs: activityLogs,
     setActivityLogs: setActivityLogs,
+    opportunities: opportunities,
+    setOpportunities: setOpportunities,
     onEdit: () => openEditCustomer(selectedCustomer),
     onDelete: id => {
       deleteCustomer(id);
