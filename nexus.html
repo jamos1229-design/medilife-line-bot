@@ -395,6 +395,22 @@ const thisMonthStr = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 };
+// occurredAt/createdAt等（new Date().toISOString()で保存されたUTC文字列）を、
+// 端末のローカル日付・時刻に変換する。単純に文字列をslice(0,10)/slice(11,16)すると
+// UTCの日付・時刻がそのまま出てしまい、日本時間（UTC+9）では深夜0時〜8時台に登録した
+// 活動が「前日」扱いになってしまう不具合が起きるため、必ずこの関数を経由する。
+const nexusLocalDateStr = isoString => {
+  if (!isoString) return '';
+  const d = new Date(isoString);
+  if (isNaN(d.getTime())) return '';
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+const nexusLocalTimeStr = isoString => {
+  if (!isoString) return '';
+  const d = new Date(isoString);
+  if (isNaN(d.getTime())) return '';
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+};
 const fmtDate = s => {
   if (!s) return '';
   const [y, m, d] = s.split('-');
@@ -5670,8 +5686,8 @@ function NexusActivityForm({
     [k]: v
   }));
   const si = k => e => s(k)(e.target.value);
-  const dateVal = (form.occurredAt || nowIso).slice(0, 10);
-  const timeVal = (form.occurredAt || nowIso).slice(11, 16);
+  const dateVal = nexusLocalDateStr(form.occurredAt || nowIso);
+  const timeVal = nexusLocalTimeStr(form.occurredAt || nowIso);
   const setDate = d => s('occurredAt')(`${d}T${timeVal}`);
   const setTime = t => s('occurredAt')(`${dateVal}T${t}`);
   // 商談元（マーケット）：アポ確定/商談/提案/成約は必須、案件打診/アポ依頼は任意で入力できる。
@@ -6149,7 +6165,7 @@ function NexusActivityHistoryList({
       flexShrink: 0,
       width: 40
     }
-  }, (a.occurredAt || '').slice(11, 16)), /*#__PURE__*/React.createElement("span", {
+  }, nexusLocalTimeStr(a.occurredAt)), /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 13,
       fontWeight: 700,
@@ -6201,7 +6217,7 @@ function NexusActivityHistoryScreen({
   const active = nexusActiveLogs(activityLogs).sort((a, b) => (b.occurredAt || '').localeCompare(a.occurredAt || ''));
   const byDate = {};
   active.forEach(a => {
-    const d = (a.occurredAt || '').slice(0, 10) || '（日付不明）';
+    const d = nexusLocalDateStr(a.occurredAt) || '（日付不明）';
     (byDate[d] = byDate[d] || []).push(a);
   });
   const dates = Object.keys(byDate).sort((a, b) => b.localeCompare(a));
@@ -11653,7 +11669,7 @@ function nexusActivityKpi(activityLogs, periodStart, periodEnd) {
   const active = nexusActiveLogs(activityLogs);
   const inPeriod = a => {
     if (!a.occurredAt) return false;
-    const d = a.occurredAt.slice(0, 10);
+    const d = nexusLocalDateStr(a.occurredAt);
     return d >= periodStart && d <= periodEnd;
   };
   const countOf = type => active.filter(a => inPeriod(a) && a.type === type).length;
@@ -11709,7 +11725,7 @@ function nexusShouldBlockDuplicateActivity(activeLogs, type, nowMs, windowMs) {
 function nexusReferralAcquiredCount(customers, periodStart, periodEnd) {
   const inPeriod = c => {
     if (!c.createdAt) return false;
-    const d = c.createdAt.slice(0, 10);
+    const d = nexusLocalDateStr(c.createdAt);
     return d >= periodStart && d <= periodEnd;
   };
   const isReferral = c => c.acquisitionSource === '紹介' || !!(c.referredBy || c.referredByName);
@@ -11725,7 +11741,7 @@ function nexusMarketSourceBreakdown(activityLogs, periodStart, periodEnd) {
   const active = nexusActiveLogs(activityLogs);
   const inPeriod = a => {
     if (!a.occurredAt) return false;
-    const d = a.occurredAt.slice(0, 10);
+    const d = nexusLocalDateStr(a.occurredAt);
     return d >= periodStart && d <= periodEnd;
   };
   const buckets = {};
@@ -11786,7 +11802,7 @@ function nexusCustomerInsightBuckets(customers, todayStr) {
 // 1件の活動が複数カテゴリで数えられることがある（例：案件打診＋初めての営業接点＝新規接触1件＋案件打診1件）。
 function nexusTodayOpportunityCreationCount(activityLogs, todayStr) {
   const active = nexusActiveLogs(activityLogs);
-  const todayLogs = active.filter(a => (a.occurredAt || '').slice(0, 10) === todayStr);
+  const todayLogs = active.filter(a => nexusLocalDateStr(a.occurredAt) === todayStr);
   const newContact = todayLogs.filter(a => a.type === 'new_contact' || a.firstBusinessContact).length;
   const leadFollowUp = todayLogs.filter(a => a.type === 'lead_follow_up').length;
   const referralRequest = todayLogs.filter(a => a.type === 'referral_request').length;
@@ -11915,7 +11931,7 @@ function createAnonymizedAnalyticsData({ customers, activityLogs, opportunities,
   Object.keys(prospectMap).forEach(name => { nameMapForMemo[name] = prospectMap[name]; });
 
   const active = nexusActiveLogs(activityLogs);
-  const inPeriod = a => { if (!a.occurredAt) return false; const d = a.occurredAt.slice(0, 10); return d >= periodStart && d <= periodEnd; };
+  const inPeriod = a => { if (!a.occurredAt) return false; const d = nexusLocalDateStr(a.occurredAt); return d >= periodStart && d <= periodEnd; };
   const periodLogs = active.filter(inPeriod);
 
   const kpi = nexusActivityKpi(activityLogs, periodStart, periodEnd);
@@ -11968,7 +11984,7 @@ function createAnonymizedAnalyticsData({ customers, activityLogs, opportunities,
     };
     const activities = g.activities.sort((a, b) => (a.occurredAt || '').localeCompare(b.occurredAt || '')).map(a => {
       const rec = {
-        date: (a.occurredAt || '').slice(0, 10),
+        date: nexusLocalDateStr(a.occurredAt),
         activityType: nexusActivityTypeLabel(a.type),
         firstBusinessContact: !!a.firstBusinessContact,
         marketSource: a.marketSource || null,
