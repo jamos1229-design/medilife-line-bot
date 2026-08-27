@@ -2223,6 +2223,25 @@ const nexusChildDisplayName = sp => {
   const name = ((sp && sp.name) || '').trim();
   return name && !/^お子様\d+$/.test(name) ? name : '';
 };
+// 印刷HTML内の個人名を伏せる（AI等への共有用）。構造化された名前フィールド（本人・配偶者・
+// お子様・ご家族欄）のみを対象とし、メモ等の自由記述までは検出しない（誤検知・過検知を避けるため）。
+function nexusEscapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+// nameMap: [{name, placeholder}] を、名前が長い順に適用する（短い名前が長い名前の部分文字列に
+// なっているケースで誤って先に置換されるのを防ぐため）。
+function nexusAnonymizeNames(html, nameMap) {
+  const entries = (nameMap || []).filter(e => e && e.name && e.name.trim()).sort((a, b) => b.name.length - a.name.length);
+  let result = html;
+  entries.forEach(({
+    name,
+    placeholder
+  }) => {
+    const re = new RegExp(nexusEscapeRegExp(name), 'g');
+    result = result.replace(re, placeholder);
+  });
+  return result;
+}
 // サスペクトの年齢は、既存の顧客と連携（linkedCustomerId）している場合はその顧客の登録情報を
 // 優先する（連携している成人した子は、生年月日をサスペクト側ではなく本人の顧客レコードにしか
 // 持っていないことが多く、サスペクト側だけを見ると年齢不明＝未就学児扱いになってしまうため）。
@@ -23300,6 +23319,7 @@ function NexusPlanningSection({
   const [selectedId, setSelectedId] = useState(individualCustomers[0] && individualCustomers[0].id || customers[0] && customers[0].id || null);
   const [showPrint, setShowPrint] = useState(false);
   const [printScope, setPrintScope] = useState('self'); // 'self' | 'couple' — 資料（印刷・Excel出力）の対象範囲
+  const [anonymizeNames, setAnonymizeNames] = useState(false); // 印刷時に本人・配偶者・お子様・ご家族の名前を伏せるか（AI等への共有用）
   const customer = customers.find(c => c.id === selectedId) || null;
   const updateCustomer = patch => {
     setCustomers(customers.map(c => c.id === selectedId ? {
@@ -23886,7 +23906,44 @@ function NexusPlanningSection({
     const assetClassRowsHtml = pAssetClassChart.length ? pAssetClassChart.map(i => `<tr><td>${escapeHtmlForPrint(i.label)}</td><td>${i.value.toLocaleString()}円</td><td>${pPortfolioTotal > 0 ? Math.round(i.value / pPortfolioTotal * 100) : 0}%</td></tr>`).join('') : '<tr><td colspan="3">データなし</td></tr>';
     const currencyRowsHtml = pCurrencyChart.length ? pCurrencyChart.map(i => `<tr><td>${escapeHtmlForPrint(i.label)}</td><td>${i.value.toLocaleString()}円</td></tr>`).join('') : '<tr><td colspan="2">データなし</td></tr>';
     const titleName = isCoupleScope ? `${escapeHtmlForPrint(customer.name)} 様・${escapeHtmlForPrint(linkedSpouseCustomer.name)} 様（ご夫婦）` : `${escapeHtmlForPrint(customer.name)} 様`;
-    return `
+    // 印刷時に「個人名を伏せて出力」がONの場合に置換する名前一覧（本人・配偶者・お子様・ご家族欄のみ対象）
+    const buildAnonymizeMap = () => {
+      const map = [];
+      if (customer.name) map.push({
+        name: customer.name,
+        placeholder: '本人'
+      });
+      if (isCoupleScope && linkedSpouseCustomer && linkedSpouseCustomer.name) map.push({
+        name: linkedSpouseCustomer.name,
+        placeholder: '配偶者'
+      });
+      let kidIdx = 0;
+      kids.forEach(k => {
+        const real = nexusChildDisplayName(k);
+        if (real) {
+          kidIdx++;
+          map.push({
+            name: real,
+            placeholder: `お子様${kidIdx}`
+          });
+        }
+      });
+      let famIdx = 0;
+      (customer.suspects || []).forEach(m => {
+        if (m.relation === '子供' || m.relation === '配偶者') return;
+        const linked = m.linkedCustomerId ? customers.find(x => x.id === m.linkedCustomerId) : null;
+        const fName = (linked ? linked.name || linked.corporateName : m.name) || '';
+        if (fName.trim()) {
+          famIdx++;
+          map.push({
+            name: fName.trim(),
+            placeholder: `ご家族${famIdx}`
+          });
+        }
+      });
+      return map;
+    };
+    const html = `
       <h2>${titleName}　プランニング資料</h2>
       <p style="font-size:11px;color:#666;">出力日：${new Date().toLocaleDateString('ja-JP')}${isCoupleScope ? '　／　夫婦合算版' : ''}</p>
       <div class="print-section">
@@ -24050,6 +24107,7 @@ function NexusPlanningSection({
       ${NEXUS_FINDING_TOPICS.map(t => nexusFindingBlockHtml(t.label, findings[t.key])).join('')}
       ${nexusOverallFindingBlockHtml(overallFinding)}
     `;
+    return anonymizeNames ? nexusAnonymizeNames(html, buildAnonymizeMap()) : html;
   };
   const handleOpenPrint = () => setShowPrint(true);
   const handleClosePrint = () => setShowPrint(false);
@@ -26881,7 +26939,28 @@ function NexusPlanningSection({
     type: "button",
     className: `toggle-btn ${printScope === 'couple' ? 'sel' : ''}`,
     onClick: () => setPrintScope('couple')
-  }, "夫婦合算（", linkedSpouseCustomer.name, " 様を含む）"))), /*#__PURE__*/React.createElement("button", {
+  }, "夫婦合算（", linkedSpouseCustomer.name, " 様を含む）"))), /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'flex-start',
+      gap: 8,
+      marginBottom: 10,
+      fontSize: 13,
+      cursor: 'pointer'
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: anonymizeNames,
+    onChange: e => setAnonymizeNames(e.target.checked),
+    style: {
+      marginTop: 2
+    }
+  }), /*#__PURE__*/React.createElement("span", null, "🔒 個人名を伏せて出力（AIツール等に共有する場合）", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)'
+    }
+  }, "本人・配偶者・お子様・ご家族欄の名前を「本人」「お子様1」等に置き換えます。メモ欄等の自由記述に書かれた名前までは検出できません。"))), /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "btn btn-outline btn-full",
     style: {
