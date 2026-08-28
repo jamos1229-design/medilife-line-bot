@@ -5672,7 +5672,10 @@ function NexusActivityForm({
     createTask: false,
     expectedRevenue: '',
     linkedTaskId: '',
-    // 保全（maintenance）用フィールド
+    // 保全（maintenance）用フィールド。複数選択可能（例：結婚に伴う契約者変更・受取人変更・
+    // 指定代理請求人変更・支払口座変更の同時発生）なのでmaintenanceSubTypesは配列。
+    // maintenanceSubType（単一・文字列）はこの機能導入前の旧データ読み取り用に残す。
+    maintenanceSubTypes: [],
     maintenanceSubType: '',
     maintenanceOtherDetail: '',
     maintenanceStatus: '',
@@ -5701,9 +5704,14 @@ function NexusActivityForm({
     updatedAt: '',
     deletedAt: ''
   };
-  const [form, setForm] = useState({
-    ...blank,
-    ...(editing || {})
+  const [form, setForm] = useState(() => {
+    const merged = { ...blank, ...(editing || {}) };
+    // 旧データ（単一のmaintenanceSubType文字列）を編集する場合、複数選択チップUIに
+    // 正しく反映されるよう配列へ移行する。
+    if ((!merged.maintenanceSubTypes || !merged.maintenanceSubTypes.length) && merged.maintenanceSubType) {
+      merged.maintenanceSubTypes = [merged.maintenanceSubType];
+    }
+    return merged;
   });
   const [overrideMarketSource, setOverrideMarketSource] = useState(false);
   const [saveError, setSaveError] = useState('');
@@ -5732,7 +5740,7 @@ function NexusActivityForm({
     }));
   }, [linkedOpenOpportunity && linkedOpenOpportunity.id]);
   const save = () => {
-    if (form.type === 'maintenance' && form.maintenanceSubType === 'other' && !(form.maintenanceOtherDetail || '').trim()) {
+    if (form.type === 'maintenance' && (form.maintenanceSubTypes || []).includes('other') && !(form.maintenanceOtherDetail || '').trim()) {
       setSaveError('その他の内容を入力してください');
       return;
     }
@@ -5813,9 +5821,13 @@ function NexusActivityForm({
     // 保全：ステータス確定＋「完了」になった時だけ完了日時を自動記録（営業ToDoの完了スタンプと同じ流儀）
     if (form.type === 'maintenance') {
       const maintenanceStatus = form.maintenanceStatus || '受付';
+      const maintenanceSubTypes = form.maintenanceSubTypes || [];
       patch.maintenanceStatus = maintenanceStatus;
       patch.maintenanceCompletedAt = maintenanceStatus === '完了' ? form.maintenanceCompletedAt || now : '';
-      patch.maintenanceOtherDetail = form.maintenanceSubType === 'other' ? (form.maintenanceOtherDetail || '').trim() : '';
+      patch.maintenanceSubTypes = maintenanceSubTypes;
+      // 複数選択（配列）に一本化するため、この機能導入前の旧フィールドはもう書き込まない
+      patch.maintenanceSubType = '';
+      patch.maintenanceOtherDetail = maintenanceSubTypes.includes('other') ? (form.maintenanceOtherDetail || '').trim() : '';
       patch.declineReasonOther = form.declineReason === 'その他' ? form.declineReasonOther || '' : '';
     }
     // お客様の声：ステータス確定＋「社内報告済」「完了」への到達時刻を自動記録
@@ -5920,12 +5932,20 @@ function NexusActivityForm({
       marginBottom: 10
     }
   }, NEXUS_ACTIVITY_TYPE_GUIDE[form.type].hint);
-  // ── 保全（maintenance）用フィールド ──
+  // ── 保全（maintenance）用フィールド。複数選択可能（結婚に伴う契約者変更・受取人変更・
+  // 指定代理請求人変更・支払口座変更の同時発生など）。 ──
+  const toggleMaintenanceSubType = key => setForm(f => {
+    const cur = f.maintenanceSubTypes || [];
+    return {
+      ...f,
+      maintenanceSubTypes: cur.includes(key) ? cur.filter(k => k !== key) : [...cur, key]
+    };
+  });
   const maintenanceSubTypeField = form.type === 'maintenance' && /*#__PURE__*/React.createElement("div", {
     className: "form-group"
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "保全内容"), NEXUS_MAINTENANCE_SUBTYPE_GROUPS.map(g => /*#__PURE__*/React.createElement("div", {
+  }, "保全内容（複数選択できます）"), NEXUS_MAINTENANCE_SUBTYPE_GROUPS.map(g => /*#__PURE__*/React.createElement("div", {
     key: g.label,
     style: {
       marginBottom: 8
@@ -5946,9 +5966,9 @@ function NexusActivityForm({
   }, g.items.map(item => /*#__PURE__*/React.createElement("button", {
     key: item.key,
     type: "button",
-    className: `chip ${form.maintenanceSubType === item.key ? 'active' : ''}`,
-    onClick: () => s('maintenanceSubType')(item.key)
-  }, item.label))))), form.maintenanceSubType === 'other' && /*#__PURE__*/React.createElement("input", {
+    className: `chip ${(form.maintenanceSubTypes || []).includes(item.key) ? 'active' : ''}`,
+    onClick: () => toggleMaintenanceSubType(item.key)
+  }, item.label))))), (form.maintenanceSubTypes || []).includes('other') && /*#__PURE__*/React.createElement("input", {
     className: "form-input",
     style: {
       marginTop: 8
@@ -5979,7 +5999,7 @@ function NexusActivityForm({
     className: `toggle-btn ${(form.maintenanceStatus || '受付') === st ? 'sel' : ''}`,
     onClick: () => s('maintenanceStatus')(st)
   }, st))));
-  const declineReasonField = form.type === 'maintenance' && (form.maintenanceSubType === 'cancel' || form.maintenanceSubType === 'reduce') && /*#__PURE__*/React.createElement("div", {
+  const declineReasonField = form.type === 'maintenance' && ((form.maintenanceSubTypes || []).includes('cancel') || (form.maintenanceSubTypes || []).includes('reduce')) && /*#__PURE__*/React.createElement("div", {
     className: "form-group"
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
@@ -6393,10 +6413,14 @@ function NexusActivityGuideAllSheet({
   }, "閉じる")));
 }
 // ── 保全のサブカテゴリ選択シート（4グループ・チップ選択、タップで選択して即座に閉じる） ──
+// 保全内容は複数選択可能（例：結婚に伴う契約者変更・受取人変更・指定代理請求人変更・
+// 支払口座変更の同時発生）。チップは選択トグルのみで、下部の「次へ」で確定して活動フォームへ進む。
 function NexusMaintenanceSubTypeSheet({
-  onSelect,
+  onConfirm,
   onClose
 }) {
+  const [selected, setSelected] = useState([]);
+  const toggle = key => setSelected(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
   return /*#__PURE__*/React.createElement("div", {
     className: "overlay",
     onClick: onClose
@@ -6407,7 +6431,7 @@ function NexusMaintenanceSubTypeSheet({
     className: "drawer-handle"
   }), /*#__PURE__*/React.createElement("div", {
     className: "drawer-title"
-  }, "保全内容を選択してください"), NEXUS_MAINTENANCE_SUBTYPE_GROUPS.map(g => /*#__PURE__*/React.createElement("div", {
+  }, "保全内容を選択してください（複数選択できます）"), NEXUS_MAINTENANCE_SUBTYPE_GROUPS.map(g => /*#__PURE__*/React.createElement("div", {
     key: g.label,
     style: {
       marginBottom: 14
@@ -6428,16 +6452,24 @@ function NexusMaintenanceSubTypeSheet({
   }, g.items.map(item => /*#__PURE__*/React.createElement("button", {
     key: item.key,
     type: "button",
-    className: "chip",
-    onClick: () => onSelect(item.key)
-  }, item.label))))), /*#__PURE__*/React.createElement("button", {
+    className: `chip ${selected.includes(item.key) ? 'active' : ''}`,
+    onClick: () => toggle(item.key)
+  }, item.label))))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      marginTop: 4
+    }
+  }, /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "btn btn-outline btn-full",
-    style: {
-      marginTop: 4
-    },
     onClick: onClose
-  }, "キャンセル")));
+  }, "キャンセル"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-full",
+    disabled: selected.length === 0,
+    onClick: () => onConfirm(selected)
+  }, selected.length > 0 ? `次へ（${selected.length}件）` : "次へ"))));
 }
 // ── 活動履歴の行表示（ホームのミニ一覧・全件表示画面の両方から使う） ──
 function NexusActivityHistoryList({
@@ -6671,9 +6703,9 @@ function NexusQuickActivityPanel({
   const [marketSourcePromptOpen, setMarketSourcePromptOpen] = useState(false);
   const [maintenancePickerOpen, setMaintenancePickerOpen] = useState(false);
   const [showFlaggedVoices, setShowFlaggedVoices] = useState(false);
-  const chooseMaintenanceSubType = key => {
+  const chooseMaintenanceSubTypes = keys => {
     setMaintenancePickerOpen(false);
-    setEditingLog({ type: 'maintenance', maintenanceSubType: key });
+    setEditingLog({ type: 'maintenance', maintenanceSubTypes: keys });
   };
   const add = typeKey => {
     if (busy) return;
@@ -7127,7 +7159,7 @@ function NexusQuickActivityPanel({
     }
   }, customerCardTitle, customerGrid);
   const maintenancePicker = maintenancePickerOpen && /*#__PURE__*/React.createElement(NexusMaintenanceSubTypeSheet, {
-    onSelect: chooseMaintenanceSubType,
+    onConfirm: chooseMaintenanceSubTypes,
     onClose: () => setMaintenancePickerOpen(false)
   });
   const flaggedVoicesScreen = showFlaggedVoices && /*#__PURE__*/React.createElement(NexusFlaggedVoicesScreen, {
@@ -12048,17 +12080,26 @@ function nexusMaintenanceSubTypeLabel(key) {
   }
   return key;
 }
+// 保全のサブカテゴリは複数選択可能（例：結婚に伴う契約者変更・受取人変更・指定代理請求人変更・
+// 支払口座変更の同時発生）。新データはmaintenanceSubTypes（配列）に保存するが、この機能を導入する
+// 前に単一のmaintenanceSubType（文字列）で保存された既存データも後方互換で読めるようにする。
+function nexusMaintenanceSubTypeKeys(a) {
+  if (Array.isArray(a.maintenanceSubTypes) && a.maintenanceSubTypes.length) return a.maintenanceSubTypes;
+  if (a.maintenanceSubType) return [a.maintenanceSubType];
+  return [];
+}
 // お客様の声の種類。口調の強弱ではなく「内容として不満の表明か」を記録することが目的。
 const NEXUS_VOICE_TYPES = ['苦情', 'ご要望', 'ご相談・ご意見', 'お褒めの言葉', 'その他'];
 const NEXUS_VOICE_STATUSES = ['受付', '対応中', '社内報告済', '完了'];
 // 活動履歴一覧に表示するラベル。保全・お客様の声はサブ種別・その他詳細を合成して
-// 「保全｜その他：海外転居に伴う手続き」のように何をしたか分かる表示にする。
+// 「保全｜契約者変更・受取人変更・その他：海外転居に伴う手続き」のように何をしたか分かる表示にする。
 function nexusActivityDisplayLabel(a) {
   const base = nexusActivityTypeLabel(a.type);
-  if (a.type === 'maintenance' && a.maintenanceSubType) {
-    const subLabel = nexusMaintenanceSubTypeLabel(a.maintenanceSubType);
-    const detail = a.maintenanceSubType === 'other' && a.maintenanceOtherDetail ? `：${a.maintenanceOtherDetail}` : '';
-    return `${base}｜${subLabel}${detail}`;
+  if (a.type === 'maintenance') {
+    const keys = nexusMaintenanceSubTypeKeys(a);
+    if (!keys.length) return base;
+    const labels = keys.map(k => k === 'other' && a.maintenanceOtherDetail ? `その他：${a.maintenanceOtherDetail}` : nexusMaintenanceSubTypeLabel(k));
+    return `${base}｜${labels.join('・')}`;
   }
   if (a.type === 'customer_voice' && a.voiceType) {
     const voiceLabel = a.voiceType === 'その他' && a.voiceTypeOther ? `その他：${a.voiceTypeOther}` : a.voiceType;
@@ -12533,7 +12574,8 @@ function createAnonymizedAnalyticsData({ customers, activityLogs, opportunities,
       if (includeMemo && a.memo) rec.memo = nexusSanitizeMemoText(a.memo, nameMapForMemo);
       // 保全：enum/日付/boolean（PIIリスクなし）はincludeMemoに関係なく含める。自由記述のみサニタイズガード。
       if (a.type === 'maintenance') {
-        rec.maintenanceSubType = a.maintenanceSubType ? nexusMaintenanceSubTypeLabel(a.maintenanceSubType) : null;
+        const maintenanceSubKeys = nexusMaintenanceSubTypeKeys(a);
+        rec.maintenanceSubTypes = maintenanceSubKeys.length ? maintenanceSubKeys.map(nexusMaintenanceSubTypeLabel) : null;
         rec.maintenanceReceivedAt = a.receivedAt || null;
         rec.maintenanceStatus = a.maintenanceStatus || null;
         rec.declineReason = a.declineReason || null;
