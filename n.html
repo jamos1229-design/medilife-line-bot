@@ -6844,7 +6844,16 @@ function NexusSalesKpiCard({
 }) {
   const [period, setPeriod] = useState('今日');
   const today = todayStr();
-  const week = nexusWeekRange(today);
+  const weekRaw = nexusWeekRange(today);
+  // nexusWeekRangeは月曜〜日曜の暦週全体を返す（タスクの「今週」フィルタでは未来の
+  // 予定も含めたいので、これは正しい）。ただし営業KPIの「今週」は「今週まだ起きて
+  // いない実績」を含めるべきではないため、終了日を今日でキャップする（今日が日曜で
+  // ない限りweekRaw.endは今日より未来になり、そのままでは他の期間（今月・3ヶ月等、
+  // すべて終了日=今日）より件数が多くなってしまい、期間間の整合性が崩れるため）。
+  const week = {
+    start: weekRaw.start,
+    end: weekRaw.end > today ? today : weekRaw.end
+  };
   const range = period === '今日' ? {
     start: today,
     end: today
@@ -7007,7 +7016,10 @@ function NexusAIAnalysisScreen({
     d.setDate(d.getDate() - n);
     return nexusFmtYmd(d);
   };
-  const range = period === '今日' ? { start: today, end: today } : period === '今週' ? nexusWeekRange(today) : period === '今月' ? { start: today.slice(0, 7) + '-01', end: today } : period === '過去30日' ? { start: daysAgo(29), end: today } : period === '過去90日' ? { start: daysAgo(89), end: today } : { start: customStart, end: customEnd };
+  // 「今週」も営業KPIカードと同様、終了日を今日でキャップする（他の期間との整合性のため）。
+  const weekRawForAi = nexusWeekRange(today);
+  const weekForAi = { start: weekRawForAi.start, end: weekRawForAi.end > today ? today : weekRawForAi.end };
+  const range = period === '今日' ? { start: today, end: today } : period === '今週' ? weekForAi : period === '今月' ? { start: today.slice(0, 7) + '-01', end: today } : period === '過去30日' ? { start: daysAgo(29), end: today } : period === '過去90日' ? { start: daysAgo(89), end: today } : { start: customStart, end: customEnd };
   const generate = () => {
     const pipelineExpectedRevenue = (tasks || []).filter(t => !t.completed && t.salesRank && t.expectedRevenue).reduce((s, t) => s + (Number(t.expectedRevenue) || 0), 0);
     const result = createAnonymizedAnalyticsData({
