@@ -5672,6 +5672,31 @@ function NexusActivityForm({
     createTask: false,
     expectedRevenue: '',
     linkedTaskId: '',
+    // 保全（maintenance）用フィールド
+    maintenanceSubType: '',
+    maintenanceOtherDetail: '',
+    maintenanceStatus: '',
+    maintenanceCompletedAt: '',
+    declineReason: '',
+    declineReasonOther: '',
+    // お客様の声（customer_voice）用フィールド
+    voiceType: '',
+    voiceTypeOther: '',
+    voiceContent: '',
+    voiceReporter: '',
+    voiceRelatedContract: '',
+    voiceOccurredAt: '',
+    voicePlace: '',
+    voiceBackground: '',
+    voiceCustomerRequest: '',
+    voiceResponseContent: '',
+    voiceInternalMemo: '',
+    voiceStatus: '',
+    voiceReportedAt: '',
+    voiceCompletedAt: '',
+    inappropriateFlag: false,
+    // 保全・お客様の声共用の「受付日」（occurredAt＝行動した日時とは別概念、新規作成時は当日をデフォルトにする）
+    receivedAt: todayStr(),
     createdAt: '',
     updatedAt: '',
     deletedAt: ''
@@ -5681,6 +5706,8 @@ function NexusActivityForm({
     ...(editing || {})
   });
   const [overrideMarketSource, setOverrideMarketSource] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [voiceDetailsOpen, setVoiceDetailsOpen] = useState(() => !!(editing && (editing.voiceReporter || editing.voiceRelatedContract || editing.voiceOccurredAt || editing.voicePlace || editing.voiceBackground || editing.voiceCustomerRequest || editing.voiceResponseContent || editing.voiceInternalMemo)));
   const s = k => v => setForm(f => ({
     ...f,
     [k]: v
@@ -5705,6 +5732,25 @@ function NexusActivityForm({
     }));
   }, [linkedOpenOpportunity && linkedOpenOpportunity.id]);
   const save = () => {
+    if (form.type === 'maintenance' && form.maintenanceSubType === 'other' && !(form.maintenanceOtherDetail || '').trim()) {
+      setSaveError('その他の内容を入力してください');
+      return;
+    }
+    if (form.type === 'customer_voice') {
+      if (!form.voiceType) {
+        setSaveError('声の種類を選択してください');
+        return;
+      }
+      if (form.voiceType === 'その他' && !(form.voiceTypeOther || '').trim()) {
+        setSaveError('その他の内容を入力してください');
+        return;
+      }
+      if (!(form.voiceContent || '').trim()) {
+        setSaveError('お客様から言われた内容を入力してください');
+        return;
+      }
+    }
+    setSaveError('');
     if (!form.type) return;
     if (marketSourceRequired && !form.marketSource) return;
     const now = new Date().toISOString();
@@ -5763,6 +5809,23 @@ function NexusActivityForm({
         updatedAt: now
       }]);
       patch.linkedTaskId = taskId;
+    }
+    // 保全：ステータス確定＋「完了」になった時だけ完了日時を自動記録（営業ToDoの完了スタンプと同じ流儀）
+    if (form.type === 'maintenance') {
+      const maintenanceStatus = form.maintenanceStatus || '受付';
+      patch.maintenanceStatus = maintenanceStatus;
+      patch.maintenanceCompletedAt = maintenanceStatus === '完了' ? form.maintenanceCompletedAt || now : '';
+      patch.maintenanceOtherDetail = form.maintenanceSubType === 'other' ? (form.maintenanceOtherDetail || '').trim() : '';
+      patch.declineReasonOther = form.declineReason === 'その他' ? form.declineReasonOther || '' : '';
+    }
+    // お客様の声：ステータス確定＋「社内報告済」「完了」への到達時刻を自動記録
+    if (form.type === 'customer_voice') {
+      const voiceStatus = form.voiceStatus || '受付';
+      patch.voiceStatus = voiceStatus;
+      patch.voiceReportedAt = voiceStatus === '社内報告済' || voiceStatus === '完了' ? form.voiceReportedAt || now : '';
+      patch.voiceCompletedAt = voiceStatus === '完了' ? form.voiceCompletedAt || now : '';
+      patch.voiceTypeOther = form.voiceType === 'その他' ? (form.voiceTypeOther || '').trim() : '';
+      patch.voiceContent = (form.voiceContent || '').trim();
     }
     const {
       createTask,
@@ -5857,6 +5920,211 @@ function NexusActivityForm({
       marginBottom: 10
     }
   }, NEXUS_ACTIVITY_TYPE_GUIDE[form.type].hint);
+  // ── 保全（maintenance）用フィールド ──
+  const maintenanceSubTypeField = form.type === 'maintenance' && /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "保全内容"), NEXUS_MAINTENANCE_SUBTYPE_GROUPS.map(g => /*#__PURE__*/React.createElement("div", {
+    key: g.label,
+    style: {
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 700,
+      color: 'var(--text-sub)',
+      marginBottom: 4
+    }
+  }, g.label), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 6
+    }
+  }, g.items.map(item => /*#__PURE__*/React.createElement("button", {
+    key: item.key,
+    type: "button",
+    className: `chip ${form.maintenanceSubType === item.key ? 'active' : ''}`,
+    onClick: () => s('maintenanceSubType')(item.key)
+  }, item.label))))), form.maintenanceSubType === 'other' && /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    style: {
+      marginTop: 8
+    },
+    value: form.maintenanceOtherDetail || '',
+    placeholder: "その他の内容を入力してください（例：海外転居に伴う手続き）",
+    onChange: si('maintenanceOtherDetail')
+  }));
+  const receivedAtField = (form.type === 'maintenance' || form.type === 'customer_voice') && /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "受付日"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    type: "date",
+    value: form.receivedAt || '',
+    onChange: si('receivedAt')
+  }));
+  const maintenanceStatusField = form.type === 'maintenance' && /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "対応状況"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, NEXUS_MAINTENANCE_STATUSES.map(st => /*#__PURE__*/React.createElement("button", {
+    key: st,
+    type: "button",
+    className: `toggle-btn ${(form.maintenanceStatus || '受付') === st ? 'sel' : ''}`,
+    onClick: () => s('maintenanceStatus')(st)
+  }, st))));
+  const declineReasonField = form.type === 'maintenance' && (form.maintenanceSubType === 'cancel' || form.maintenanceSubType === 'reduce') && /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "理由（任意）"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 8
+    }
+  }, NEXUS_MAINTENANCE_DECLINE_REASONS.map(r => /*#__PURE__*/React.createElement("button", {
+    key: r,
+    type: "button",
+    className: `chip ${form.declineReason === r ? 'active' : ''}`,
+    onClick: () => s('declineReason')(r)
+  }, r))), form.declineReason === 'その他' && /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    style: {
+      marginTop: 8
+    },
+    value: form.declineReasonOther || '',
+    placeholder: "理由を入力",
+    onChange: si('declineReasonOther')
+  }));
+  // ── お客様の声（customer_voice）用フィールド ──
+  const voiceTypeField = form.type === 'customer_voice' && /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "声の種類"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 8
+    }
+  }, NEXUS_VOICE_TYPES.map(v => /*#__PURE__*/React.createElement("button", {
+    key: v,
+    type: "button",
+    className: `chip ${form.voiceType === v ? 'active' : ''}`,
+    onClick: () => s('voiceType')(v)
+  }, v))), form.voiceType === 'その他' && /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    style: {
+      marginTop: 8
+    },
+    value: form.voiceTypeOther || '',
+    placeholder: "声の種類の詳細を入力してください",
+    onChange: si('voiceTypeOther')
+  }));
+  const voiceContentField = form.type === 'customer_voice' && /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "お客様から言われた内容"), /*#__PURE__*/React.createElement("textarea", {
+    className: "form-textarea",
+    style: {
+      minHeight: 120
+    },
+    value: form.voiceContent || '',
+    placeholder: "お客様から言われた内容をそのまま記録してください",
+    onChange: si('voiceContent')
+  }));
+  // 不適正事案対策は自動判定ではなく手動フラグ＋一覧確認方式。赤ではなく穏当な注意色（既存のNexusServiceStatusEditorの配色を再利用）。
+  const inappropriateFlagField = form.type === 'customer_voice' && /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      padding: '8px 10px',
+      background: '#FFF7ED',
+      border: '1px solid #FEF0D9',
+      borderRadius: 10,
+      marginBottom: 14,
+      fontSize: 13,
+      cursor: 'pointer'
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: !!form.inappropriateFlag,
+    onChange: e => s('inappropriateFlag')(e.target.checked)
+  }), "⚠ 不適正事案の可能性あり（該当する場合はチェック）");
+  const voiceDetailsToggle = form.type === 'customer_voice' && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setVoiceDetailsOpen(v => !v),
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--accent)',
+      fontSize: 11.5,
+      fontWeight: 700,
+      cursor: 'pointer',
+      padding: '4px 0',
+      marginBottom: 8
+    }
+  }, voiceDetailsOpen ? '▲ 詳細を閉じる' : '▼ 詳細を入力する（申出人・経緯など）');
+  const voiceTextField = (label, key, multiline) => /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, label), multiline ? /*#__PURE__*/React.createElement("textarea", {
+    className: "form-textarea",
+    value: form[key] || '',
+    onChange: si(key)
+  }) : /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    value: form[key] || '',
+    onChange: si(key)
+  }));
+  const voiceDetailsFields = form.type === 'customer_voice' && voiceDetailsOpen && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 4,
+      paddingTop: 8,
+      borderTop: '1px dashed var(--border)',
+      marginBottom: 10
+    }
+  }, voiceTextField('申出人', 'voiceReporter'), voiceTextField('対象契約', 'voiceRelatedContract'), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "発生日"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    type: "date",
+    value: form.voiceOccurredAt || '',
+    onChange: si('voiceOccurredAt')
+  })), voiceTextField('発生場所・場面', 'voicePlace'), voiceTextField('経緯', 'voiceBackground', true), voiceTextField('お客様が求めていること', 'voiceCustomerRequest', true), voiceTextField('対応内容', 'voiceResponseContent', true), voiceTextField('社内メモ', 'voiceInternalMemo', true));
+  const voiceStatusField = form.type === 'customer_voice' && /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "対応状況"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, NEXUS_VOICE_STATUSES.map(st => /*#__PURE__*/React.createElement("button", {
+    key: st,
+    type: "button",
+    className: `toggle-btn ${(form.voiceStatus || '受付') === st ? 'sel' : ''}`,
+    onClick: () => s('voiceStatus')(st)
+  }, st))));
+  const saveErrorMsg = saveError && /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: 'var(--danger)',
+      fontSize: 13,
+      fontWeight: 700,
+      marginBottom: 10,
+      textAlign: 'center'
+    }
+  }, "⚠ ", saveError);
   const linkedTaskNote = form.linkedTaskId && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11.5,
@@ -5943,7 +6211,7 @@ function NexusActivityForm({
       customerNameText: e.target.value,
       customerId: e.target.value ? '' : f.customerId
     }))
-  })), revenueField, marketSourceField, typeHint, /*#__PURE__*/React.createElement("div", {
+  })), revenueField, marketSourceField, typeHint, maintenanceSubTypeField, receivedAtField, maintenanceStatusField, declineReasonField, voiceTypeField, voiceContentField, inappropriateFlagField, voiceDetailsToggle, voiceDetailsFields, voiceStatusField, form.type !== 'customer_voice' && /*#__PURE__*/React.createElement("div", {
     className: "form-group"
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
@@ -5996,7 +6264,7 @@ function NexusActivityForm({
     type: "checkbox",
     checked: !!form.createTask,
     onChange: e => s('createTask')(e.target.checked)
-  }), "この内容でタスク（営業ToDo）を作成する")), linkedTaskNote, /*#__PURE__*/React.createElement("div", {
+  }), "この内容でタスク（営業ToDo）を作成する")), linkedTaskNote, saveErrorMsg, /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       gap: 8
@@ -6124,6 +6392,53 @@ function NexusActivityGuideAllSheet({
     onClick: onClose
   }, "閉じる")));
 }
+// ── 保全のサブカテゴリ選択シート（4グループ・チップ選択、タップで選択して即座に閉じる） ──
+function NexusMaintenanceSubTypeSheet({
+  onSelect,
+  onClose
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "overlay",
+    onClick: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "drawer",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "drawer-handle"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "drawer-title"
+  }, "保全内容を選択してください"), NEXUS_MAINTENANCE_SUBTYPE_GROUPS.map(g => /*#__PURE__*/React.createElement("div", {
+    key: g.label,
+    style: {
+      marginBottom: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 700,
+      color: 'var(--text-sub)',
+      marginBottom: 6
+    }
+  }, g.label), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 8
+    }
+  }, g.items.map(item => /*#__PURE__*/React.createElement("button", {
+    key: item.key,
+    type: "button",
+    className: "chip",
+    onClick: () => onSelect(item.key)
+  }, item.label))))), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: {
+      marginTop: 4
+    },
+    onClick: onClose
+  }, "キャンセル")));
+}
 // ── 活動履歴の行表示（ホームのミニ一覧・全件表示画面の両方から使う） ──
 function NexusActivityHistoryList({
   activityLogs,
@@ -6179,7 +6494,7 @@ function NexusActivityHistoryList({
       fontWeight: 700,
       flexShrink: 0
     }
-  }, nexusActivityTypeLabel(a.type)), (a.customerId || a.customerNameText) && /*#__PURE__*/React.createElement("span", {
+  }, nexusActivityDisplayLabel(a)), (a.customerId || a.customerNameText) && /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 12.5,
       color: 'var(--text-sub)',
@@ -6281,6 +6596,58 @@ function NexusActivityHistoryScreen({
     text: "活動履歴はまだありません"
   }) : sections));
 }
+// ── 不適正事案の可能性ありとフラグされた「お客様の声」だけを集めた確認一覧画面 ──
+// 自動判定はせず、手動フラグ＋一覧確認方式（見逃し防止）。既存のNexusActivityHistoryListに
+// 絞り込み済み配列を渡すだけなので、タップ→編集→保存という既存の編集/削除導線をそのまま再利用できる。
+function NexusFlaggedVoicesScreen({
+  activityLogs,
+  setActivityLogs,
+  customers,
+  onClose,
+  opportunities,
+  setOpportunities,
+  setTasks
+}) {
+  const flagged = nexusActiveLogs(activityLogs).filter(a => a.type === 'customer_voice' && a.inappropriateFlag).sort((a, b) => (b.occurredAt || '').localeCompare(a.occurredAt || ''));
+  return /*#__PURE__*/React.createElement("div", {
+    className: "full-screen"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "full-header"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    style: {
+      background: 'none',
+      border: 'none',
+      cursor: 'pointer',
+      fontSize: 15,
+      color: 'var(--text-sub)',
+      fontWeight: 600,
+      padding: '4px 8px'
+    }
+  }, "← 戻る"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      fontSize: 16,
+      fontWeight: 700
+    }
+  }, "⚠ 不適正事案の確認")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 16
+    }
+  }, flagged.length === 0 ? /*#__PURE__*/React.createElement(EmptyState, {
+    icon: "✅",
+    text: "現在フラグ付きの声はありません"
+  }) : /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement(NexusActivityHistoryList, {
+    activityLogs: flagged,
+    setActivityLogs: setActivityLogs,
+    customers: customers,
+    opportunities: opportunities,
+    setOpportunities: setOpportunities,
+    setTasks: setTasks
+  }))));
+}
 // クイック登録ボタン1回分の活動時間ウィンドウ（この時間内の同種連打はブロックする）
 const NEXUS_ACTIVITY_DEDUP_WINDOW_MS = 1500;
 // ── クイック営業活動登録：タップした瞬間にactivityLogsへ1件保存する。
@@ -6302,6 +6669,12 @@ function NexusQuickActivityPanel({
   const [guideType, setGuideType] = useState(null);
   const [showAllGuide, setShowAllGuide] = useState(false);
   const [marketSourcePromptOpen, setMarketSourcePromptOpen] = useState(false);
+  const [maintenancePickerOpen, setMaintenancePickerOpen] = useState(false);
+  const [showFlaggedVoices, setShowFlaggedVoices] = useState(false);
+  const chooseMaintenanceSubType = key => {
+    setMaintenancePickerOpen(false);
+    setEditingLog({ type: 'maintenance', maintenanceSubType: key });
+  };
   const add = typeKey => {
     if (busy) return;
     const active = nexusActiveLogs(activityLogs);
@@ -6424,14 +6797,33 @@ function NexusQuickActivityPanel({
         flex: 1,
         minWidth: 0
       },
-      onClick: () => needsForm ? setEditingLog({
-        type: t.key
-      }) : add(t.key)
+      onClick: () => {
+        // 保全は即時1タップ登録せず、まずサブカテゴリ選択シートを開く
+        // （NEXUS_ACTIVITY_MARKET_SOURCE_REQUIREDには絶対に追加しない：追加すると商談元必須ロジックが誤爆する）。
+        if (t.key === 'maintenance') {
+          setMaintenancePickerOpen(true);
+          return;
+        }
+        // お客様の声も声の種類・内容の入力が必要なため、登録フォームを開く
+        if (t.key === 'customer_voice') {
+          setEditingLog({
+            type: t.key
+          });
+          return;
+        }
+        if (needsForm) {
+          setEditingLog({
+            type: t.key
+          });
+          return;
+        }
+        add(t.key);
+      }
     }, "＋", t.label);
     if (t.category !== 'sales') {
       return /*#__PURE__*/React.createElement("div", {
         key: t.key,
-        style: t.key === 'close' ? {
+        style: t.key === 'close' || t.key === 'customer_voice' ? {
           gridColumn: '1 / -1'
         } : null
       }, mainBtn);
@@ -6703,14 +7095,50 @@ function NexusQuickActivityPanel({
   const allGuideSheet = showAllGuide && /*#__PURE__*/React.createElement(NexusActivityGuideAllSheet, {
     onClose: () => setShowAllGuide(false)
   });
+  const flaggedVoiceCount = nexusActiveLogs(activityLogs).filter(a => a.type === 'customer_voice' && a.inappropriateFlag).length;
+  const customerCardTitle = /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card-title",
+    style: {
+      marginBottom: 0
+    }
+  }, "🤝 お客様対応"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setShowFlaggedVoices(true),
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--accent)',
+      fontSize: 12,
+      cursor: 'pointer',
+      padding: 0
+    }
+  }, "⚠ 不適正事案の確認", flaggedVoiceCount > 0 ? `（${flaggedVoiceCount}）` : ''));
   const customerCard = /*#__PURE__*/React.createElement("div", {
     className: "card",
     style: {
       marginTop: 12
     }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card-title"
-  }, "🤝 お客様対応"), customerGrid);
+  }, customerCardTitle, customerGrid);
+  const maintenancePicker = maintenancePickerOpen && /*#__PURE__*/React.createElement(NexusMaintenanceSubTypeSheet, {
+    onSelect: chooseMaintenanceSubType,
+    onClose: () => setMaintenancePickerOpen(false)
+  });
+  const flaggedVoicesScreen = showFlaggedVoices && /*#__PURE__*/React.createElement(NexusFlaggedVoicesScreen, {
+    activityLogs: activityLogs,
+    setActivityLogs: setActivityLogs,
+    customers: customers,
+    onClose: () => setShowFlaggedVoices(false),
+    opportunities: opportunities,
+    setOpportunities: setOpportunities,
+    setTasks: setTasks
+  });
   const recentCard = /*#__PURE__*/React.createElement("div", {
     className: "card",
     style: {
@@ -6739,7 +7167,7 @@ function NexusQuickActivityPanel({
       cursor: 'pointer'
     }
   }, "すべて見る →")), recentList);
-  return /*#__PURE__*/React.createElement(React.Fragment, null, salesCard, customerCard, recentCard, editDrawer, historyScreen, guideSheet, allGuideSheet);
+  return /*#__PURE__*/React.createElement(React.Fragment, null, salesCard, customerCard, recentCard, editDrawer, historyScreen, guideSheet, allGuideSheet, maintenancePicker, flaggedVoicesScreen);
 }
 // 「次回アポを設定」用の簡易フォーム（日付・開始/終了時刻・内容・顧客）。
 // 保存すると既存のtasksストアへ1件ToDoを作る（新しいストアは増やさない）。
@@ -11572,10 +12000,71 @@ const NEXUS_ACTIVITY_TYPES = [{
   key: 'renewal',
   label: '更新・満期',
   category: 'customer'
+}, {
+  key: 'customer_voice',
+  label: 'お客様の声',
+  category: 'customer'
 }];
 function nexusActivityTypeLabel(key) {
   const t = NEXUS_ACTIVITY_TYPES.find(x => x.key === key);
   return t ? t.label : key;
+}
+// 保全のサブカテゴリ（4グループ）。契約者変更／受取人変更／指定代理請求人変更／契約者代理人変更は
+// それぞれ独立したキーとして保存し、「名義変更」という大きなくくりにまとめない。
+const NEXUS_MAINTENANCE_SUBTYPE_GROUPS = [{
+  label: '契約終了・保障変更',
+  items: [{ key: 'cancel', label: '解約' }, { key: 'reduce', label: '減額' }]
+}, {
+  label: '人・名義に関する変更',
+  items: [
+    { key: 'policyholder_change', label: '契約者変更' },
+    { key: 'beneficiary_change', label: '受取人変更' },
+    { key: 'proxy_claimant_change', label: '指定代理請求人変更' },
+    { key: 'policyholder_agent_change', label: '契約者代理人変更' },
+    { key: 'name_change', label: '氏名変更' }
+  ]
+}, {
+  label: '住所・支払い等',
+  items: [
+    { key: 'address_change', label: '住所・連絡先変更' },
+    { key: 'payment_account_change', label: '支払口座・クレジットカード変更' },
+    { key: 'payment_method_change', label: '払方変更' }
+  ]
+}, {
+  label: '契約内容・その他',
+  items: [
+    { key: 'rider_change', label: '特約・契約内容変更' },
+    { key: 'document_request', label: '証券・各種書類' },
+    { key: 'reinstatement', label: '復活・失効対応' },
+    { key: 'other', label: 'その他' }
+  ]
+}];
+const NEXUS_MAINTENANCE_STATUSES = ['受付', '手続中', '完了'];
+const NEXUS_MAINTENANCE_DECLINE_REASONS = ['保険料が高い', '他社へ切替', '保障が不要になった', '家計見直し', '資金が必要', '契約内容への不満', '担当者・会社への不満', 'その他'];
+function nexusMaintenanceSubTypeLabel(key) {
+  for (const g of NEXUS_MAINTENANCE_SUBTYPE_GROUPS) {
+    const item = g.items.find(i => i.key === key);
+    if (item) return item.label;
+  }
+  return key;
+}
+// お客様の声の種類。口調の強弱ではなく「内容として不満の表明か」を記録することが目的。
+const NEXUS_VOICE_TYPES = ['苦情', 'ご要望', 'ご相談・ご意見', 'お褒めの言葉', 'その他'];
+const NEXUS_VOICE_STATUSES = ['受付', '対応中', '社内報告済', '完了'];
+// 活動履歴一覧に表示するラベル。保全・お客様の声はサブ種別・その他詳細を合成して
+// 「保全｜その他：海外転居に伴う手続き」のように何をしたか分かる表示にする。
+function nexusActivityDisplayLabel(a) {
+  const base = nexusActivityTypeLabel(a.type);
+  if (a.type === 'maintenance' && a.maintenanceSubType) {
+    const subLabel = nexusMaintenanceSubTypeLabel(a.maintenanceSubType);
+    const detail = a.maintenanceSubType === 'other' && a.maintenanceOtherDetail ? `：${a.maintenanceOtherDetail}` : '';
+    return `${base}｜${subLabel}${detail}`;
+  }
+  if (a.type === 'customer_voice' && a.voiceType) {
+    const voiceLabel = a.voiceType === 'その他' && a.voiceTypeOther ? `その他：${a.voiceTypeOther}` : a.voiceType;
+    return `${base}｜${voiceLabel}`;
+  }
+  return base;
 }
 // 顧客を選びやすくすべき活動（商談・提案・成約・保全・給付請求）
 const NEXUS_ACTIVITY_TYPES_PREFER_CUSTOMER = ['deal', 'proposal', 'close', 'maintenance', 'claim'];
@@ -12042,6 +12531,33 @@ function createAnonymizedAnalyticsData({ customers, activityLogs, opportunities,
       if (includeMemo && a.marketSourceOther) rec.marketSourceOther = nexusSanitizeMemoText(a.marketSourceOther, nameMapForMemo);
       if (includeMemo && a.nextActionOther) rec.nextActionOther = nexusSanitizeMemoText(a.nextActionOther, nameMapForMemo);
       if (includeMemo && a.memo) rec.memo = nexusSanitizeMemoText(a.memo, nameMapForMemo);
+      // 保全：enum/日付/boolean（PIIリスクなし）はincludeMemoに関係なく含める。自由記述のみサニタイズガード。
+      if (a.type === 'maintenance') {
+        rec.maintenanceSubType = a.maintenanceSubType ? nexusMaintenanceSubTypeLabel(a.maintenanceSubType) : null;
+        rec.maintenanceReceivedAt = a.receivedAt || null;
+        rec.maintenanceStatus = a.maintenanceStatus || null;
+        rec.declineReason = a.declineReason || null;
+        if (includeMemo && a.maintenanceOtherDetail) rec.maintenanceOtherDetail = nexusSanitizeMemoText(a.maintenanceOtherDetail, nameMapForMemo);
+        if (includeMemo && a.declineReasonOther) rec.declineReasonOther = nexusSanitizeMemoText(a.declineReasonOther, nameMapForMemo);
+      }
+      // お客様の声：自由記述はincludeMemoガード＋サニタイズ必須。ただし社内メモ（voiceInternalMemo）は
+      // 不適正事案関連の内部評価等の機微情報を含みやすいため、includeMemoの値に関わらず常に除外する。
+      if (a.type === 'customer_voice') {
+        rec.voiceType = a.voiceType || null;
+        rec.voiceReceivedAt = a.receivedAt || null;
+        rec.voiceOccurredAt = a.voiceOccurredAt || null;
+        rec.voiceStatus = a.voiceStatus || null;
+        rec.inappropriateFlag = !!a.inappropriateFlag;
+        if (includeMemo && a.voiceTypeOther) rec.voiceTypeOther = nexusSanitizeMemoText(a.voiceTypeOther, nameMapForMemo);
+        if (includeMemo && a.voiceContent) rec.voiceContent = nexusSanitizeMemoText(a.voiceContent, nameMapForMemo);
+        if (includeMemo && a.voiceReporter) rec.voiceReporter = nexusSanitizeMemoText(a.voiceReporter, nameMapForMemo);
+        if (includeMemo && a.voiceRelatedContract) rec.voiceRelatedContract = nexusSanitizeMemoText(a.voiceRelatedContract, nameMapForMemo);
+        if (includeMemo && a.voicePlace) rec.voicePlace = nexusSanitizeMemoText(a.voicePlace, nameMapForMemo);
+        if (includeMemo && a.voiceBackground) rec.voiceBackground = nexusSanitizeMemoText(a.voiceBackground, nameMapForMemo);
+        if (includeMemo && a.voiceCustomerRequest) rec.voiceCustomerRequest = nexusSanitizeMemoText(a.voiceCustomerRequest, nameMapForMemo);
+        if (includeMemo && a.voiceResponseContent) rec.voiceResponseContent = nexusSanitizeMemoText(a.voiceResponseContent, nameMapForMemo);
+        // voiceInternalMemo（社内メモ）はincludeMemoの値に関わらず意図的にAIエクスポートへ含めない
+      }
       return rec;
     });
     return { ...profile, activities };
