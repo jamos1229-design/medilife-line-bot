@@ -5910,6 +5910,13 @@ function NexusActivityForm({
     value: timeVal,
     onChange: e => setTime(e.target.value)
   }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--text-sub)',
+      marginTop: -6,
+      marginBottom: 10
+    }
+  }, "💡 この活動を行った日時を入力してください（面談の予定日ではありません。面談の予定は保存後に設定できます）"), /*#__PURE__*/React.createElement("div", {
     className: "form-group"
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
@@ -6385,7 +6392,9 @@ function NexusQuickActivityPanel({
       const idx = prev.findIndex(x => x.id === a.id);
       return idx >= 0 ? prev.map((x, i) => i === idx ? a : x) : [a, ...prev];
     });
-    if (isNew && a.type === 'deal') setDealPrompt(a.id);
+    // 商談後の「次回予定」だけでなく、アポ確定の直後にも「その面談の日時」を設定できるようにする
+    // （アポ確定＝日付欄に入れた「確定した日」とは別に、実際の面談日時を管理したいというケースのため）。
+    if (isNew && (a.type === 'deal' || a.type === 'appt_confirmed')) setDealPrompt(a.id);
     setEditingLog(null);
   };
   const deleteLog = id => {
@@ -6576,6 +6585,9 @@ function NexusQuickActivityPanel({
       display: 'block'
     }
   }, "顧客を紐づける"), firstContactChip, marketSourceChip);
+  const dealPromptLog = dealPrompt && activityLogs.find(a => a.id === dealPrompt);
+  // アポ確定直後は「その面談自体」の日時、商談直後は「次回」の日時を聞きたいので文言を分ける
+  const dealPromptIsAppt = dealPromptLog && dealPromptLog.type === 'appt_confirmed';
   const dealPromptCard = dealPrompt && !showApptForm && /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 10,
@@ -6589,7 +6601,7 @@ function NexusQuickActivityPanel({
       fontWeight: 700,
       marginBottom: 8
     }
-  }, "次回予定は決まっていますか？"), /*#__PURE__*/React.createElement("div", {
+  }, dealPromptIsAppt ? "面談の日時は決まっていますか？" : "次回予定は決まっていますか？"), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       flexWrap: 'wrap',
@@ -6599,7 +6611,7 @@ function NexusQuickActivityPanel({
     type: "button",
     className: "btn btn-primary btn-sm",
     onClick: () => setShowApptForm(true)
-  }, "次回アポを設定"), /*#__PURE__*/React.createElement("button", {
+  }, dealPromptIsAppt ? "面談日時を設定" : "次回アポを設定"), /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "btn btn-outline btn-sm",
     onClick: () => setDealPrompt(null)
@@ -6766,7 +6778,7 @@ function NexusNextApptMiniForm({
   }, "内容"), /*#__PURE__*/React.createElement("input", {
     className: "form-input",
     value: form.title,
-    placeholder: "例：田中様 次回面談",
+    placeholder: "例：田中様 面談",
     onChange: si('title')
   })), /*#__PURE__*/React.createElement("div", {
     className: "form-row",
