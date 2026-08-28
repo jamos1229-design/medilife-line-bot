@@ -6825,7 +6825,16 @@ function NexusNextApptMiniForm({
 // 活動件数はactivityLogsから都度集計（編集・削除しても常に正しい数字になる）。
 // 見込み売上（オープン案件）は引き続きtasksから、確定売上・目標・残りは既存のsales
 // （ml_sales_v1）から算出する（この部分の仕組みは変更しない）。
-const NEXUS_KPI_PERIODS = ['今日', '今週', '今月'];
+const NEXUS_KPI_PERIODS = ['今日', '今週', '今月', '3ヶ月', '半年', '1年', '全期間'];
+// todayStrのmonthsAgoヶ月前の日付（ローカル日付ベース）。KPIの長期間フィルタの下限に使う。
+// 対象月にその日が存在しない場合（例：8/31の1ヶ月前）はJSの標準的な繰り上がりに任せる
+// （期間フィルタの下限が1〜2日ずれる程度で、KPI集計の実用上は問題にならない）。
+const nexusMonthsAgoStr = (monthsAgo, baseStr) => {
+  const [y, m, d] = baseStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setMonth(dt.getMonth() - monthsAgo);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+};
 function NexusSalesKpiCard({
   activityLogs,
   tasks,
@@ -6839,8 +6848,20 @@ function NexusSalesKpiCard({
   const range = period === '今日' ? {
     start: today,
     end: today
-  } : period === '今週' ? week : {
+  } : period === '今週' ? week : period === '今月' ? {
     start: today.slice(0, 7) + '-01',
+    end: today
+  } : period === '3ヶ月' ? {
+    start: nexusMonthsAgoStr(3, today),
+    end: today
+  } : period === '半年' ? {
+    start: nexusMonthsAgoStr(6, today),
+    end: today
+  } : period === '1年' ? {
+    start: nexusMonthsAgoStr(12, today),
+    end: today
+  } : {
+    start: '2000-01-01',
     end: today
   };
   const kpi = nexusActivityKpi(activityLogs, range.start, range.end);
@@ -6887,8 +6908,9 @@ function NexusSalesKpiCard({
   }, "営業ファネル率"), /*#__PURE__*/React.createElement("div", {
     className: "stat-grid"
   }, rateTiles));
-  const marketSourceRows = period === '今月' ? nexusMarketSourceBreakdown(activityLogs, range.start, range.end) : [];
-  const marketSourceCard = period === '今月' && marketSourceRows.length > 0 && /*#__PURE__*/React.createElement("div", {
+  const showMarketSourceBreakdown = period !== '今日' && period !== '今週';
+  const marketSourceRows = showMarketSourceBreakdown ? nexusMarketSourceBreakdown(activityLogs, range.start, range.end) : [];
+  const marketSourceCard = showMarketSourceBreakdown && marketSourceRows.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 12
     }
@@ -6899,7 +6921,7 @@ function NexusSalesKpiCard({
       color: 'var(--text-sub)',
       marginBottom: 8
     }
-  }, "商談元別実績（今月）"), marketSourceRows.map(r => /*#__PURE__*/React.createElement("div", {
+  }, "商談元別実績（", period, "）"), marketSourceRows.map(r => /*#__PURE__*/React.createElement("div", {
     key: r.marketSource,
     style: {
       display: 'flex',
