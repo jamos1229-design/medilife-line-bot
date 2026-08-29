@@ -2825,6 +2825,7 @@ function CustomerForm({
     // 個人 / 法人
     name: '',
     furigana: '',
+    formerName: '',
     age: '',
     gender: '',
     birthdate: '',
@@ -3265,6 +3266,15 @@ function CustomerForm({
     placeholder: "例：ヤマダ タロウ",
     value: form.furigana || '',
     onChange: si('furigana')
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "旧姓（任意）"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    placeholder: "例：中堀（結婚等による改姓前の姓）",
+    value: form.formerName || '',
+    onChange: si('formerName')
   })), /*#__PURE__*/React.createElement("div", {
     className: "form-row"
   }, /*#__PURE__*/React.createElement("div", {
@@ -4171,7 +4181,13 @@ function CustomerDetail({
       color: 'var(--text-sub)',
       marginTop: 2
     }
-  }, c.furigana), c.customerType === '法人' && c.name && /*#__PURE__*/React.createElement("div", {
+  }, c.furigana), c.customerType !== '法人' && c.formerName && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text-sub)',
+      marginTop: 2
+    }
+  }, "旧姓：", c.formerName), c.customerType === '法人' && c.name && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 13,
       color: 'var(--text-sub)',
@@ -8813,7 +8829,7 @@ function CustomerListTab({
       const q = search.toLowerCase();
       // 契約情報（保険会社・保険種類）を結合して検索
       const contractText = (c.contracts || []).map(ct => [ct.company, ct.type].filter(Boolean).join(' ')).join(' ').toLowerCase();
-      return c.name.includes(search) || (c.corporateName || '').includes(search) || (c.phone || '').includes(q) || (c.memo || '').includes(search) || (c.email || '').toLowerCase().includes(q) || (c.address || '').includes(search) || (c.postalCode || '').includes(search) || contractText.includes(q);
+      return c.name.includes(search) || (c.corporateName || '').includes(search) || (c.formerName || '').includes(search) || (c.phone || '').includes(q) || (c.memo || '').includes(search) || (c.email || '').toLowerCase().includes(q) || (c.address || '').includes(search) || (c.postalCode || '').includes(search) || contractText.includes(q);
     });
     const STATUS_ORDER = ['未接触', 'アポ済', '面談済', 'フォロー中'];
     list.sort((a, b) => {
