@@ -5730,6 +5730,8 @@ function NexusActivityForm({
     return merged;
   });
   const [overrideMarketSource, setOverrideMarketSource] = useState(false);
+  const [opportunitySheetOpen, setOpportunitySheetOpen] = useState(false);
+  const [keepToast, setKeepToast] = useState('');
   const [saveError, setSaveError] = useState('');
   const [voiceDetailsOpen, setVoiceDetailsOpen] = useState(() => !!(editing && (editing.voiceReporter || editing.voiceRelatedContract || editing.voiceOccurredAt || editing.voicePlace || editing.voiceBackground || editing.voiceCustomerRequest || editing.voiceResponseContent || editing.voiceInternalMemo)));
   const s = k => v => setForm(f => ({
@@ -5745,7 +5747,12 @@ function NexusActivityForm({
   // 同一顧客のopen案件が既にあれば、その商談元を自動引き継ぎして聞き直さない。
   const marketSourceRequired = NEXUS_ACTIVITY_MARKET_SOURCE_REQUIRED.includes(form.type);
   const showMarketSource = marketSourceRequired || NEXUS_ACTIVITY_MARKET_SOURCE_OPTIONAL.includes(form.type);
-  const linkedOpenOpportunity = showMarketSource ? (opportunities || []).find(o => o.status === 'open' && (form.customerId && o.customerId === form.customerId || !form.customerId && form.customerNameText && o.customerNameText === form.customerNameText)) : null;
+  // 🔥売上・商談を作る（category:'sales'）の活動は、同じ顧客のopen案件が既にあればそれを「関連案件」
+  // として自動的に引き継ぐ（案件元を毎回聞き直さない）。商談元必須/任意の一部typeだけを対象にしていた
+  // 既存のlinkedOpenOpportunityと同じ検索条件を共有し、二重にopportunitiesを検索しないようにする。
+  const isSalesActivityType = (NEXUS_ACTIVITY_TYPES.find(t => t.key === form.type) || {}).category === 'sales';
+  const linkedOpenOpportunityForCustomer = form.customerId || form.customerNameText ? (opportunities || []).find(o => o.status === 'open' && (form.customerId && o.customerId === form.customerId || !form.customerId && form.customerNameText && o.customerNameText === form.customerNameText)) : null;
+  const linkedOpenOpportunity = showMarketSource ? linkedOpenOpportunityForCustomer : null;
   React.useEffect(() => {
     if (!linkedOpenOpportunity || form.marketSource || overrideMarketSource) return;
     setForm(f => ({
@@ -5755,6 +5762,29 @@ function NexusActivityForm({
       relatedOpportunityId: linkedOpenOpportunity.id
     }));
   }, [linkedOpenOpportunity && linkedOpenOpportunity.id]);
+  // 「📂 関連案件」：商談元必須/任意の4分類に限らず、sales分類の活動全体（新規接触〜成約）で
+  // 同じ顧客のopen案件があれば自動的に紐付ける。既存の商談元用useEffectとは別に、独立して動かす。
+  React.useEffect(() => {
+    if (!isSalesActivityType || !linkedOpenOpportunityForCustomer || form.relatedOpportunityId) return;
+    setForm(f => f.relatedOpportunityId ? f : {
+      ...f,
+      relatedOpportunityId: linkedOpenOpportunityForCustomer.id
+    });
+  }, [isSalesActivityType, linkedOpenOpportunityForCustomer && linkedOpenOpportunityForCustomer.id]);
+  const relatedCaseOpportunity = form.relatedOpportunityId ? (opportunities || []).find(o => o.id === form.relatedOpportunityId) : null;
+  const handleOpportunitySave = details => {
+    const result = nexusSaveOpportunityDetails(opportunities, form.relatedOpportunityId, {
+      customerId: form.customerId,
+      customerNameText: form.customerNameText,
+      ...details
+    });
+    setOpportunities(result.opportunities);
+    setForm(f => ({
+      ...f,
+      relatedOpportunityId: result.opportunityId
+    }));
+    setOpportunitySheetOpen(false);
+  };
   const save = () => {
     if (form.type === 'maintenance' && (form.maintenanceSubTypes || []).includes('other') && !(form.maintenanceOtherDetail || '').trim()) {
       setSaveError('その他の内容を入力してください');
@@ -5940,6 +5970,42 @@ function NexusActivityForm({
   const marketSourceField = showMarketSource && /*#__PURE__*/React.createElement("div", {
     className: "form-group"
   }, marketSourceLabel, linkedOpenOpportunity && !overrideMarketSource ? marketSourceLinkedRow : /*#__PURE__*/React.createElement(React.Fragment, null, marketSourceSelect, marketSourceOtherInput));
+  // 「📂 関連案件」：見込フォロー等も含むsales分類全体で、案件名・案件元・案件元詳細を1回登録すれば
+  // 同じ案件が進行する限り自動的に引き継がれる（保全／給付・請求／更新・満期／お客様の声には出さない）。
+  const relatedCaseField = isSalesActivityType && /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "📂 関連案件"), relatedCaseOpportunity ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13.5,
+      lineHeight: 1.7
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700
+    }
+  }, relatedCaseOpportunity.name || '（案件名未設定）'), /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: 'var(--text-sub)',
+      fontSize: 12.5
+    }
+  }, "案件元：", nexusCaseSourceLabel(relatedCaseOpportunity.caseSourceKey), relatedCaseOpportunity.caseSourceDetail && ` ／ ${relatedCaseOpportunity.caseSourceDetail}`), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setOpportunitySheetOpen(true),
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--accent)',
+      fontSize: 12.5,
+      cursor: 'pointer',
+      padding: '4px 0'
+    }
+  }, "案件を変更")) : /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    onClick: () => setOpportunitySheetOpen(true)
+  }, "＋ この活動から案件を作る"));
   const typeHint = form.type && NEXUS_ACTIVITY_TYPE_GUIDE[form.type] && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11.5,
@@ -6168,6 +6234,52 @@ function NexusActivityForm({
       marginBottom: 10
     }
   }, "🔗 次回アポのToDoが作成されています（タスク→営業ToDoから確認できます）");
+  // Google Keepへのコピーは、既存のNegotiationDetail（商談記録画面）と同じ共通処理
+  // （nexusCopyTextToClipboard/nexusCopyToKeep）を再利用する。見た目・トーストの流儀も揃える。
+  const keepButtonCustomer = (customers || []).find(c => c.id === form.customerId);
+  const handleCopyToKeep = () => {
+    const nextActionLabel = form.nextAction === 'その他' && form.nextActionOther ? form.nextActionOther : form.nextAction;
+    const summary = nexusBuildActivityKeepSummary(form, {
+      customerName: keepButtonCustomer ? keepButtonCustomer.name : form.customerNameText,
+      activityLabel: nexusActivityDisplayLabel(form),
+      opportunityName: relatedCaseOpportunity ? relatedCaseOpportunity.name : '',
+      caseSourceLabel: relatedCaseOpportunity && relatedCaseOpportunity.caseSourceKey ? nexusCaseSourceLabel(relatedCaseOpportunity.caseSourceKey) : '',
+      caseSourceDetail: relatedCaseOpportunity ? relatedCaseOpportunity.caseSourceDetail : '',
+      dateTimeStr: dateVal && timeVal ? `${dateVal.replace(/-/g, '/')} ${timeVal}` : '',
+      nextActionLabel
+    });
+    nexusCopyToKeep(summary, () => {
+      setKeepToast('📋 コピーしました！Google Keepに貼り付けてください');
+      setTimeout(() => setKeepToast(''), 3000);
+    });
+  };
+  const activityKeepButton = /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-full",
+    style: {
+      marginBottom: 10,
+      background: '#FFF9C4',
+      color: '#F57F17',
+      border: '1.5px solid #F9A825',
+      fontWeight: 700,
+      fontSize: 14,
+      borderRadius: 12
+    },
+    onClick: handleCopyToKeep
+  }, "📝 Google Keepにコピー");
+  const keepToastMsg = keepToast && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: '#F57F17',
+      textAlign: 'center',
+      marginBottom: 8
+    }
+  }, keepToast);
+  const opportunitySheet = opportunitySheetOpen && /*#__PURE__*/React.createElement(NexusOpportunityEditSheet, {
+    opportunity: relatedCaseOpportunity,
+    onSave: handleOpportunitySave,
+    onClose: () => setOpportunitySheetOpen(false)
+  });
   const deleteBtn = form.id && /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "btn btn-outline btn-full",
@@ -6247,7 +6359,7 @@ function NexusActivityForm({
       customerNameText: e.target.value,
       customerId: e.target.value ? '' : f.customerId
     }))
-  })), revenueField, marketSourceField, typeHint, maintenanceSubTypeField, receivedAtField, maintenanceStatusField, declineReasonField, voiceTypeField, voiceContentField, inappropriateFlagField, voiceDetailsToggle, voiceDetailsFields, voiceStatusField, form.type !== 'customer_voice' && /*#__PURE__*/React.createElement("div", {
+  })), revenueField, marketSourceField, relatedCaseField, typeHint, maintenanceSubTypeField, receivedAtField, maintenanceStatusField, declineReasonField, voiceTypeField, voiceContentField, inappropriateFlagField, voiceDetailsToggle, voiceDetailsFields, voiceStatusField, form.type !== 'customer_voice' && /*#__PURE__*/React.createElement("div", {
     className: "form-group"
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
@@ -6300,7 +6412,7 @@ function NexusActivityForm({
     type: "checkbox",
     checked: !!form.createTask,
     onChange: e => s('createTask')(e.target.checked)
-  }), "この内容でタスク（営業ToDo）を作成する")), linkedTaskNote, saveErrorMsg, /*#__PURE__*/React.createElement("div", {
+  }), "この内容でタスク（営業ToDo）を作成する")), linkedTaskNote, activityKeepButton, keepToastMsg, saveErrorMsg, /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       gap: 8
@@ -6312,7 +6424,7 @@ function NexusActivityForm({
     className: "btn btn-primary btn-full",
     onClick: save,
     disabled: !form.type || marketSourceRequired && !form.marketSource
-  }, "保存")), deleteBtn);
+  }, "保存")), deleteBtn, opportunitySheet);
 }
 // ── 営業活動1分類の説明ボトムシート（ⓘタップで表示。意味／具体例／間違えやすい分類との違い） ──
 function NexusActivityGuideSheet({
@@ -6486,6 +6598,109 @@ function NexusMaintenanceSubTypeSheet({
     disabled: selected.length === 0,
     onClick: () => onConfirm(selected)
   }, selected.length > 0 ? `次へ（${selected.length}件）` : "次へ"))));
+}
+// ── 案件（opportunity）の案件名・案件元・案件元詳細・Keep URLを編集する画面。
+// 活動編集画面の「📂 関連案件」から開く。案件元は必須にしない（未設定のまま保存できる）。 ──
+function NexusOpportunityEditSheet({
+  opportunity,
+  onSave,
+  onClose
+}) {
+  const [name, setName] = useState((opportunity && opportunity.name) || '');
+  const [caseSourceKey, setCaseSourceKey] = useState((opportunity && opportunity.caseSourceKey) || '');
+  const [caseSourceDetail, setCaseSourceDetail] = useState((opportunity && opportunity.caseSourceDetail) || '');
+  const [keepUrl, setKeepUrl] = useState((opportunity && opportunity.keepUrl) || '');
+  return /*#__PURE__*/React.createElement("div", {
+    className: "overlay",
+    onClick: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "drawer",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "drawer-handle"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "drawer-title"
+  }, opportunity ? "案件を編集" : "この活動から案件を作る"), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "案件名"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    value: name,
+    placeholder: "例：医療保険相談",
+    onChange: e => setName(e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "案件元（任意）"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 8
+    }
+  }, NEXUS_CASE_SOURCES.map(cs => /*#__PURE__*/React.createElement("button", {
+    key: cs.key,
+    type: "button",
+    className: `chip ${caseSourceKey === cs.key ? 'active' : ''}`,
+    onClick: () => setCaseSourceKey(caseSourceKey === cs.key ? '' : cs.key)
+  }, cs.label)))), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "案件元詳細（任意）"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    value: caseSourceDetail,
+    placeholder: "例：田中さんからの紹介／LinkedInの投稿へのコメントから",
+    onChange: e => setCaseSourceDetail(e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "この案件のGoogle Keepメモ（任意）"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    value: keepUrl,
+    placeholder: "GoogleKeepのメモURLを貼り付け",
+    onChange: e => setKeepUrl(e.target.value)
+  }), keepUrl ? /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-full",
+    style: {
+      marginTop: 8,
+      background: '#FFF9C4',
+      color: '#F57F17',
+      border: '1.5px solid #F9A825',
+      fontWeight: 700,
+      fontSize: 14,
+      borderRadius: 12
+    },
+    onClick: () => window.open(keepUrl, '_blank')
+  }, "📝 この案件のKeepを開く") : /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--text-sub)',
+      marginTop: 6
+    }
+  }, "Keep URLを登録すると、この案件専用のメモにワンタップで戻れます")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      marginTop: 4
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    onClick: onClose
+  }, "キャンセル"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-full",
+    onClick: () => onSave({
+      name: name.trim(),
+      caseSourceKey,
+      caseSourceDetail: caseSourceDetail.trim(),
+      keepUrl: keepUrl.trim()
+    })
+  }, "保存"))));
 }
 // ── 活動履歴の行表示（ホームのミニ一覧・全件表示画面の両方から使う） ──
 function NexusActivityHistoryList({
@@ -9510,19 +9725,7 @@ function NegotiationDetail({
     setToast(msg);
     setTimeout(() => setToast(''), 3000);
   };
-  const copyText = (text, msg) => {
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(text).then(() => showToast(msg));
-    } else {
-      const el = document.createElement('textarea');
-      el.value = text;
-      document.body.appendChild(el);
-      el.select();
-      document.execCommand('copy');
-      document.body.removeChild(el);
-      showToast(msg);
-    }
-  };
+  const copyText = (text, msg) => nexusCopyTextToClipboard(text, () => showToast(msg));
   const summary = `【商談メモ】
 氏名: ${displayName}
 面談日: ${memo.date}
@@ -9536,8 +9739,7 @@ ${memo.memo}`.trim();
     copyText(prompts[type], '📋 コピーしました！Claude.aiに貼り付けてください');
   };
   const copyToKeep = () => {
-    copyText(`【商談メモ】${memo.date} ${displayName}\n\n${memo.memo}`.trim(), '📋 コピーしました！Google Keepに貼り付けてください');
-    setTimeout(() => window.open('https://keep.google.com', '_blank'), 400);
+    nexusCopyToKeep(`【商談メモ】${memo.date} ${displayName}\n\n${memo.memo}`.trim(), () => showToast('📋 コピーしました！Google Keepに貼り付けてください'));
   };
   const AI_BTNS = [{
     type: 'referral',
@@ -12162,6 +12364,141 @@ const NEXUS_ACTIVITY_MARKET_SOURCE_REQUIRED = ['appt_confirmed', 'deal', 'propos
 const NEXUS_ACTIVITY_MARKET_SOURCE_OPTIONAL = ['opportunity_pitch', 'appt_request'];
 // 「次のアクション」の選択肢
 const NEXUS_NEXT_ACTION_OPTIONS = ['再連絡', 'アポ依頼', '資料送付', '商談', '提案', 'その他'];
+// 案件元（今回の具体的な案件・商談が生まれた経路）の選択肢。安定キー＋表示名の構造にすることで、
+// 将来「案件元ごとの案件数・商談数・成約数・売上」を集計できるようにする（今回は集計画面は作らない）。
+// 顧客の「流入元」（acquisitionSource＝その人と最初につながった経路）や、既存の商談元
+// （marketSource＝NEXUS_MARKET_SOURCES）とは語彙・意味が異なるため統合しない。
+const NEXUS_CASE_SOURCES = [{
+  key: 'referral',
+  label: '紹介'
+}, {
+  key: 'existing_customer',
+  label: '既契約者'
+}, {
+  key: 'past_prospect',
+  label: '過去見込み客'
+}, {
+  key: 'linkedin',
+  label: 'LinkedIn'
+}, {
+  key: 'note',
+  label: 'note'
+}, {
+  key: 'youtube',
+  label: 'YouTube'
+}, {
+  key: 'seminar',
+  label: 'セミナー'
+}, {
+  key: 'networking',
+  label: '交流会'
+}, {
+  key: 'community',
+  label: '公民館・地域活動'
+}, {
+  key: 'self_new_contact',
+  label: '自分からの新規接触'
+}, {
+  key: 'other',
+  label: 'その他'
+}];
+function nexusCaseSourceLabel(key) {
+  if (!key) return '未設定';
+  const found = NEXUS_CASE_SOURCES.find(s => s.key === key);
+  return found ? found.label : key;
+}
+// 案件（opportunity）の案件名／案件元／案件元詳細／Keep URLをユーザーが直接編集・新規作成する経路専任の
+// 関数。ステージ進行に伴う自動引き継ぎ・自動クローズを行うnexusResolveOpportunityとは責務を分離する。
+function nexusSaveOpportunityDetails(opportunities, opportunityId, {
+  customerId,
+  customerNameText,
+  name,
+  caseSourceKey,
+  caseSourceDetail,
+  keepUrl
+}) {
+  const now = new Date().toISOString();
+  const list = opportunities || [];
+  const existing = opportunityId ? list.find(o => o.id === opportunityId) : null;
+  if (existing) {
+    const updated = {
+      ...existing,
+      name: name !== undefined ? name : existing.name,
+      caseSourceKey: caseSourceKey !== undefined ? caseSourceKey : existing.caseSourceKey,
+      caseSourceDetail: caseSourceDetail !== undefined ? caseSourceDetail : existing.caseSourceDetail,
+      keepUrl: keepUrl !== undefined ? keepUrl : existing.keepUrl,
+      updatedAt: now
+    };
+    return {
+      opportunities: list.map(o => o.id === existing.id ? updated : o),
+      opportunityId: existing.id
+    };
+  }
+  const id = uid();
+  const created = {
+    id,
+    customerId: customerId || '',
+    customerNameText: customerId ? '' : customerNameText || '',
+    marketSource: '',
+    sourceDetail: '',
+    status: 'open',
+    expectedRevenue: 0,
+    confirmedRevenue: 0,
+    name: name || '',
+    caseSourceKey: caseSourceKey || '',
+    caseSourceDetail: caseSourceDetail || '',
+    keepUrl: keepUrl || '',
+    createdAt: now,
+    updatedAt: now
+  };
+  return {
+    opportunities: [created, ...list],
+    opportunityId: id
+  };
+}
+// 活動記録をGoogle Keepに貼り付けやすいテキストにまとめる。値が無い項目は見出しごと省略する
+// （空欄を無理に表示しない）。Keep連携の実処理はnexusCopyToKeep（NegotiationDetailと共通）を使う。
+function nexusBuildActivityKeepSummary(activity, opts) {
+  opts = opts || {};
+  const customerName = opts.customerName || '';
+  const activityLabel = opts.activityLabel || '';
+  const opportunityName = opts.opportunityName || '';
+  const caseSourceLabel = opts.caseSourceLabel || '';
+  const caseSourceDetail = opts.caseSourceDetail || '';
+  const dateTimeStr = opts.dateTimeStr || '';
+  const memo = activity && activity.memo || '';
+  const nextActionLabel = opts.nextActionLabel || '';
+  const lines = [];
+  if (customerName) lines.push(`【${customerName}さん】`, '');
+  if (activityLabel) lines.push('■活動', activityLabel, '');
+  if (opportunityName) lines.push('■案件', opportunityName, '');
+  if (caseSourceLabel) lines.push('■案件元', caseSourceLabel, '');
+  if (caseSourceDetail) lines.push('■案件元詳細', caseSourceDetail, '');
+  if (dateTimeStr) lines.push('■日時', dateTimeStr, '');
+  if (memo) lines.push('■記録', memo, '');
+  if (nextActionLabel) lines.push('■次回対応', nextActionLabel, '');
+  while (lines.length && lines[lines.length - 1] === '') lines.pop();
+  return lines.join('\n');
+}
+// Google Keep連携の共通処理。NegotiationDetail（商談記録画面）の既存copyText/copyToKeepを
+// トップレベル関数として抽出したもの。新しい呼び出し元（活動編集画面）はこれを再利用する。
+function nexusCopyTextToClipboard(text, onDone) {
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(text).then(() => onDone && onDone());
+  } else {
+    const el = document.createElement('textarea');
+    el.value = text;
+    document.body.appendChild(el);
+    el.select();
+    document.execCommand('copy');
+    document.body.removeChild(el);
+    onDone && onDone();
+  }
+}
+function nexusCopyToKeep(text, onDone) {
+  nexusCopyTextToClipboard(text, onDone);
+  setTimeout(() => window.open('https://keep.google.com', '_blank'), 400);
+}
 // 商談元（marketSource）を案件（opportunity）単位で自動引き継ぐ。同一顧客のopen案件が既にあれば
 // その案件を再利用し、marketSourceを聞き直さない（引数のmarketSourceは「変更」時のみ渡す想定で、
 // 渡されなければ既存の値をそのまま使う）。close段階では案件をclosedにし、確定売上を記録する。
