@@ -16331,13 +16331,44 @@ function nexusFindNoticeCustomerName(rows, headerRowIdx) {
   }
   return '';
 }
+// 「契約内容のお知らせ」形式のExcelで、契約者名（"○○ 様"）の行より前にある
+// 〒郵便番号行・住所行を拾う。〒マーク付きの行だけを郵便番号として扱うことで、
+// レターヘッド等の無関係な数字列を誤って住所として取り込まないようにする。
+function nexusFindNoticeCustomerAddressInfo(rows, headerRowIdx) {
+  let postalCode = '';
+  const addressLines = [];
+  let sawPostal = false;
+  for (let i = 0; i < headerRowIdx; i++) {
+    const cell = (rows[i][0] || '').toString().trim();
+    if (!cell) continue;
+    const nameMatch = cell.match(/^(.+?)\s*様$/);
+    if (nameMatch) break;
+    const postalMatch = cell.match(/^〒\s*(\d{3})-?(\d{4})/);
+    if (postalMatch) {
+      postalCode = `${postalMatch[1]}-${postalMatch[2]}`;
+      sawPostal = true;
+      continue;
+    }
+    if (sawPostal) addressLines.push(cell);
+  }
+  return {
+    postalCode,
+    address: addressLines.join('')
+  };
+}
 function nexusParseInsuranceNoticeReport(rows) {
   const headerRowIdx = rows.findIndex(r => (r[0] || '').toString().trim() === NEXUS_NOTICE_REPORT_HEADER[0] && (r[1] || '').toString().trim() === NEXUS_NOTICE_REPORT_HEADER[1]);
   if (headerRowIdx === -1) return {
     customerName: '',
+    postalCode: '',
+    address: '',
     contracts: []
   };
   const customerName = nexusFindNoticeCustomerName(rows, headerRowIdx);
+  const {
+    postalCode,
+    address
+  } = nexusFindNoticeCustomerAddressInfo(rows, headerRowIdx);
   const dataRows = rows.slice(headerRowIdx + 1);
   const startIndexes = [];
   dataRows.forEach((r, i) => {
@@ -16382,6 +16413,8 @@ function nexusParseInsuranceNoticeReport(rows) {
   }).filter(c => c.company || c.policyNum);
   return {
     customerName,
+    postalCode,
+    address,
     contracts
   };
 }
@@ -16453,11 +16486,15 @@ function nexusParseWorkbookFile(file, callback) {
       if (nexusLooksLikeInsuranceNoticeReport(rows)) {
         const {
           customerName,
+          postalCode,
+          address,
           contracts
         } = nexusParseInsuranceNoticeReport(rows);
         callback({
           kind: 'noticeReport',
           customerName,
+          postalCode,
+          address,
           contracts
         });
         return;
@@ -20814,6 +20851,8 @@ function NexusContractImportScreen({
   // 場合は列マッピング画面を飛ばし、そのままプレビューを組み立てて確認画面へ進む。
   const buildPreviewFromNoticeReport = ({
     customerName,
+    postalCode,
+    address,
     contracts
   }) => {
     const normName = s => (s || '').replace(/[\s　]/g, '');
@@ -20872,6 +20911,8 @@ function NexusContractImportScreen({
         contractorName,
         contractorKana: c.contractorKana,
         contractorBirthdate: c.contractorBirthdate,
+        postalCode: postalCode || '',
+        address: address || '',
         contract,
         matches,
         resolution,
@@ -21006,8 +21047,8 @@ function NexusContractImportScreen({
               birthdate: r.contractorBirthdate || '',
               phone: '',
               email: '',
-              postalCode: '',
-              address: '',
+              postalCode: r.postalCode || '',
+              address: r.address || '',
               occupation: '',
               workplace: '',
               maritalStatus: '',
@@ -21040,6 +21081,8 @@ function NexusContractImportScreen({
             };
             if (!c.furigana && r.contractorKana) patch.furigana = r.contractorKana;
             if (!c.birthdate && r.contractorBirthdate) patch.birthdate = r.contractorBirthdate;
+            if (!c.postalCode && r.postalCode) patch.postalCode = r.postalCode;
+            if (!c.address && r.address) patch.address = r.address;
             return {
               ...c,
               ...patch
