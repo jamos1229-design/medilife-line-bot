@@ -16777,12 +16777,15 @@ function nexusEnsureXlsxLib(callback) {
   script.onerror = () => alert('Excel読み込みライブラリの取得に失敗しました。通信環境をご確認のうえ、もう一度お試しください。');
   document.head.appendChild(script);
 }
-function nexusParseWorkbookFile(file, callback) {
+function nexusParseWorkbookFile(file, callback, onError) {
+  // onErrorを渡さない既存の呼び出しは従来通りalert()で即座にエラー表示する。複数ファイル取込のように
+  // 呼び出し側でエラーをまとめて扱いたい場合だけonErrorを渡す（追加のオプション引数、後方互換）。
+  const fail = onError || alert;
   const name = (file.name || '').toLowerCase();
   const toHeaderRows = rows => {
     const filled = rows.filter(r => r.some(c => (c || '').toString().trim()));
     if (filled.length < 1) {
-      alert('データがありません');
+      fail('データがありません');
       return;
     }
     const headers = filled[0].map(h => (h || '').toString().trim());
@@ -16798,7 +16801,7 @@ function nexusParseWorkbookFile(file, callback) {
       try {
         toHeaderRows(parseCSVFull(e.target.result));
       } catch (err) {
-        alert('CSVの読み込みに失敗しました：' + err.message);
+        fail('CSVの読み込みに失敗しました：' + err.message);
       }
     };
     reader.readAsText(file, 'UTF-8');
@@ -16811,7 +16814,7 @@ function nexusParseWorkbookFile(file, callback) {
       });
       const sheetName = wb.SheetNames[0];
       if (!sheetName) {
-        alert('シートが見つかりませんでした');
+        fail('シートが見つかりませんでした');
         return;
       }
       const ws = wb.Sheets[sheetName];
@@ -16838,7 +16841,7 @@ function nexusParseWorkbookFile(file, callback) {
       }
       toHeaderRows(rows);
     }).catch(err => {
-      alert('ファイルの読み込みに失敗しました。ファイル形式をご確認のうえ、もう一度お試しください（' + (err && err.message || '') + '）');
+      fail('ファイルの読み込みに失敗しました。ファイル形式をご確認のうえ、もう一度お試しください（' + (err && err.message || '') + '）');
     });
   });
 }
@@ -21276,6 +21279,85 @@ function NexusContractImportScreen({
       setPhase('mapping');
     });
   };
+  // 複数ファイルの同時取込。「契約内容のお知らせ」形式（顧客1人＝1ファイル）は列マッピングが
+  // 不要なため、そのまま全ファイル分を1つのプレビューにまとめる。一覧表形式は列の見出しが
+  // 完全一致するファイル同士だけ行を結合し、見出しが違う・形式が混在する場合はまとめて取り込めない
+  // 旨を案内したうえで最初の1件だけ通常フロー（単一ファイルと同じ画面遷移）に進める。
+  const handleFiles = fileList => {
+    const files = Array.from(fileList || []);
+    if (files.length === 0) return;
+    if (files.length === 1) {
+      handleFile(files[0]);
+      return;
+    }
+    const results = new Array(files.length).fill(null);
+    const errors = [];
+    let settled = 0;
+    const finalize = () => {
+      const ok = results.filter(Boolean);
+      if (ok.length === 0) {
+        alert('ファイルを読み込めませんでした。\n' + errors.join('\n'));
+        return;
+      }
+      const noticeResults = ok.filter(r => r.kind === 'noticeReport');
+      const flatResults = ok.filter(r => r.kind !== 'noticeReport');
+      const reportErrors = () => {
+        if (errors.length) alert('一部のファイルを読み込めませんでした：\n' + errors.join('\n'));
+      };
+      if (noticeResults.length > 0 && flatResults.length === 0) {
+        const combined = noticeResults.flatMap(buildPreviewFromNoticeReport);
+        if (combined.length === 0) {
+          alert('契約データを検出できませんでした。ファイルの内容をご確認ください。');
+          return;
+        }
+        setPreviewRows(combined);
+        setPhase('preview');
+        reportErrors();
+        return;
+      }
+      if (flatResults.length > 0 && noticeResults.length === 0) {
+        const first = flatResults[0];
+        const sameHeaders = flatResults.every(r => r.headers.length === first.headers.length && r.headers.every((h, i) => h === first.headers[i]));
+        if (sameHeaders) {
+          setHeaders(first.headers);
+          setRawRows(flatResults.flatMap(r => r.rows));
+          setMapping(nexusGuessColumnMapping(first.headers));
+          setPhase('mapping');
+          reportErrors();
+          return;
+        }
+        alert('選択したファイルの列の見出しが一致しないため、まとめて取り込めません。1ファイルずつ取り込んでください（最初の1件のみ次の画面に進みます）。');
+        setHeaders(first.headers);
+        setRawRows(first.rows);
+        setMapping(nexusGuessColumnMapping(first.headers));
+        setPhase('mapping');
+        return;
+      }
+      // お知らせ形式と一覧表形式が混在している場合はまとめて取り込めないため、最初の1件のみ進める
+      alert('お知らせ形式と一覧表形式のファイルが混在しているため、まとめて取り込めません。1ファイルずつ取り込んでください（最初の1件のみ次の画面に進みます）。');
+      const r0 = ok[0];
+      if (r0.kind === 'noticeReport') {
+        setPreviewRows(buildPreviewFromNoticeReport(r0));
+        setPhase('preview');
+      } else {
+        setHeaders(r0.headers);
+        setRawRows(r0.rows);
+        setMapping(nexusGuessColumnMapping(r0.headers));
+        setPhase('mapping');
+      }
+    };
+    files.forEach((f, i) => {
+      nexusParseWorkbookFile(f, result => {
+        results[i] = result;
+        settled++;
+        if (settled === files.length) finalize();
+      }, msg => {
+        errors.push(`${f.name}：${msg}`);
+        settled++;
+        if (settled === files.length) finalize();
+      });
+    });
+  };
   const applyPreset = name => {
     const preset = presets[name];
     if (!preset) return;
@@ -21460,19 +21542,20 @@ function NexusContractImportScreen({
       marginBottom: 10,
       lineHeight: 1.6
     }
-  }, "既契約一覧のファイル（.xlsx / .csv）を選んでください。列の見出しが違っていても、次の画面で対応する項目を選べます。"), /*#__PURE__*/React.createElement("input", {
+  }, "既契約一覧のファイル（.xlsx / .csv）を選んでください。列の見出しが違っていても、次の画面で対応する項目を選べます。複数ファイルをまとめて選ぶこともできます。"), /*#__PURE__*/React.createElement("input", {
     ref: fileRef,
     type: "file",
     accept: ".xlsx,.xls,.csv",
+    multiple: true,
     style: {
       display: 'none'
     },
-    onChange: e => handleFile(e.target.files[0])
+    onChange: e => handleFiles(e.target.files)
   }), /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "btn btn-primary btn-full",
     onClick: () => fileRef.current?.click()
-  }, "📑 ファイルを選ぶ")), phase === 'mapping' && /*#__PURE__*/React.createElement(React.Fragment, null, Object.keys(presets).length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, "📑 ファイルを選ぶ（複数選択可）")), phase === 'mapping' && /*#__PURE__*/React.createElement(React.Fragment, null, Object.keys(presets).length > 0 && /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "form-label"
