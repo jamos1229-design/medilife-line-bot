@@ -24675,11 +24675,15 @@ function NexusCorpSummaryTab({
     className: "stat-num"
   }, `${Math.round(safetyStatus.remaining / 10000).toLocaleString()}万円`), /*#__PURE__*/React.createElement("div", {
     className: "stat-label"
-  }, "倒産防止共済 残り枠")), /*#__PURE__*/React.createElement("div", {
+  }, "倒産防止共済 残り枠")),
+  // 「保険」タブの内訳は2系統：①法人（corp）自身のcontracts＝既契約Excel/CSV取込・OCR等で
+  // 読み込まれた既契約（読み取り専用）、②corpInsurancePolicies＝法人プランニングで手入力する
+  // 経理処理区分等付きの一覧。サマリーの件数はどちらか一方だけだと実態と合わないため両方を合算する。
+  /*#__PURE__*/React.createElement("div", {
     className: "stat-card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "stat-num"
-  }, (data.corpInsurancePolicies || []).length, "件"), /*#__PURE__*/React.createElement("div", {
+  }, (corp.contracts || []).length + (data.corpInsurancePolicies || []).length, "件"), /*#__PURE__*/React.createElement("div", {
     className: "stat-label"
   }, "法人保険契約数"))));
 }
