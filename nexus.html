@@ -22759,6 +22759,26 @@ function nexusFundEval(f) {
     gainPct: costTotal > 0 ? (value - costTotal) / costTotal * 100 : null
   };
 }
+// 「未入力」と「本当の0」を区別するための共通判定（空文字・null・undefined・NaNのみ未入力扱い、
+// 数値の0や文字列"0"は正当な入力として扱う）。PDF・Excel出力で0円と誤表示しないために使う。
+function nexusHasValue(v) {
+  return v !== undefined && v !== null && v !== '' && !(typeof v === 'number' && isNaN(v));
+}
+// 投資信託・株式は、評価額・評価損益の計算に必要な入力（口数・数量と各基準価額／価格）が
+// 揃っていない場合、nexusFundEval/nexusStockEvalが0を返してしまう（未入力を0円と誤解させる）。
+// 計算に必要な入力が揃っているかどうかだけをここで判定し、表示文言は呼び出し側で決める。
+function nexusFundCanEvalValue(f) {
+  return nexusHasValue(f.units) && nexusHasValue(f.currentNav);
+}
+function nexusFundCanEvalCost(f) {
+  return nexusHasValue(f.units) && nexusHasValue(f.costNav);
+}
+function nexusStockCanEvalValue(s) {
+  return nexusHasValue(s.quantity) && nexusHasValue(s.currentPrice);
+}
+function nexusStockCanEvalCost(s) {
+  return nexusHasValue(s.quantity) && nexusHasValue(s.costPrice);
+}
 // 銘柄別に入力した株式・投資信託の評価額合計＋手入力の概算（その他）分を合算
 function nexusPortfolioFundsStocksTotal(portfolioObj) {
   const stocks = portfolioObj && portfolioObj.stocks || [];
@@ -23836,7 +23856,7 @@ function nexusCoverageAmountDisplay(lump, daily) {
 // 「保障・資産が0である」という誤った診断に見えてしまうため、必ず「未入力」等の文言に置き換える。
 function nexusMonthlyTargetDisplay(categories, categoryKeys, monthlyTarget) {
   const hasInput = categoryKeys.some(key => parseFloat((categories[key] || {}).years) > 0);
-  return hasInput ? monthlyTarget.toLocaleString() + '円／月' : '未入力';
+  return hasInput ? monthlyTarget.toLocaleString() + '円／月' : '未算出';
 }
 function nexusEducationStatusDisplay(kids, kidsWithEducation) {
   if (kids.length === 0) return '対象者なし';
@@ -23851,6 +23871,10 @@ function nexusEducationStatusDisplay(kids, kidsWithEducation) {
 }
 function nexusLoanBalanceDisplay(loans, totalLoanBalance) {
   return loans.length === 0 ? '未登録' : totalLoanBalance.toLocaleString() + '円';
+}
+// 年齢が未登録（null）の場合に空欄のまま表示しないための共通ヘルパー（1・6ページ目・Excel共通）
+function nexusAgeDisplay(age) {
+  return age !== null && age !== undefined ? age + '歳' : '未入力';
 }
 function nexusPortfolioRegisteredDisplay(assetClassChart, portfolioTotal) {
   return assetClassChart.length === 0 ? '未登録' : portfolioTotal.toLocaleString() + '円';
@@ -26862,7 +26886,7 @@ function NexusPlanningSection({
       <div class="print-section">
         <h3>家族情報</h3>
         <table>
-          <tr><th>本人年齢</th><td>${ageSelf !== null ? ageSelf + '歳' : ''}</td><th>配偶者年齢</th><td>${ageSpouse !== null ? ageSpouse + '歳' : ''}</td></tr>
+          <tr><th>本人年齢</th><td>${nexusAgeDisplay(ageSelf)}</td><th>配偶者年齢</th><td>${nexusAgeDisplay(ageSpouse)}</td></tr>
           <tr><th>お子様</th><td colspan="3">${escapeHtmlForPrint(kidsSummary)}</td></tr>
         </table>
       </div>
@@ -26895,7 +26919,7 @@ function NexusPlanningSection({
       <div class="print-section">
         <h3>ローン明細（基本項目）</h3>
         <table><tr><th>区分</th><th>名称</th><th>残高</th><th>金利</th><th>金利タイプ</th><th>毎月返済額</th><th>ボーナス払い</th><th>返済方式</th><th>完済予定／残り年数</th></tr>${loanBasicRows}</table>
-        <p style="font-size:12px;"><b>ローン残高合計：${totalLoanBalance.toLocaleString()}円</b></p>
+        <p style="font-size:12px;"><b>ローン残高合計：${nexusLoanBalanceDisplay(loans, totalLoanBalance)}</b></p>
       </div>
       ${kidsWithEducation.length === 0 ? '' : `
       <div class="print-section">
@@ -26946,15 +26970,13 @@ function NexusPlanningSection({
       const diagnosisRowsHtml = diagnosisRows.map(([label, key]) => `<tr><td>${label}</td><td>未算出</td><td>${nexusCoverageAmountDisplay(coverageDiagnosisSummary.byPurpose[key], coverageDiagnosisSummary.dailyByPurpose[key])}</td><td>判定不可</td><td>未判定</td></tr>`).join('');
       return `
       <div class="print-section">
-        <h3>保障診断${isCoupleScope ? '｜世帯合算' : ''}</h3>
+        <h3>保障診断結果${isCoupleScope ? '｜世帯合算' : ''}</h3>
         <p style="font-size:11px;color:#666;margin:2px 0 6px;">※必要保障額の算定ロジックは現時点でMEDiLIFE NEXUSに実装されていないため、必要保障額・過不足・評価は表示していません。現在保障額は、実際に登録されている契約内容から機械的に集計した金額です。</p>
         <table><tr><th>保障項目</th><th>必要保障額</th><th>現在保障額</th><th>過不足</th><th>評価</th></tr>${diagnosisRowsHtml}</table>
       </div>`;
       })()}
       ${insuredGroups.map(g => buildPurposeRowsForPrint(`被保険者別 保障集計：${g.name}`, g.contracts, null, g.name === customer.name ? ageSelf : linkedSpouseCustomer && g.name === linkedSpouseCustomer.name ? ageSpouse : null)).join('')}
-      ${buildPurposeRowsForPrint('保障集計（本人）', contracts, customer.name, ageSelf)}
       ${isCoupleScope ? `
-        ${buildPurposeRowsForPrint('保障集計（配偶者）', spouseContracts, linkedSpouseCustomer.name, ageSpouse)}
         ${buildPurposeRowsFromSummary('保障集計（世帯合算）', nexusMergePurposeSummaries(nexusPurposeSummary(nexusOwnCoverageContracts(contracts, customer.name), ageSelf), nexusPurposeSummary(nexusOwnCoverageContracts(spouseContracts, linkedSpouseCustomer.name), ageSpouse)))}
       ` : ''}
       <div class="print-section">
@@ -26984,11 +27006,15 @@ function NexusPlanningSection({
       if (stocksAll.length === 0 && fundsAll.length === 0) return '';
       const stockRows = stocksAll.map(st => {
         const ev = nexusStockEval(st);
-        return `<tr><td>${escapeHtmlForPrint(st.name)}</td><td>${escapeHtmlForPrint(st.owner || '—')}</td><td>${st.quantity || ''}株</td><td>${st.costPrice ? Number(st.costPrice).toLocaleString() + '円' : ''}</td><td>${st.currentPrice ? Number(st.currentPrice).toLocaleString() + '円' : ''}</td><td>${Math.round(ev.value).toLocaleString()}円</td><td>${ev.gain >= 0 ? '+' : ''}${Math.round(ev.gain).toLocaleString()}円</td></tr>`;
+        const canValue = nexusStockCanEvalValue(st);
+        const canCost = nexusStockCanEvalCost(st);
+        return `<tr><td>${escapeHtmlForPrint(st.name)}</td><td>${escapeHtmlForPrint(st.owner || '—')}</td><td>${nexusHasValue(st.quantity) ? Number(st.quantity).toLocaleString() + '株' : '未入力'}</td><td>${nexusHasValue(st.costPrice) ? Number(st.costPrice).toLocaleString() + '円' : '未入力'}</td><td>${nexusHasValue(st.currentPrice) ? Number(st.currentPrice).toLocaleString() + '円' : '未入力'}</td><td>${canValue ? Math.round(ev.value).toLocaleString() + '円' : '未算出'}</td><td>${canValue && canCost ? (ev.gain >= 0 ? '+' : '') + Math.round(ev.gain).toLocaleString() + '円' : '未算出'}</td></tr>`;
       }).join('');
       const fundRows = fundsAll.map(fd => {
         const ev = nexusFundEval(fd);
-        return `<tr><td>${escapeHtmlForPrint(fd.name)}</td><td>${escapeHtmlForPrint(fd.owner || '—')}</td><td>${escapeHtmlForPrint(fd.accountType || '—')}</td><td>${escapeHtmlForPrint(fd.brokerage || '—')}</td><td>${fd.units ? Number(fd.units).toLocaleString() : ''}口</td><td>${fd.costNav || ''}</td><td>${fd.currentNav || ''}</td><td>${Math.round(ev.value).toLocaleString()}円</td><td>${ev.gain >= 0 ? '+' : ''}${Math.round(ev.gain).toLocaleString()}円</td><td>${escapeHtmlForPrint(fd.startDate || '')}</td><td>${ev.costTotal > 0 ? Math.round(ev.costTotal).toLocaleString() + '円' : ''}</td></tr>`;
+        const canValue = nexusFundCanEvalValue(fd);
+        const canCost = nexusFundCanEvalCost(fd);
+        return `<tr><td>${escapeHtmlForPrint(fd.name)}</td><td>${escapeHtmlForPrint(fd.owner || '—')}</td><td>${escapeHtmlForPrint(fd.accountType || '—')}</td><td>${escapeHtmlForPrint(fd.brokerage || '—')}</td><td>${nexusHasValue(fd.units) ? Number(fd.units).toLocaleString() + '口' : '未入力'}</td><td>${nexusHasValue(fd.costNav) ? fd.costNav : '未入力'}</td><td>${nexusHasValue(fd.currentNav) ? fd.currentNav : '未入力'}</td><td>${canValue ? Math.round(ev.value).toLocaleString() + '円' : '未算出'}</td><td>${canValue && canCost ? (ev.gain >= 0 ? '+' : '') + Math.round(ev.gain).toLocaleString() + '円' : '未算出'}</td><td>${nexusHasValue(fd.startDate) ? escapeHtmlForPrint(fd.startDate) : '未入力'}</td><td>${canCost ? Math.round(ev.costTotal).toLocaleString() + '円' : '未入力'}</td></tr>`;
       }).join('');
       return `
       <div class="print-section">
@@ -27007,7 +27033,7 @@ function NexusPlanningSection({
         const items = isCoupleScope ? [...(own || []), ...(sp || [])] : own || [];
         items.forEach(it => {
           if (!it.name && !it.value) return;
-          allRows.push(`<tr><td>${escapeHtmlForPrint(label)}</td><td>${escapeHtmlForPrint(it.name || '')}</td><td>${escapeHtmlForPrint(it.owner || '—')}</td><td>${it.value ? Number(it.value).toLocaleString() + '円' : ''}</td></tr>`);
+          allRows.push(`<tr><td>${escapeHtmlForPrint(label)}</td><td>${escapeHtmlForPrint(it.name || '')}</td><td>${escapeHtmlForPrint(it.owner || '—')}</td><td>${nexusHasValue(it.value) ? Number(it.value).toLocaleString() + '円' : '未入力'}</td></tr>`);
         });
       });
       if (allRows.length === 0) return '';
@@ -27025,9 +27051,9 @@ function NexusPlanningSection({
       <div class="print-section">
         <h3>LPシート要約</h3>
         <table>
-          <tr><th>本人年齢</th><td>${ageSelf !== null ? ageSelf + '歳' : ''}</td><th>配偶者年齢</th><td>${ageSpouse !== null ? ageSpouse + '歳' : ''}</td></tr>
+          <tr><th>本人年齢</th><td>${nexusAgeDisplay(ageSelf)}</td><th>配偶者年齢</th><td>${nexusAgeDisplay(ageSpouse)}</td></tr>
           <tr><th>お子様</th><td colspan="3">${escapeHtmlForPrint(kidsSummary)}</td></tr>
-          <tr><th>必要積立額（月額）</th><td colspan="3">${monthlyTarget.toLocaleString()}円／月</td></tr>
+          <tr><th>必要積立額（月額）</th><td colspan="3">${nexusMonthlyTargetDisplay(categories, Object.keys(LP_CATEGORY_LABELS), monthlyTarget)}</td></tr>
         </table>
       </div>
       <div class="print-section">
@@ -27343,7 +27369,7 @@ function NexusPlanningSection({
     // LPシート要約
     row = nexusXlsxSubTitle(ws, row, 'LPシート要約', 2);
     row = nexusXlsxHeaderRow(ws, row, ['項目', '内容']);
-    row = nexusXlsxDataRows(ws, row, [['本人年齢', ageSelf !== null ? ageSelf + '歳' : ''], ['配偶者年齢', ageSpouse !== null ? ageSpouse + '歳' : ''], ['お子様', kidsSummary], ['必要積立額（月額・円/月）', monthlyTarget]], [2]);
+    row = nexusXlsxDataRows(ws, row, [['本人年齢', nexusAgeDisplay(ageSelf)], ['配偶者年齢', nexusAgeDisplay(ageSpouse)], ['お子様', kidsSummary], ['必要積立額（月額・円/月）', nexusMonthlyTargetDisplay(categories, Object.keys(LP_CATEGORY_LABELS), monthlyTarget)]], [2]);
     row += 2;
 
     // ローン明細（基本項目）
@@ -27359,11 +27385,15 @@ function NexusPlanningSection({
         bold: true
       };
       const totalValCell = ws.getCell(row, 2);
-      totalValCell.value = totalLoanBalance;
+      if (loans.length === 0) {
+        totalValCell.value = '未登録';
+      } else {
+        totalValCell.value = totalLoanBalance;
+        totalValCell.numFmt = '#,##0';
+      }
       totalValCell.font = {
         bold: true
       };
-      totalValCell.numFmt = '#,##0';
       row += 2;
     }
 
@@ -27446,7 +27476,9 @@ function NexusPlanningSection({
         row = nexusXlsxHeaderRow(ws, row, ['銘柄名', '名義', '保有数量', '取得単価', '現在価格', '評価額', '評価損益']);
         row = nexusXlsxDataRows(ws, row, stocksAll.map(st => {
           const ev = nexusStockEval(st);
-          return [st.name || '', st.owner || '', st.quantity ? Number(st.quantity) : '', st.costPrice ? Number(st.costPrice) : '', st.currentPrice ? Number(st.currentPrice) : '', Math.round(ev.value), Math.round(ev.gain)];
+          const canValue = nexusStockCanEvalValue(st);
+          const canCost = nexusStockCanEvalCost(st);
+          return [st.name || '', st.owner || '', nexusHasValue(st.quantity) ? Number(st.quantity) : '未入力', nexusHasValue(st.costPrice) ? Number(st.costPrice) : '未入力', nexusHasValue(st.currentPrice) ? Number(st.currentPrice) : '未入力', canValue ? Math.round(ev.value) : '未算出', canValue && canCost ? Math.round(ev.gain) : '未算出'];
         }), [3, 4, 5, 6, 7]);
         row += 1;
       }
@@ -27455,7 +27487,9 @@ function NexusPlanningSection({
         row = nexusXlsxHeaderRow(ws, row, ['銘柄名', '名義', '区分', '証券会社', '保有口数', '取得時基準価額', '現在基準価額', '評価額', '評価損益', '積立開始時期', '積立累計額（元本）']);
         row = nexusXlsxDataRows(ws, row, fundsAll.map(fd => {
           const ev = nexusFundEval(fd);
-          return [fd.name || '', fd.owner || '', fd.accountType || '', fd.brokerage || '', fd.units ? Number(fd.units) : '', fd.costNav ? Number(fd.costNav) : '', fd.currentNav ? Number(fd.currentNav) : '', Math.round(ev.value), Math.round(ev.gain), fd.startDate || '', ev.costTotal > 0 ? Math.round(ev.costTotal) : ''];
+          const canValue = nexusFundCanEvalValue(fd);
+          const canCost = nexusFundCanEvalCost(fd);
+          return [fd.name || '', fd.owner || '', fd.accountType || '', fd.brokerage || '', nexusHasValue(fd.units) ? Number(fd.units) : '未入力', nexusHasValue(fd.costNav) ? Number(fd.costNav) : '未入力', nexusHasValue(fd.currentNav) ? Number(fd.currentNav) : '未入力', canValue ? Math.round(ev.value) : '未算出', canValue && canCost ? Math.round(ev.gain) : '未算出', fd.startDate || '未入力', canCost ? Math.round(ev.costTotal) : '未入力'];
         }), [5, 6, 7, 8, 9, 11]);
         row += 1;
       }
@@ -27465,7 +27499,7 @@ function NexusPlanningSection({
         const items = isCoupleScope ? [...(own || []), ...(sp || [])] : own || [];
         items.forEach(it => {
           if (!it.name && !it.value) return;
-          simpleAssetRows.push([label, it.name || '', it.owner || '', it.value ? Number(it.value) : '']);
+          simpleAssetRows.push([label, it.name || '', it.owner || '', nexusHasValue(it.value) ? Number(it.value) : '未入力']);
         });
       });
       if (simpleAssetRows.length > 0) {
