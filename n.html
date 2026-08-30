@@ -4091,6 +4091,7 @@ function CustomerSelect({
 function CustomerDetail({
   customer,
   customers,
+  setCustomers,
   onUpdateCustomer,
   onEdit,
   onDelete,
@@ -4368,6 +4369,7 @@ function CustomerDetail({
     activityLogs: activityLogs,
     setActivityLogs: setActivityLogs,
     customers: customers,
+    setCustomers: setCustomers,
     defaultCustomerId: c.id,
     opportunities: opportunities,
     setOpportunities: setOpportunities,
@@ -6707,6 +6709,7 @@ function NexusActivityHistoryList({
   activityLogs,
   setActivityLogs,
   customers,
+  setCustomers,
   limit,
   onOpenCustomer,
   defaultCustomerId,
@@ -6723,10 +6726,13 @@ function NexusActivityHistoryList({
     const c = (customers || []).find(x => x.id === id);
     return c ? nexusDisplayName(c) : '';
   };
-  const saveLog = a => setActivityLogs(prev => {
-    const idx = prev.findIndex(x => x.id === a.id);
-    return idx >= 0 ? prev.map((x, i) => i === idx ? a : x) : [a, ...prev];
-  });
+  const saveLog = a => {
+    setActivityLogs(prev => {
+      const idx = prev.findIndex(x => x.id === a.id);
+      return idx >= 0 ? prev.map((x, i) => i === idx ? a : x) : [a, ...prev];
+    });
+    if (setCustomers) setCustomers(prev => nexusTouchCustomersFromActivity(prev, a));
+  };
   const deleteLog = id => setActivityLogs(prev => prev.map(x => x.id === id ? {
     ...x,
     deletedAt: new Date().toISOString()
@@ -6814,6 +6820,7 @@ function NexusActivityHistoryScreen({
   activityLogs,
   setActivityLogs,
   customers,
+  setCustomers,
   onClose,
   opportunities,
   setOpportunities,
@@ -6845,6 +6852,7 @@ function NexusActivityHistoryScreen({
     activityLogs: byDate[d],
     setActivityLogs: setActivityLogs,
     customers: customers,
+    setCustomers: setCustomers,
     opportunities: opportunities,
     setOpportunities: setOpportunities,
     setTasks: setTasks,
@@ -6887,6 +6895,7 @@ function NexusFlaggedVoicesScreen({
   activityLogs,
   setActivityLogs,
   customers,
+  setCustomers,
   onClose,
   opportunities,
   setOpportunities,
@@ -6928,6 +6937,7 @@ function NexusFlaggedVoicesScreen({
     activityLogs: flagged,
     setActivityLogs: setActivityLogs,
     customers: customers,
+    setCustomers: setCustomers,
     opportunities: opportunities,
     setOpportunities: setOpportunities,
     setTasks: setTasks,
@@ -6942,6 +6952,7 @@ function NexusQuickActivityPanel({
   activityLogs,
   setActivityLogs,
   customers,
+  setCustomers,
   tasks,
   setTasks,
   opportunities,
@@ -7053,6 +7064,7 @@ function NexusQuickActivityPanel({
       const idx = prev.findIndex(x => x.id === a.id);
       return idx >= 0 ? prev.map((x, i) => i === idx ? a : x) : [a, ...prev];
     });
+    if (setCustomers) setCustomers(prev => nexusTouchCustomersFromActivity(prev, a));
     // 商談後の「次回予定」だけでなく、アポ確定の直後にも「その面談の日時」を設定できるようにする
     // （アポ確定＝日付欄に入れた「確定した日」とは別に、実際の面談日時を管理したいというケースのため）。
     if (isNew && (a.type === 'deal' || a.type === 'appt_confirmed')) setDealPrompt(a.id);
@@ -7313,6 +7325,7 @@ function NexusQuickActivityPanel({
     activityLogs: activityLogs,
     setActivityLogs: setActivityLogs,
     customers: customers,
+    setCustomers: setCustomers,
     limit: 5,
     opportunities: opportunities,
     setOpportunities: setOpportunities,
@@ -7344,6 +7357,7 @@ function NexusQuickActivityPanel({
     activityLogs: activityLogs,
     setActivityLogs: setActivityLogs,
     customers: customers,
+    setCustomers: setCustomers,
     onClose: () => setShowHistory(false),
     opportunities: opportunities,
     setOpportunities: setOpportunities,
@@ -7423,6 +7437,7 @@ function NexusQuickActivityPanel({
     activityLogs: activityLogs,
     setActivityLogs: setActivityLogs,
     customers: customers,
+    setCustomers: setCustomers,
     onClose: () => setShowFlaggedVoices(false),
     opportunities: opportunities,
     setOpportunities: setOpportunities,
@@ -7935,6 +7950,7 @@ function NexusAIAnalysisScreen({
 // ── Tab: Dashboard ────────────────────────────────────────────
 function DashboardTab({
   customers,
+  setCustomers,
   onNavigate,
   kpiSettings,
   setKpiSettings,
@@ -8168,6 +8184,7 @@ function DashboardTab({
     activityLogs: activityLogs,
     setActivityLogs: setActivityLogs,
     customers: customers,
+    setCustomers: setCustomers,
     tasks: tasks,
     setTasks: setTasks,
     opportunities: opportunities,
@@ -12633,6 +12650,31 @@ function nexusLinkActivityLogsByName(activityLogs, name, customerId, now) {
     customerNameText: '',
     updatedAt: now
   } : x);
+}
+// 活動を記録した顧客の「最終接触日」を更新する。ステータスは「未接触」（未設定含む）の時だけ
+// 「フォロー中」へ一方向に進める（すでにアポ済／面談済／フォロー中等、FPが手動で進めている
+// ステータスは絶対に上書きしない）。活動を保存するあらゆる画面（活動履歴の編集・クイック登録の
+// 編集ドロワー等）から共通で呼び出す。
+function nexusApplyActivityCustomerTouch(customer, activity) {
+  if (!customer || !activity || !activity.customerId) return customer;
+  const activityDate = nexusLocalDateStr(activity.occurredAt);
+  if (!activityDate) return customer;
+  const patch = {};
+  if (!customer.lastContact || activityDate > customer.lastContact) {
+    patch.lastContact = activityDate;
+  }
+  if (!customer.status || customer.status === '未接触') {
+    patch.status = 'フォロー中';
+  }
+  if (Object.keys(patch).length === 0) return customer;
+  return {
+    ...customer,
+    ...patch
+  };
+}
+function nexusTouchCustomersFromActivity(customers, activity) {
+  if (!activity || !activity.customerId) return customers;
+  return (customers || []).map(c => c.id === activity.customerId ? nexusApplyActivityCustomerTouch(c, activity) : c);
 }
 // occurredAtが期間内（両端含む）かつ論理削除されていない活動をtype別に集計する。
 // KPIは常にログから再集計するため、編集・削除後もKPIと履歴が食い違うことがない。
@@ -30423,6 +30465,7 @@ function App() {
     className: "content"
   }, tab === 'dashboard' && /*#__PURE__*/React.createElement(DashboardTab, {
     customers: customers,
+    setCustomers: setCustomers,
     kpiSettings: kpiSettings,
     setKpiSettings: setKpiSettings,
     mission: nexusMission,
@@ -30503,8 +30546,11 @@ function App() {
       setShowMemoForm(true);
     }
   }, "＋"), selectedCustomer && !showCustomerForm && /*#__PURE__*/React.createElement(CustomerDetail, {
-    customer: selectedCustomer,
+    // customersから毎回引き直すことで、活動記録に伴う最終接触日／ステータスの自動更新等
+    // customers配列側の変更が、selectedCustomerを個別に同期しなくても即座に画面へ反映される。
+    customer: customers.find(x => x.id === selectedCustomer.id) || selectedCustomer,
     customers: customers,
+    setCustomers: setCustomers,
     onUpdateCustomer: patch => {
       setCustomers(prev => prev.map(x => x.id === selectedCustomer.id ? {
         ...x,
