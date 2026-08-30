@@ -26288,8 +26288,8 @@ function NexusPlanningSection({
   // 「今後やること」：優先度・対応内容・期限・完了未完了を持つ構造化リスト。保険商品の自動提案は
   // 行わず、あくまでFPが自分で入力・編集・削除する行動計画のメモとして機能する。法人プランニングの
   // アクションプランと同じ語彙（NEXUS_CORP_ACTION_PRIORITIES/STATUSES）・同じ汎用CRUD部品を再利用する。
-  const actionItems = lp.actionItems || [];
-  const actionItemOps = nexusCorpArrayOps(lp, updateLp, 'actionItems', () => ({
+  const actionItems = (customer.lp && customer.lp.actionItems) || [];
+  const actionItemOps = nexusCorpArrayOps(customer.lp || {}, updateLp, 'actionItems', () => ({
     id: uid(),
     title: '',
     priority: '中',
