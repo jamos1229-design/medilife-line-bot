@@ -578,6 +578,28 @@ function NexusAssetOwnerSelect({
     value: o
   }, "名義：", o)));
 }
+// 投資信託の口座区分（税制上の扱いが異なるため、資産全体の集計とは別に銘柄ごとに把握する）
+const NEXUS_FUND_ACCOUNT_TYPES = ['特定口座', '一般口座', 'NISA（成長投資枠）', 'NISA（つみたて投資枠）', '旧NISA（一般）', '旧NISA（つみたてNISA）', 'iDeCo', 'その他'];
+function NexusFundAccountTypeSelect({
+  value,
+  onChange
+}) {
+  return /*#__PURE__*/React.createElement("select", {
+    className: "form-select",
+    style: {
+      fontSize: 12,
+      padding: '4px 6px',
+      width: 'auto'
+    },
+    value: value || '',
+    onChange: e => onChange(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "区分：未設定"), NEXUS_FUND_ACCOUNT_TYPES.map(t => /*#__PURE__*/React.createElement("option", {
+    key: t,
+    value: t
+  }, "区分：", t)));
+}
 function NexusSimpleAssetList({
   title,
   list,
@@ -26383,7 +26405,9 @@ function NexusPlanningSection({
       currentNav: '',
       monthlyContribution: '',
       expectedReturn: '',
-      startDate: ''
+      startDate: '',
+      accountType: '',
+      brokerage: ''
     }]
   });
   const updateFund = (id, patch) => updateLpPortfolio({
@@ -26964,7 +26988,7 @@ function NexusPlanningSection({
       }).join('');
       const fundRows = fundsAll.map(fd => {
         const ev = nexusFundEval(fd);
-        return `<tr><td>${escapeHtmlForPrint(fd.name)}</td><td>${escapeHtmlForPrint(fd.owner || '—')}</td><td>${fd.units ? Number(fd.units).toLocaleString() : ''}口</td><td>${fd.costNav || ''}</td><td>${fd.currentNav || ''}</td><td>${Math.round(ev.value).toLocaleString()}円</td><td>${ev.gain >= 0 ? '+' : ''}${Math.round(ev.gain).toLocaleString()}円</td><td>${escapeHtmlForPrint(fd.startDate || '')}</td><td>${ev.costTotal > 0 ? Math.round(ev.costTotal).toLocaleString() + '円' : ''}</td></tr>`;
+        return `<tr><td>${escapeHtmlForPrint(fd.name)}</td><td>${escapeHtmlForPrint(fd.owner || '—')}</td><td>${escapeHtmlForPrint(fd.accountType || '—')}</td><td>${escapeHtmlForPrint(fd.brokerage || '—')}</td><td>${fd.units ? Number(fd.units).toLocaleString() : ''}口</td><td>${fd.costNav || ''}</td><td>${fd.currentNav || ''}</td><td>${Math.round(ev.value).toLocaleString()}円</td><td>${ev.gain >= 0 ? '+' : ''}${Math.round(ev.gain).toLocaleString()}円</td><td>${escapeHtmlForPrint(fd.startDate || '')}</td><td>${ev.costTotal > 0 ? Math.round(ev.costTotal).toLocaleString() + '円' : ''}</td></tr>`;
       }).join('');
       return `
       <div class="print-section">
@@ -26973,7 +26997,7 @@ function NexusPlanningSection({
       </div>
       <div class="print-section">
         <h3>保有投資信託一覧${isCoupleScope ? '｜夫婦合算' : ''}</h3>
-        <table><tr><th>銘柄名</th><th>名義</th><th>保有口数</th><th>取得時基準価額</th><th>現在基準価額</th><th>評価額</th><th>評価損益</th><th>積立開始時期</th><th>積立累計額（元本）</th></tr>${fundRows || '<tr><td colspan="9">登録なし</td></tr>'}</table>
+        <table><tr><th>銘柄名</th><th>名義</th><th>区分</th><th>証券会社</th><th>保有口数</th><th>取得時基準価額</th><th>現在基準価額</th><th>評価額</th><th>評価損益</th><th>積立開始時期</th><th>積立累計額（元本）</th></tr>${fundRows || '<tr><td colspan="11">登録なし</td></tr>'}</table>
       </div>`;
     })()}
       ${(() => {
@@ -27427,12 +27451,12 @@ function NexusPlanningSection({
         row += 1;
       }
       if (fundsAll.length > 0) {
-        row = nexusXlsxSubTitle(ws, row, `保有投資信託一覧${scopeNote}`, 9);
-        row = nexusXlsxHeaderRow(ws, row, ['銘柄名', '名義', '保有口数', '取得時基準価額', '現在基準価額', '評価額', '評価損益', '積立開始時期', '積立累計額（元本）']);
+        row = nexusXlsxSubTitle(ws, row, `保有投資信託一覧${scopeNote}`, 11);
+        row = nexusXlsxHeaderRow(ws, row, ['銘柄名', '名義', '区分', '証券会社', '保有口数', '取得時基準価額', '現在基準価額', '評価額', '評価損益', '積立開始時期', '積立累計額（元本）']);
         row = nexusXlsxDataRows(ws, row, fundsAll.map(fd => {
           const ev = nexusFundEval(fd);
-          return [fd.name || '', fd.owner || '', fd.units ? Number(fd.units) : '', fd.costNav ? Number(fd.costNav) : '', fd.currentNav ? Number(fd.currentNav) : '', Math.round(ev.value), Math.round(ev.gain), fd.startDate || '', ev.costTotal > 0 ? Math.round(ev.costTotal) : ''];
-        }), [3, 4, 5, 6, 7, 9]);
+          return [fd.name || '', fd.owner || '', fd.accountType || '', fd.brokerage || '', fd.units ? Number(fd.units) : '', fd.costNav ? Number(fd.costNav) : '', fd.currentNav ? Number(fd.currentNav) : '', Math.round(ev.value), Math.round(ev.gain), fd.startDate || '', ev.costTotal > 0 ? Math.round(ev.costTotal) : ''];
+        }), [5, 6, 7, 8, 9, 11]);
         row += 1;
       }
       const catList = [['預貯金', portfolio.deposits, spousePortfolioInputs.deposits], ['債券', portfolio.bonds, spousePortfolioInputs.bonds], ['FX', portfolio.fx, spousePortfolioInputs.fx], ['仮想通貨', portfolio.crypto, spousePortfolioInputs.crypto], ['不動産', portfolio.realEstate, spousePortfolioInputs.realEstate], ['その他資産', portfolio.others, spousePortfolioInputs.others]];
@@ -28845,6 +28869,41 @@ function NexusPlanningSection({
         owner: v
       })
     })), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        flexWrap: 'wrap',
+        fontSize: 12,
+        marginBottom: 6
+      }
+    }, /*#__PURE__*/React.createElement(NexusFundAccountTypeSelect, {
+      value: fd.accountType,
+      onChange: v => updateFund(fd.id, {
+        accountType: v
+      })
+    }), /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        whiteSpace: 'nowrap',
+        flex: 1,
+        minWidth: 140
+      }
+    }, "証券会社", /*#__PURE__*/React.createElement("input", {
+      type: "text",
+      className: "form-input",
+      style: {
+        flex: 1,
+        minWidth: 100
+      },
+      placeholder: "例：SBI証券",
+      value: fd.brokerage || '',
+      onChange: e => updateFund(fd.id, {
+        brokerage: e.target.value
+      })
+    }))), /*#__PURE__*/React.createElement("div", {
       style: {
         display: 'flex',
         alignItems: 'center',
