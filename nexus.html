@@ -12676,6 +12676,34 @@ function nexusTouchCustomersFromActivity(customers, activity) {
   if (!activity || !activity.customerId) return customers;
   return (customers || []).map(c => c.id === activity.customerId ? nexusApplyActivityCustomerTouch(c, activity) : c);
 }
+// 既存データ移行用：これまで一度も最終接触日／ステータスに反映されていなかった、
+// 過去に登録済みの活動履歴を1回だけ顧客レコードに反映する（アプリ起動時に一度だけ実行）。
+// nexusApplyActivityCustomerTouchと同じ「lastContactは常に最新化／statusは未接触の
+// 時だけ一方向にフォロー中へ」というルールを、顧客ごとの最新活動日で適用する。
+function nexusBackfillCustomerContactFromLogs(customers, activityLogs) {
+  const active = nexusActiveLogs(activityLogs);
+  const latestByCustomer = {};
+  active.forEach(a => {
+    if (!a.customerId) return;
+    const d = nexusLocalDateStr(a.occurredAt);
+    if (!d) return;
+    if (!latestByCustomer[a.customerId] || d > latestByCustomer[a.customerId]) {
+      latestByCustomer[a.customerId] = d;
+    }
+  });
+  return (customers || []).map(c => {
+    const latest = latestByCustomer[c.id];
+    if (!latest) return c;
+    const patch = {};
+    if (!c.lastContact || latest > c.lastContact) patch.lastContact = latest;
+    if (!c.status || c.status === '未接触') patch.status = 'フォロー中';
+    if (Object.keys(patch).length === 0) return c;
+    return {
+      ...c,
+      ...patch
+    };
+  });
+}
 // occurredAtが期間内（両端含む）かつ論理削除されていない活動をtype別に集計する。
 // KPIは常にログから再集計するため、編集・削除後もKPIと履歴が食い違うことがない。
 function nexusActivityKpi(activityLogs, periodStart, periodEnd) {
@@ -30223,6 +30251,17 @@ function App() {
   const [tasks, setTasks] = useLS('ml_tasks_v1', []);
   // 営業活動履歴（新規）：クイック活動登録の記録。KPIは常にここから再集計する。
   const [activityLogs, setActivityLogs] = useLS('nexus_activity_logs_v1', []);
+  // 活動記録に伴う最終接触日／ステータス自動更新の導入前に登録済みだった過去の活動履歴を、
+  // アプリ起動時に1回だけ顧客レコードへ反映する（既存データの後方互換対応）。
+  // 一度反映した後は二度と実行しないフラグを立てるため、後からFPが手動でステータスを
+  // 「未接触」に戻しても、次回起動時に再度「フォロー中」へ書き戻されることはない。
+  React.useEffect(() => {
+    if (localStorage.getItem('nexus_customer_contact_backfill_v1') === 'done') return;
+    setCustomers(prev => nexusBackfillCustomerContactFromLogs(prev, activityLogs));
+    try {
+      localStorage.setItem('nexus_customer_contact_backfill_v1', 'done');
+    } catch {}
+  }, []);
   const [opportunities, setOpportunities] = useLS('nexus_opportunities_v1', []);
   const [clients, setClients] = useLS('ml_clients_v1', []);
   const [vision, setVision] = useLS('ml_vision_v1', {});
