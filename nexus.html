@@ -26382,7 +26382,8 @@ function NexusPlanningSection({
       costNav: '',
       currentNav: '',
       monthlyContribution: '',
-      expectedReturn: ''
+      expectedReturn: '',
+      startDate: ''
     }]
   });
   const updateFund = (id, patch) => updateLpPortfolio({
@@ -26963,7 +26964,7 @@ function NexusPlanningSection({
       }).join('');
       const fundRows = fundsAll.map(fd => {
         const ev = nexusFundEval(fd);
-        return `<tr><td>${escapeHtmlForPrint(fd.name)}</td><td>${escapeHtmlForPrint(fd.owner || '—')}</td><td>${fd.units ? Number(fd.units).toLocaleString() : ''}口</td><td>${fd.costNav || ''}</td><td>${fd.currentNav || ''}</td><td>${Math.round(ev.value).toLocaleString()}円</td><td>${ev.gain >= 0 ? '+' : ''}${Math.round(ev.gain).toLocaleString()}円</td></tr>`;
+        return `<tr><td>${escapeHtmlForPrint(fd.name)}</td><td>${escapeHtmlForPrint(fd.owner || '—')}</td><td>${fd.units ? Number(fd.units).toLocaleString() : ''}口</td><td>${fd.costNav || ''}</td><td>${fd.currentNav || ''}</td><td>${Math.round(ev.value).toLocaleString()}円</td><td>${ev.gain >= 0 ? '+' : ''}${Math.round(ev.gain).toLocaleString()}円</td><td>${escapeHtmlForPrint(fd.startDate || '')}</td><td>${ev.costTotal > 0 ? Math.round(ev.costTotal).toLocaleString() + '円' : ''}</td></tr>`;
       }).join('');
       return `
       <div class="print-section">
@@ -26972,7 +26973,7 @@ function NexusPlanningSection({
       </div>
       <div class="print-section">
         <h3>保有投資信託一覧${isCoupleScope ? '｜夫婦合算' : ''}</h3>
-        <table><tr><th>銘柄名</th><th>名義</th><th>保有口数</th><th>取得時基準価額</th><th>現在基準価額</th><th>評価額</th><th>評価損益</th></tr>${fundRows || '<tr><td colspan="7">登録なし</td></tr>'}</table>
+        <table><tr><th>銘柄名</th><th>名義</th><th>保有口数</th><th>取得時基準価額</th><th>現在基準価額</th><th>評価額</th><th>評価損益</th><th>積立開始時期</th><th>積立累計額（元本）</th></tr>${fundRows || '<tr><td colspan="9">登録なし</td></tr>'}</table>
       </div>`;
     })()}
       ${(() => {
@@ -27426,12 +27427,12 @@ function NexusPlanningSection({
         row += 1;
       }
       if (fundsAll.length > 0) {
-        row = nexusXlsxSubTitle(ws, row, `保有投資信託一覧${scopeNote}`, 7);
-        row = nexusXlsxHeaderRow(ws, row, ['銘柄名', '名義', '保有口数', '取得時基準価額', '現在基準価額', '評価額', '評価損益']);
+        row = nexusXlsxSubTitle(ws, row, `保有投資信託一覧${scopeNote}`, 9);
+        row = nexusXlsxHeaderRow(ws, row, ['銘柄名', '名義', '保有口数', '取得時基準価額', '現在基準価額', '評価額', '評価損益', '積立開始時期', '積立累計額（元本）']);
         row = nexusXlsxDataRows(ws, row, fundsAll.map(fd => {
           const ev = nexusFundEval(fd);
-          return [fd.name || '', fd.owner || '', fd.units ? Number(fd.units) : '', fd.costNav ? Number(fd.costNav) : '', fd.currentNav ? Number(fd.currentNav) : '', Math.round(ev.value), Math.round(ev.gain)];
-        }), [3, 4, 5, 6, 7]);
+          return [fd.name || '', fd.owner || '', fd.units ? Number(fd.units) : '', fd.costNav ? Number(fd.costNav) : '', fd.currentNav ? Number(fd.currentNav) : '', Math.round(ev.value), Math.round(ev.gain), fd.startDate || '', ev.costTotal > 0 ? Math.round(ev.costTotal) : ''];
+        }), [3, 4, 5, 6, 7, 9]);
         row += 1;
       }
       const catList = [['預貯金', portfolio.deposits, spousePortfolioInputs.deposits], ['債券', portfolio.bonds, spousePortfolioInputs.bonds], ['FX', portfolio.fx, spousePortfolioInputs.fx], ['仮想通貨', portfolio.crypto, spousePortfolioInputs.crypto], ['不動産', portfolio.realEstate, spousePortfolioInputs.realEstate], ['その他資産', portfolio.others, spousePortfolioInputs.others]];
@@ -28774,7 +28775,24 @@ function NexusPlanningSection({
       onChange: e => updateFund(fd.id, {
         units: e.target.value
       })
-    }), "口")), /*#__PURE__*/React.createElement("div", {
+    }), "口"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        whiteSpace: 'nowrap'
+      }
+    }, "積立開始時期", /*#__PURE__*/React.createElement("input", {
+      type: "month",
+      className: "form-input",
+      style: {
+        width: 130
+      },
+      value: fd.startDate || '',
+      onChange: e => updateFund(fd.id, {
+        startDate: e.target.value
+      })
+    }))), /*#__PURE__*/React.createElement("div", {
       style: {
         display: 'flex',
         alignItems: 'center',
@@ -28869,15 +28887,20 @@ function NexusPlanningSection({
       onChange: e => updateFund(fd.id, {
         expectedReturn: e.target.value
       })
-    }), "%")), ev.value > 0 && /*#__PURE__*/React.createElement("div", {
+    }), "%")), (ev.costTotal > 0 || ev.value > 0) && /*#__PURE__*/React.createElement("div", {
       style: {
-        fontSize: 12
+        fontSize: 12,
+        lineHeight: 1.8
       }
-    }, "評価額：", /*#__PURE__*/React.createElement("b", null, Math.round(ev.value).toLocaleString(), "円"), "評価損益：", /*#__PURE__*/React.createElement("b", {
+    }, ev.costTotal > 0 && /*#__PURE__*/React.createElement("span", {
+      style: {
+        marginRight: 12
+      }
+    }, "積立累計額（元本）：", /*#__PURE__*/React.createElement("b", null, Math.round(ev.costTotal).toLocaleString(), "円")), ev.value > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, "評価額：", /*#__PURE__*/React.createElement("b", null, Math.round(ev.value).toLocaleString(), "円"), ev.costTotal > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, "　評価損益：", /*#__PURE__*/React.createElement("b", {
       style: {
         color: ev.gain >= 0 ? 'var(--success)' : 'var(--danger)'
       }
-    }, ev.gain >= 0 ? '+' : '', Math.round(ev.gain).toLocaleString(), "円", ev.gainPct !== null ? `（${ev.gain >= 0 ? '+' : ''}${ev.gainPct.toFixed(1)}%）` : '')));
+    }, ev.gain >= 0 ? '+' : '', Math.round(ev.gain).toLocaleString(), "円", ev.gainPct !== null ? `（${ev.gain >= 0 ? '+' : ''}${ev.gainPct.toFixed(1)}%）` : '')))));
   }), /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "btn btn-outline",
