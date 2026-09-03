@@ -2297,7 +2297,12 @@ const nexusHasRealChildIdentity = sp => {
 };
 // 「お子様1」等の自動採番プレースホルダーは実名として画面・帳票に出さない（名前未入力の子として扱う）。
 // 例：名前未入力・0歳の子がkidsSummaryで「お子様20歳」と表示され「20歳」に見えてしまう不具合の原因。
-const nexusChildDisplayName = sp => {
+// 既存の顧客と連携（linkedCustomerId）している場合は、年齢と同様に連携先の顧客レコードの
+// 名前を優先する（サスペクト自身のnameは連携前の古い名前のまま・あるいは未入力のことがあり、
+// CustomerDetailの一覧表示（displayName）と同じ優先順位に揃える）。
+const nexusChildDisplayName = (sp, customers) => {
+  const linked = sp && sp.linkedCustomerId && customers ? customers.find(x => x.id === sp.linkedCustomerId) : null;
+  if (linked) return (linked.name || '').trim();
   const name = ((sp && sp.name) || '').trim();
   return name && !/^お子様\d+$/.test(name) ? name : '';
 };
@@ -26941,7 +26946,7 @@ function NexusPlanningSection({
   const kids = [...ownKids, ...spouseKids.filter(sk => !ownKids.some(k => (k.name || '').trim() && (k.name || '').trim() === (sk.name || '').trim()))];
   const kidsSummary = kids.length ? kids.map(k => {
     const a = nexusResolveMemberAge(k, customers);
-    return `${nexusChildDisplayName(k) || '子'}${a !== null ? `（${a}歳）` : ''}`;
+    return `${nexusChildDisplayName(k, customers) || '子'}${a !== null ? `（${a}歳）` : ''}`;
   }).join('、') : '未登録';
   // ── 教育資金プランニング：子供ごとに進学段階の費用を試算 ──
   const educationPlans = lp.education || {};
@@ -27193,7 +27198,7 @@ function NexusPlanningSection({
       });
       let kidIdx = 0;
       kids.forEach(k => {
-        const real = nexusChildDisplayName(k);
+        const real = nexusChildDisplayName(k, customers);
         if (real) {
           kidIdx++;
           map.push({
@@ -27281,7 +27286,7 @@ function NexusPlanningSection({
       rows,
       summary
     }) => `
-        <p style="font-size:12px;margin:6px 0 2px;"><b>${escapeHtmlForPrint(nexusChildDisplayName(kid) || '子')}${age !== null ? `（${age}歳）` : ''}</b></p>
+        <p style="font-size:12px;margin:6px 0 2px;"><b>${escapeHtmlForPrint(nexusChildDisplayName(kid, customers) || '子')}${age !== null ? `（${age}歳）` : ''}</b></p>
         <table><tr><th>費目</th><th>進学先</th><th>年齢</th><th>状況</th><th>費用（残り）</th></tr>${rows.map(r => `<tr><td>${r.label}</td><td>${escapeHtmlForPrint(r.selected)}</td><td>${r.startAge}〜${r.endAge}歳</td><td>${r.status === 'done' ? '終了' : r.status === 'ongoing' ? '進行中' : 'これから'}</td><td>${r.status === 'done' ? '—' : r.remainingCostJpy.toLocaleString() + '円'}</td></tr>`).join('')}</table>
         ${nexusAssetProjectionTableHtml(plan.assetProjections)}
         <p style="font-size:11px;">大学入学までに必要な準備額：<b>${summary.universityNeededJpy.toLocaleString()}円</b>　／　現在の準備額：<b>${summary.prepared.toLocaleString()}円</b>${summary.hasAssetProjections ? `　／　資産ごとの大学入学時の予想額 合計：<b>${summary.projectedPreparedJpy.toLocaleString()}円</b>` : summary.isManual ? `　／　大学入学時の予想準備額（直接入力）：<b>${summary.projectedPreparedJpy.toLocaleString()}円</b>` : summary.assetReturnRate > 0 ? `　／　大学入学時の予想準備額（年率${summary.assetReturnRate}%で運用）：<b>${summary.projectedPreparedJpy.toLocaleString()}円</b>` : ''}　／　不足額：<b>${summary.shortfallJpy.toLocaleString()}円</b>${summary.monthsToUniversity !== null && summary.monthlySavingsNeeded !== null ? `　／　大学入学（${Math.floor(summary.monthsToUniversity / 12)}年後）までの毎月積立目安：<b>${summary.monthlySavingsNeeded.toLocaleString()}円／月</b>` : ''}</p>`).join('')}
@@ -27924,7 +27929,7 @@ function NexusPlanningSection({
         rows
       }) => {
         rows.forEach(r => {
-          eduRows.push([nexusChildDisplayName(kid) || '子', r.label, r.selected, `${r.startAge}〜${r.endAge}歳`, r.status === 'done' ? '終了' : r.status === 'ongoing' ? '進行中' : 'これから', r.status === 'done' ? '' : r.remainingCostJpy]);
+          eduRows.push([nexusChildDisplayName(kid, customers) || '子', r.label, r.selected, `${r.startAge}〜${r.endAge}歳`, r.status === 'done' ? '終了' : r.status === 'ongoing' ? '進行中' : 'これから', r.status === 'done' ? '' : r.remainingCostJpy]);
         });
       });
       row = nexusXlsxDataRows(ws, row, eduRows, [6]);
@@ -27933,7 +27938,7 @@ function NexusPlanningSection({
         kid,
         summary
       }) => {
-        const kidLabel = nexusChildDisplayName(kid) || '子';
+        const kidLabel = nexusChildDisplayName(kid, customers) || '子';
         const eduSummaryRows = [[`${kidLabel}：大学入学までに必要な準備額`, summary.universityNeededJpy], [`${kidLabel}：現在の準備額`, summary.prepared]];
         if (summary.hasAssetProjections) eduSummaryRows.push([`${kidLabel}：資産ごとの大学入学時の予想額 合計`, summary.projectedPreparedJpy]);else if (summary.isManual) eduSummaryRows.push([`${kidLabel}：大学入学時の予想準備額（直接入力）`, summary.projectedPreparedJpy]);else if (summary.assetReturnRate > 0) eduSummaryRows.push([`${kidLabel}：大学入学時の予想準備額（年率${summary.assetReturnRate}%で運用）`, summary.projectedPreparedJpy]);
         eduSummaryRows.push([`${kidLabel}：不足額`, summary.shortfallJpy], [`${kidLabel}：毎月の積立目安`, summary.monthlySavingsNeeded !== null ? summary.monthlySavingsNeeded : '']);
@@ -30188,7 +30193,7 @@ function NexusPlanningSection({
       color: 'var(--text)',
       marginBottom: 10
     }
-  }, nexusChildDisplayName(kid) || '子', age !== null ? `（${age}歳）` : ''), rows.map(r => /*#__PURE__*/React.createElement("div", {
+  }, nexusChildDisplayName(kid, customers) || '子', age !== null ? `（${age}歳）` : ''), rows.map(r => /*#__PURE__*/React.createElement("div", {
     key: r.key,
     style: {
       display: 'flex',
