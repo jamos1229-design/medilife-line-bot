@@ -9800,7 +9800,7 @@ function NegotiationDetail({
   const [confirmDel, setConfirmDel] = useState(false);
   const [toast, setToast] = useState('');
   const customer = customers.find(c => c.id === memo.customerId);
-  const displayName = customer ? customer.name : memo.personName || '—';
+  const displayName = customer ? nexusDisplayName(customer) || '—' : memo.personName || '—';
   const showToast = msg => {
     setToast(msg);
     setTimeout(() => setToast(''), 3000);
@@ -10092,7 +10092,7 @@ function NegotiationTab({
   const filtered = [...memos].filter(m => {
     if (!search) return true;
     const c = customers.find(x => x.id === m.customerId);
-    const name = c ? c.name : m.personName || '';
+    const name = c ? nexusDisplayName(c) || '' : m.personName || '';
     return name.includes(search) || m.memo.includes(search);
   }).sort((a, b) => b.date.localeCompare(a.date));
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
@@ -10210,7 +10210,7 @@ function NegotiationTab({
     text: "商談メモを追加してください"
   }) : filtered.map(m => {
     const c = customers.find(x => x.id === m.customerId);
-    const name = c ? c.name : m.personName || '—';
+    const name = c ? nexusDisplayName(c) || '—' : m.personName || '—';
     return /*#__PURE__*/React.createElement("div", {
       key: m.id,
       className: "customer-card",
