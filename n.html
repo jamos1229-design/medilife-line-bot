@@ -2425,10 +2425,10 @@ const DISABILITY_NOTES = {
 function buildHouseholdInput(customer, customers) {
   const age = customer.birthdate ? calcAge(customer.birthdate) : calcStoredAge(customer.age, customer.ageYear);
   // サスペクトが既存の顧客と連携（linkedCustomerId）している場合、年齢等はその顧客の登録情報を優先する
-  // 実在の情報を持たない「空の子供枠」（過去バージョンの名残等）は、実在の子として
-  // 世帯判定に混ぜると「子育て世帯」等に誤判定されてしまうため、判定対象から除外する。
-  const isEmptyChildSlot = sp => sp.relation === '子供' && !nexusHasRealChildIdentity(sp);
-  const householdMembers = (customer.suspects || []).filter(sp => sp.cohabiting && !isEmptyChildSlot(sp)).map(sp => {
+  // 「＋お子様を追加」で行を作った時点で、名前・年齢が未入力でも世帯判定上は「子あり」として
+  // 扱う（classifyHouseholdは年齢不明の子を判定保留の理由文つきで子育て世帯に分類するため、
+  // 未入力のままDINKs・既婚子なし等の「子なし」区分に誤判定されることを防ぐ）。
+  const householdMembers = (customer.suspects || []).filter(sp => sp.cohabiting).map(sp => {
     const linked = sp.linkedCustomerId && customers ? customers.find(x => x.id === sp.linkedCustomerId) : null;
     if (linked) {
       return {
@@ -2511,6 +2511,9 @@ function classifyHousehold(input) {
   if (hasChildren) {
     if (youngestChildAge !== null && youngestChildAge < 6) {
       return result(HOUSEHOLD_CATEGORIES.CHILDCARE_PRESCHOOL, '未就学（6歳未満）の同居の子がいるため');
+    }
+    if (youngestChildAge === null) {
+      return result(HOUSEHOLD_CATEGORIES.CHILDCARE_SCHOOLAGE, '同居の子が登録されていますが年齢が未入力のため、就学状況は仮判定です');
     }
     return result(HOUSEHOLD_CATEGORIES.CHILDCARE_SCHOOLAGE, '就学年齢（6歳以上）の同居の子がいるため');
   }
