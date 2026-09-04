@@ -5747,6 +5747,9 @@ function NexusActivityForm({
     marketSource: '',
     marketSourceOther: '',
     relatedOpportunityId: '',
+    // 相談・問合せ（inquiry）用フィールド。お客様側から自発的に来た相談内容を記録する
+    // （こちらから働きかけた「案件打診」とは別カウントのため、type='inquiry'として独立管理する）。
+    inquiryContent: '',
     nextAction: '',
     nextActionOther: '',
     nextActionDate: '',
@@ -5869,6 +5872,10 @@ function NexusActivityForm({
         return;
       }
     }
+    if (form.type === 'inquiry' && !(form.inquiryContent || '').trim()) {
+      setSaveError('相談内容を入力してください');
+      return;
+    }
     setSaveError('');
     if (!form.type) return;
     if (marketSourceRequired && !form.marketSource) return;
@@ -5949,6 +5956,9 @@ function NexusActivityForm({
       patch.voiceCompletedAt = voiceStatus === '完了' ? form.voiceCompletedAt || now : '';
       patch.voiceTypeOther = form.voiceType === 'その他' ? (form.voiceTypeOther || '').trim() : '';
       patch.voiceContent = (form.voiceContent || '').trim();
+    }
+    if (form.type === 'inquiry') {
+      patch.inquiryContent = (form.inquiryContent || '').trim();
     }
     const {
       createTask,
@@ -6169,6 +6179,20 @@ function NexusActivityForm({
     value: form.declineReasonOther || '',
     placeholder: "理由を入力",
     onChange: si('declineReasonOther')
+  }));
+  // ── 相談・問合せ（inquiry）用フィールド。お客様から自発的に来た相談内容を必須で記録する ──
+  const inquiryContentField = form.type === 'inquiry' && /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "相談内容"), /*#__PURE__*/React.createElement("textarea", {
+    className: "form-textarea",
+    style: {
+      minHeight: 100
+    },
+    value: form.inquiryContent || '',
+    placeholder: "例：個人年金に入りたい、子どもの保険を考えたい、NISAについて相談したい など",
+    onChange: si('inquiryContent')
   }));
   // ── お客様の声（customer_voice）用フィールド ──
   const voiceTypeField = form.type === 'customer_voice' && /*#__PURE__*/React.createElement("div", {
@@ -6424,7 +6448,7 @@ function NexusActivityForm({
       customerNameText: e.target.value,
       customerId: e.target.value ? '' : f.customerId
     }))
-  })), revenueField, marketSourceField, relatedCaseField, typeHint, maintenanceSubTypeField, receivedAtField, maintenanceStatusField, declineReasonField, voiceTypeField, voiceContentField, inappropriateFlagField, voiceDetailsToggle, voiceDetailsFields, voiceStatusField, form.type !== 'customer_voice' && /*#__PURE__*/React.createElement("div", {
+  })), revenueField, marketSourceField, relatedCaseField, typeHint, inquiryContentField, maintenanceSubTypeField, receivedAtField, maintenanceStatusField, declineReasonField, voiceTypeField, voiceContentField, inappropriateFlagField, voiceDetailsToggle, voiceDetailsFields, voiceStatusField, form.type !== 'customer_voice' && /*#__PURE__*/React.createElement("div", {
     className: "form-group"
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
@@ -6488,7 +6512,7 @@ function NexusActivityForm({
   }, "キャンセル"), /*#__PURE__*/React.createElement("button", {
     className: "btn btn-primary btn-full",
     onClick: save,
-    disabled: !form.type || marketSourceRequired && !form.marketSource
+    disabled: !form.type || marketSourceRequired && !form.marketSource || form.type === 'inquiry' && !(form.inquiryContent || '').trim()
   }, "保存")), deleteBtn, opportunitySheet);
 }
 // ── 営業活動1分類の説明ボトムシート（ⓘタップで表示。意味／具体例／間違えやすい分類との違い） ──
@@ -7173,6 +7197,13 @@ function NexusQuickActivityPanel({
           });
           return;
         }
+        // 相談・問合せも相談内容の入力が必要なため、即時1タップ登録ではなく登録フォームを開く
+        if (t.key === 'inquiry') {
+          setEditingLog({
+            type: t.key
+          });
+          return;
+        }
         if (needsForm) {
           setEditingLog({
             type: t.key
@@ -7710,7 +7741,7 @@ function NexusSalesKpiCard({
     className: "stat-label"
   }, label));
   // 特に重視したい「新規接触→アポ確定→商談」を強調表示する
-  const tiles = [tile('新規接触数', kpi.newContact, true), tile('見込フォロー数', kpi.leadFollowUp), tile('紹介依頼数', kpi.referralRequest), tile('紹介獲得数', referralAcquired), tile('案件打診数', kpi.opportunityPitch), tile('アポ依頼数', kpi.apptRequest), tile('アポ確定数', kpi.apptConfirmed, true), tile('商談数', kpi.deal, true), tile('提案数', kpi.proposal), tile('成約数', kpi.close), tile('成約率', kpi.closeRate === null ? '—' : `${Math.round(kpi.closeRate * 100)}%`)];
+  const tiles = [tile('新規接触数', kpi.newContact, true), tile('見込フォロー数', kpi.leadFollowUp), tile('紹介依頼数', kpi.referralRequest), tile('紹介獲得数', referralAcquired), tile('案件打診数', kpi.opportunityPitch), tile('相談・問合せ数', kpi.inquiry), tile('アポ依頼数', kpi.apptRequest), tile('アポ確定数', kpi.apptConfirmed, true), tile('商談数', kpi.deal, true), tile('提案数', kpi.proposal), tile('成約数', kpi.close), tile('成約率', kpi.closeRate === null ? '—' : `${Math.round(kpi.closeRate * 100)}%`)];
   const statGrid = /*#__PURE__*/React.createElement("div", {
     className: "stat-grid"
   }, tiles);
@@ -12324,6 +12355,10 @@ const NEXUS_ACTIVITY_TYPES = [{
   label: '案件打診',
   category: 'sales'
 }, {
+  key: 'inquiry',
+  label: '相談・問合せ',
+  category: 'sales'
+}, {
   key: 'appt_request',
   label: 'アポ依頼',
   category: 'sales'
@@ -12432,6 +12467,10 @@ function nexusActivityDisplayLabel(a) {
     const voiceLabel = a.voiceType === 'その他' && a.voiceTypeOther ? `その他：${a.voiceTypeOther}` : a.voiceType;
     return `${base}｜${voiceLabel}`;
   }
+  if (a.type === 'inquiry' && a.inquiryContent) {
+    const content = a.inquiryContent.length > 20 ? `${a.inquiryContent.slice(0, 20)}…` : a.inquiryContent;
+    return `${base}｜${content}`;
+  }
   return base;
 }
 // 顧客を選びやすくすべき活動（商談・提案・成約・保全・給付請求）
@@ -12478,6 +12517,15 @@ const NEXUS_CASE_SOURCES = [{
 }, {
   key: 'self_new_contact',
   label: '自分からの新規接触'
+}, {
+  key: 'line',
+  label: 'LINE'
+}, {
+  key: 'sns',
+  label: 'SNS'
+}, {
+  key: 'website',
+  label: 'ホームページ'
 }, {
   key: 'other',
   label: 'その他'
@@ -12665,8 +12713,14 @@ const NEXUS_ACTIVITY_TYPE_GUIDE = {
   opportunity_pitch: {
     meaning: 'セミナー・協業・提携・相談会など、具体的な営業機会や案件を作るための提案をしたこと。個人のお客様への単純なアポ依頼とは分けます。',
     examples: ['公民館・自治会等へセミナー開催を打診した', '税理士へ共同セミナーを提案した', '司法書士へ協業を提案した', '企業へ従業員向けFP相談会を提案した', '法人へ福利厚生セミナーを提案した'],
-    distinction: '相手が未契約者でも、すでに面識・接点があれば「新規接触」ではありません。個人向けの単純な日程調整は「アポ依頼」です。',
+    distinction: '相手が未契約者でも、すでに面識・接点があれば「新規接触」ではありません。個人向けの単純な日程調整は「アポ依頼」です。こちらからお客様へ働きかけた場合のみ「案件打診」です。お客様側から自発的に相談・問合せが来た場合は「相談・問合せ」で記録してください。',
     hint: '例：セミナー開催・協業・提携・相談会などを具体的に提案'
+  },
+  inquiry: {
+    meaning: 'こちらから営業・打診したものではなく、お客様側から自発的に相談・問い合わせが来たこと。営業活動の結果ではなく、お客様の意思で相談が始まった案件を記録します。',
+    examples: ['「個人年金に入りたい」', '「子どもの保険を考えたい」', '「NISAについて相談したい」', '「主人の保険も見てほしい」', '「相続について相談したい」', '「法人の保険について相談したい」'],
+    distinction: 'こちらから「こういう話があります」「一度相談しませんか」と働きかけたものは「案件打診」です。お客様から自発的に来た相談・問合せのみ「相談・問合せ」に記録してください。「住所変更したい」は保全、「入院したので請求したい」は給付・請求で記録します。',
+    hint: '例：お客様側から自発的に相談・問合せが来た（こちらから営業したものは含みません）'
   },
   appt_request: {
     meaning: '実際に会う・電話する・Zoomするための日程調整をお願いしたこと。まだ日時は決まっていない段階です。',
@@ -12785,6 +12839,9 @@ function nexusActivityKpi(activityLogs, periodStart, periodEnd) {
   const leadFollowUp = countOf('lead_follow_up');
   const referralRequest = countOf('referral_request');
   const opportunityPitch = countOf('opportunity_pitch');
+  // 相談・問合せ：お客様側から自発的に来た相談・問合せの件数。新規接触と同じOR結合はしない
+  // （type==='inquiry'のみをカウントする独立キーのため、他の分類に自動で重複計上されることはない）。
+  const inquiry = countOf('inquiry');
   const apptRequest = countOf('appt_request');
   const apptConfirmed = countOf('appt_confirmed');
   const deal = countOf('deal');
@@ -12803,6 +12860,7 @@ function nexusActivityKpi(activityLogs, periodStart, periodEnd) {
     leadFollowUp,
     referralRequest,
     opportunityPitch,
+    inquiry,
     apptRequest,
     apptConfirmed,
     deal,
@@ -13126,6 +13184,10 @@ function createAnonymizedAnalyticsData({ customers, activityLogs, opportunities,
         if (includeMemo && a.voiceCustomerRequest) rec.voiceCustomerRequest = nexusSanitizeMemoText(a.voiceCustomerRequest, nameMapForMemo);
         if (includeMemo && a.voiceResponseContent) rec.voiceResponseContent = nexusSanitizeMemoText(a.voiceResponseContent, nameMapForMemo);
         // voiceInternalMemo（社内メモ）はincludeMemoの値に関わらず意図的にAIエクスポートへ含めない
+      }
+      // 相談・問合せ：お客様側から自発的に来た相談内容（自由記述）はincludeMemoガード＋サニタイズ必須。
+      if (a.type === 'inquiry' && includeMemo && a.inquiryContent) {
+        rec.inquiryContent = nexusSanitizeMemoText(a.inquiryContent, nameMapForMemo);
       }
       return rec;
     });
