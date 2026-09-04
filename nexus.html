@@ -12595,10 +12595,15 @@ function nexusBuildActivityKeepSummary(activity, opts) {
   const caseSourceDetail = opts.caseSourceDetail || '';
   const dateTimeStr = opts.dateTimeStr || '';
   const memo = activity && activity.memo || '';
+  // ■活動に使うactivityLabel（nexusActivityDisplayLabel）は履歴一覧向けに20文字で省略されるため、
+  // 相談・問合せの相談内容はここでは省略せず全文を別項目として載せる（省略版だけでは
+  // 「全文をKeepにコピーする」という機能の目的を果たせないため）。
+  const inquiryContent = activity && activity.type === 'inquiry' && activity.inquiryContent || '';
   const nextActionLabel = opts.nextActionLabel || '';
   const lines = [];
   if (customerName) lines.push(`【${customerName}さん】`, '');
   if (activityLabel) lines.push('■活動', activityLabel, '');
+  if (inquiryContent) lines.push('■相談内容', inquiryContent, '');
   if (opportunityName) lines.push('■案件', opportunityName, '');
   if (caseSourceLabel) lines.push('■案件元', caseSourceLabel, '');
   if (caseSourceDetail) lines.push('■案件元詳細', caseSourceDetail, '');
