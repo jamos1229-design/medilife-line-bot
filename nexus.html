@@ -6849,7 +6849,11 @@ function NexusActivityHistoryList({
     style: {
       fontSize: 13,
       fontWeight: 700,
-      flexShrink: 0
+      minWidth: 0,
+      maxWidth: '55%',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
     }
   }, nexusActivityDisplayLabel(a)), (a.customerId || a.customerNameText) && /*#__PURE__*/React.createElement("span", {
     style: {
