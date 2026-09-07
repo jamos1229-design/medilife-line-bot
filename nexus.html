@@ -16959,6 +16959,181 @@ function nexusParseInsuranceNoticeReport(rows) {
     contracts
   };
 }
+// ── 生保管理表・個人法人（FP自作のオリジナル管理表）形式の判定・解析 ──
+// 保険会社発行の「契約内容のお知らせ」とは異なり、FPが継続的に使う独自テンプレート。
+// 見出しが2行に分かれる（1行目：被保険者/契約者/保険会社/証券№ 等、
+// 2行目：保険種類/現在/保険期間/払込期間/普通死亡/災害･傷害/入院/その他/月払い保険料 等）ため、
+// 列マッピング画面（1行見出し前提）では対応できず、専用の解析関数を用意する。
+function nexusFindSeihoKanriHeaderRow(rows) {
+  return (rows || []).findIndex(r => {
+    const cells = (r || []).map(c => (c || '').toString().trim());
+    return cells.includes('被保険者') && cells.includes('契約者') && cells.includes('保険会社') && cells.includes('証券№');
+  });
+}
+function nexusLooksLikeSeihoKanriTable(rows) {
+  return nexusFindSeihoKanriHeaderRow(rows) !== -1;
+}
+function nexusSeihoKanriColumnIndex(headerRow, label) {
+  return (headerRow || []).findIndex(c => (c || '').toString().trim() === label);
+}
+// 「辰典様」→「辰典」のように、既存のnexusFindNoticeCustomerName等と同じ「様」除去の慣習に揃える。
+function nexusStripSama(raw) {
+  return (raw || '').toString().replace(/\s*様\s*$/, '').trim();
+}
+// 契約者欄が「同左」（被保険者と同じ、という記法）の場合は被保険者名で解決する。
+function nexusResolveSeihoKanriContractorName(contractorRaw, insuredName) {
+  const c = nexusStripSama(contractorRaw);
+  if (!c || c === '同左') return insuredName;
+  return c;
+}
+// 既存のnoticeReport用パーサーと同じ慣習：カンマ・円・¥・空白のみ除去し、「万」等の単位は残す
+// （下流の集計処理が「◯万円」形式の文字列をそのまま扱える前提のため、単位変換はしない）。
+function nexusSeihoKanriAmount(raw) {
+  return (raw || '').toString().replace(/[,円¥\s]/g, '');
+}
+// ヘッダー行（1行目＋2行目）の位置から各列インデックスを解決し、以降のデータ行を走査する。
+// 被保険者・契約者・保険会社・証券№が全て空の行（未使用のテンプレート行・合計行）はスキップする。
+function nexusParseSeihoKanriTable(rows) {
+  const headerIdx = nexusFindSeihoKanriHeaderRow(rows);
+  if (headerIdx === -1) return [];
+  const h1 = rows[headerIdx] || [];
+  const h2 = rows[headerIdx + 1] || [];
+  const idx1 = label => nexusSeihoKanriColumnIndex(h1, label);
+  const idx2 = label => nexusSeihoKanriColumnIndex(h2, label);
+  const col = {
+    purpose: idx1('目的'),
+    insured: idx1('被保険者'),
+    contractor: idx1('契約者'),
+    company: idx1('保険会社'),
+    policyNum: idx1('証券№'),
+    date: idx1('契約日'),
+    insuranceType: idx2('保険種類'),
+    period: idx2('保険期間'),
+    paymentPeriod: idx2('払込期間'),
+    death: idx2('普通死亡'),
+    accident: idx2('災害･傷害'),
+    hospital: idx2('入院'),
+    other: idx2('その他'),
+    monthlyPremium: idx2('月払い保険料')
+  };
+  const cell = (row, i) => i == null || i < 0 || row[i] === undefined || row[i] === null ? '' : row[i].toString().trim();
+  const out = [];
+  for (let r = headerIdx + 2; r < rows.length; r++) {
+    const row = rows[r] || [];
+    const insuredRaw = cell(row, col.insured);
+    const contractorRaw = cell(row, col.contractor);
+    const company = cell(row, col.company);
+    const policyNum = cell(row, col.policyNum);
+    if (!insuredRaw && !contractorRaw && !company && !policyNum) continue;
+    out.push({
+      purpose: cell(row, col.purpose),
+      insuredName: nexusStripSama(insuredRaw),
+      contractorNameRaw: contractorRaw,
+      company,
+      policyNum,
+      date: cell(row, col.date),
+      insuranceType: cell(row, col.insuranceType),
+      period: cell(row, col.period),
+      paymentPeriod: cell(row, col.paymentPeriod),
+      death: cell(row, col.death),
+      accident: cell(row, col.accident),
+      hospital: cell(row, col.hospital),
+      other: cell(row, col.other),
+      monthlyPremium: cell(row, col.monthlyPremium)
+    });
+  }
+  return out;
+}
+// パース済みの1行分データから、既存のcontracts配列と同じ形のcontractオブジェクトを作る。
+// 普通死亡＝主契約の死亡保険金額（coverageAmount）、災害･傷害・入院は特約（riders）として扱う
+// （既存のnoticeReport取込と同じ「riders: [{name, amount}]」の形を踏襲、purposesは空のまま
+// FPが後から編集画面で分類できるようにする＝既存の挙動と同じ）。
+function nexusBuildSeihoKanriContract(row) {
+  const riders = [];
+  if (row.accident) riders.push({
+    id: uid(),
+    purposes: [],
+    name: '災害・傷害',
+    amount: nexusSeihoKanriAmount(row.accident),
+    amountUnit: '一時金',
+    premium: '',
+    termNote: '',
+    paymentTermNote: '',
+    nextRenewalTerm: '',
+    renewalLimit: ''
+  });
+  if (row.hospital) riders.push({
+    id: uid(),
+    purposes: [],
+    name: '入院給付金日額',
+    amount: nexusSeihoKanriAmount(row.hospital),
+    amountUnit: '日額',
+    premium: '',
+    termNote: '',
+    paymentTermNote: '',
+    nextRenewalTerm: '',
+    renewalLimit: ''
+  });
+  const memoNotes = [];
+  if (row.purpose) memoNotes.push(`目的：${row.purpose}`);
+  if (row.other) memoNotes.push(row.other);
+  return {
+    id: uid(),
+    contractStatus: '有効',
+    category: nexusGuessCategory(row.insuranceType, ''),
+    type: row.insuranceType || '',
+    company: row.company,
+    policyNum: row.policyNum,
+    insuredName: row.insuredName,
+    insuredBirthdate: '',
+    premium: nexusSeihoKanriAmount(row.monthlyPremium),
+    paymentCycle: row.monthlyPremium ? '月払' : '',
+    date: row.date,
+    termNote: row.period,
+    termEnd: '',
+    paymentTermNote: row.paymentPeriod,
+    coverageAmount: nexusSeihoKanriAmount(row.death),
+    riders,
+    memo: memoNotes.join('　')
+  };
+}
+// buildPreviewFromNoticeReportと同じ「顧客名一致判定→resolution/status決定」ロジックをそのまま踏襲した、
+// 生保管理表専用のプレビュー行生成（1契約＝1プレビュー行）。
+function nexusBuildSeihoKanriPreview(parsedRows, customers) {
+  const normName = s => (s || '').replace(/[\s　]/g, '');
+  return (parsedRows || []).map(row => {
+    const contractorName = nexusResolveSeihoKanriContractorName(row.contractorNameRaw, row.insuredName);
+    const contract = nexusBuildSeihoKanriContract(row);
+    const matches = contractorName ? (customers || []).filter(cu => normName(nexusDisplayName(cu)) === normName(contractorName)) : [];
+    let resolution, status;
+    if (!contractorName) {
+      resolution = 'skip';
+      status = 'needs_review';
+    } else if (matches.length === 1) {
+      resolution = matches[0].id;
+      status = nexusFindDuplicateContract(contract, matches[0].contracts || []) ? 'duplicate' : 'new';
+    } else if (matches.length === 0) {
+      resolution = 'new_customer';
+      status = 'needs_review';
+    } else {
+      resolution = matches[0].id;
+      status = 'needs_review';
+    }
+    return {
+      id: uid(),
+      contractorName,
+      contractorKana: '',
+      contractorBirthdate: '',
+      postalCode: '',
+      address: '',
+      contract,
+      matches,
+      resolution,
+      status,
+      include: status !== 'duplicate'
+    };
+  });
+}
 // ファイル拡張子に応じて .xlsx/.xls（SheetJS）／.csv（既存のRFC4180パーサー）を読み分け、
 // callbackへ結果を渡す。SheetJSは新しいOOXML形式(.xlsx)と旧バイナリ形式(.xls)の
 // どちらも同じAPIで読めるため、旧形式でも「シートが見つかりませんでした」等の
@@ -17040,6 +17215,13 @@ function nexusParseWorkbookFile(file, callback, onError) {
           postalCode,
           address,
           contracts
+        });
+        return;
+      }
+      if (nexusLooksLikeSeihoKanriTable(rows)) {
+        callback({
+          kind: 'seihoKanriTable',
+          parsedRows: nexusParseSeihoKanriTable(rows)
         });
         return;
       }
@@ -21477,6 +21659,16 @@ function NexusContractImportScreen({
         setPhase('preview');
         return;
       }
+      if (result.kind === 'seihoKanriTable') {
+        const preview = nexusBuildSeihoKanriPreview(result.parsedRows, customers);
+        if (preview.length === 0) {
+          alert('契約データを検出できませんでした。ファイルの内容をご確認ください。');
+          return;
+        }
+        setPreviewRows(preview);
+        setPhase('preview');
+        return;
+      }
       setHeaders(result.headers);
       setRawRows(result.rows);
       setMapping(nexusGuessColumnMapping(result.headers));
@@ -21504,11 +21696,12 @@ function NexusContractImportScreen({
         return;
       }
       const noticeResults = ok.filter(r => r.kind === 'noticeReport');
-      const flatResults = ok.filter(r => r.kind !== 'noticeReport');
+      const seihoResults = ok.filter(r => r.kind === 'seihoKanriTable');
+      const flatResults = ok.filter(r => r.kind !== 'noticeReport' && r.kind !== 'seihoKanriTable');
       const reportErrors = () => {
         if (errors.length) alert('一部のファイルを読み込めませんでした：\n' + errors.join('\n'));
       };
-      if (noticeResults.length > 0 && flatResults.length === 0) {
+      if (noticeResults.length > 0 && seihoResults.length === 0 && flatResults.length === 0) {
         const combined = noticeResults.flatMap(buildPreviewFromNoticeReport);
         if (combined.length === 0) {
           alert('契約データを検出できませんでした。ファイルの内容をご確認ください。');
@@ -21519,7 +21712,18 @@ function NexusContractImportScreen({
         reportErrors();
         return;
       }
-      if (flatResults.length > 0 && noticeResults.length === 0) {
+      if (seihoResults.length > 0 && noticeResults.length === 0 && flatResults.length === 0) {
+        const combined = seihoResults.flatMap(r => nexusBuildSeihoKanriPreview(r.parsedRows, customers));
+        if (combined.length === 0) {
+          alert('契約データを検出できませんでした。ファイルの内容をご確認ください。');
+          return;
+        }
+        setPreviewRows(combined);
+        setPhase('preview');
+        reportErrors();
+        return;
+      }
+      if (flatResults.length > 0 && noticeResults.length === 0 && seihoResults.length === 0) {
         const first = flatResults[0];
         const sameHeaders = flatResults.every(r => r.headers.length === first.headers.length && r.headers.every((h, i) => h === first.headers[i]));
         if (sameHeaders) {
@@ -21537,11 +21741,15 @@ function NexusContractImportScreen({
         setPhase('mapping');
         return;
       }
-      // お知らせ形式と一覧表形式が混在している場合はまとめて取り込めないため、最初の1件のみ進める
-      alert('お知らせ形式と一覧表形式のファイルが混在しているため、まとめて取り込めません。1ファイルずつ取り込んでください（最初の1件のみ次の画面に進みます）。');
+      // 複数の形式（お知らせ形式・生保管理表形式・一覧表形式）が混在している場合はまとめて
+      // 取り込めないため、最初の1件のみ通常フローに進める。
+      alert('複数の形式のファイルが混在しているため、まとめて取り込めません。1ファイルずつ取り込んでください（最初の1件のみ次の画面に進みます）。');
       const r0 = ok[0];
       if (r0.kind === 'noticeReport') {
         setPreviewRows(buildPreviewFromNoticeReport(r0));
+        setPhase('preview');
+      } else if (r0.kind === 'seihoKanriTable') {
+        setPreviewRows(nexusBuildSeihoKanriPreview(r0.parsedRows, customers));
         setPhase('preview');
       } else {
         setHeaders(r0.headers);
