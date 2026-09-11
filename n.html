@@ -2928,6 +2928,8 @@ function CustomerForm({
     referredBy: '',
     referredByName: '',
     // 紹介元が顧客未登録の場合の名前直接入力（referredByと併用可）
+    referredAt: '', // 紹介を受けた日（YYYY-MM-DD）。営業KPIの紹介獲得数はこの日付だけを基準にする。
+    // 未入力なら自動推測せず、紹介獲得数には一切含めない（登録日＝紹介日とは限らないため）。
     referredTo: [], // 複数可・IDの配列
     linkedCorpId: '', // 役員・従業員として法人契約と合わせて見るための手動連携（代表者は自動連携されるため通常はそれ以外向け）
     acquisitionSource: '', // 流入元（紹介／既契約者から／セミナー／SNS等）。紹介の場合の紹介者はreferredBy/referredByNameを使う
@@ -3885,7 +3887,25 @@ function CustomerForm({
   }, "選択"), NEXUS_ACQUISITION_SOURCES.map(s2 => /*#__PURE__*/React.createElement("option", {
     key: s2,
     value: s2
-  }, s2)))), /*#__PURE__*/React.createElement(CustomerSelect, {
+  }, s2)))), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "紹介を受けた日"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    type: "date",
+    value: form.referredAt || '',
+    onChange: si('referredAt')
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--text-sub)',
+      marginTop: 4
+    }
+  }, "営業KPIの「紹介獲得数」はこの日付だけを基準にします。既契約の登録・情報の入力し直し等では変わらないよう、未入力の場合はカウントされません。")), /*#__PURE__*/React.createElement(CustomerSelect, {
     label: "紹介元（誰から紹介されたか）",
     value: form.referredBy,
     onChange: v => s('referredBy')(v),
@@ -7688,6 +7708,7 @@ function NexusSalesKpiCard({
 }) {
   const [period, setPeriod] = useState('今日');
   const [showReferralDetail, setShowReferralDetail] = useState(false);
+  const [activityDetailTile, setActivityDetailTile] = useState(null); // {type, label}
   const today = todayStr();
   const weekRaw = nexusWeekRange(today);
   // nexusWeekRangeは月曜〜日曜の暦週全体を返す（タスクの「今週」フィルタでは未来の
@@ -7759,8 +7780,11 @@ function NexusSalesKpiCard({
       fontWeight: 700
     }
   }, "内訳 ›"));
+  // 活動ログベースの各タイルは、タップするとその期間の元になった活動一覧を確認できる
+  // （紹介獲得数だけは活動ログではなく顧客プロフィール基準のため、別のshowReferralDetailで開く）。
+  const openTileDetail = (type, label) => () => setActivityDetailTile({ type, label });
   // 特に重視したい「新規接触→アポ確定→商談」を強調表示する
-  const tiles = [tile('新規接触数', kpi.newContact, true), tile('見込フォロー数', kpi.leadFollowUp), tile('紹介依頼数', kpi.referralRequest), tile('紹介獲得数', referralAcquired, false, () => setShowReferralDetail(true)), tile('案件打診数', kpi.opportunityPitch), tile('相談・問合せ数', kpi.inquiry), tile('アポ依頼数', kpi.apptRequest), tile('アポ確定数', kpi.apptConfirmed, true), tile('商談数', kpi.deal, true), tile('提案数', kpi.proposal), tile('成約数', kpi.close), tile('成約率', kpi.closeRate === null ? '—' : `${Math.round(kpi.closeRate * 100)}%`)];
+  const tiles = [tile('新規接触数', kpi.newContact, true, openTileDetail('new_contact', '新規接触数')), tile('見込フォロー数', kpi.leadFollowUp, false, openTileDetail('lead_follow_up', '見込フォロー数')), tile('紹介依頼数', kpi.referralRequest, false, openTileDetail('referral_request', '紹介依頼数')), tile('紹介獲得数', referralAcquired, false, () => setShowReferralDetail(true)), tile('案件打診数', kpi.opportunityPitch, false, openTileDetail('opportunity_pitch', '案件打診数')), tile('相談・問合せ数', kpi.inquiry, false, openTileDetail('inquiry', '相談・問合せ数')), tile('アポ依頼数', kpi.apptRequest, false, openTileDetail('appt_request', 'アポ依頼数')), tile('アポ確定数', kpi.apptConfirmed, true, openTileDetail('appt_confirmed', 'アポ確定数')), tile('商談数', kpi.deal, true, openTileDetail('deal', '商談数')), tile('提案数', kpi.proposal, false, openTileDetail('proposal', '提案数')), tile('成約数', kpi.close, false, openTileDetail('close', '成約数')), tile('成約率', kpi.closeRate === null ? '—' : `${Math.round(kpi.closeRate * 100)}%`)];
   const statGrid = /*#__PURE__*/React.createElement("div", {
     className: "stat-grid"
   }, tiles);
@@ -7845,15 +7869,98 @@ function NexusSalesKpiCard({
     periodLabel: period,
     onClose: () => setShowReferralDetail(false)
   });
+  const activityDetailSheet = activityDetailTile && /*#__PURE__*/React.createElement(NexusKpiActivityDetailSheet, {
+    activities: nexusKpiActivitiesForTile(activityLogs, activityDetailTile.type, range.start, range.end),
+    customers: customers,
+    label: activityDetailTile.label,
+    periodLabel: period,
+    onClose: () => setActivityDetailTile(null)
+  });
   return /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "card-title"
-  }, "📊 営業KPI"), periodChips, statGrid, rateGrid, marketSourceCard, salesRow, aiAnalysisBtn, referralDetailSheet);
+  }, "📊 営業KPI"), periodChips, statGrid, rateGrid, marketSourceCard, salesRow, aiAnalysisBtn, referralDetailSheet, activityDetailSheet);
 }
-// ── 紹介獲得数タイルの内訳シート。「顧客登録日が選択中の期間内で、流入元が『紹介』または
-// 紹介元が入力されている顧客」という定義そのものを一覧で見せることで、なぜその件数になって
-// いるかをFPが自分で確認・検証できるようにする（タップして初めて中身が分かる、を解消する）。
+// ── 活動ログベースのKPIタイル（新規接触数・見込フォロー数・紹介依頼数・案件打診数・
+// 相談・問合せ数・アポ依頼数・アポ確定数・商談数・提案数・成約数）共通の内訳シート。
+// タップした期間・分類に該当する活動を、時刻・顧客名・活動ラベル・メモの順で一覧表示する。
+function NexusKpiActivityDetailSheet({
+  activities,
+  customers,
+  label,
+  periodLabel,
+  onClose
+}) {
+  const customerName = a => {
+    if (a.customerId) {
+      const c = (customers || []).find(x => x.id === a.customerId);
+      return c ? nexusDisplayName(c) : '（削除済み顧客）';
+    }
+    return a.customerNameText || '（顧客未登録）';
+  };
+  const rows = activities.length === 0 ? /*#__PURE__*/React.createElement(EmptyState, {
+    icon: "📋",
+    text: `${periodLabel}の${label}はまだありません`
+  }) : activities.map(a => /*#__PURE__*/React.createElement("div", {
+    key: a.id,
+    style: {
+      padding: '10px 0',
+      borderBottom: '1px solid var(--border)'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'baseline',
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--text-sub)',
+      flexShrink: 0
+    }
+  }, nexusLocalDateStr(a.occurredAt), " ", nexusLocalTimeStr(a.occurredAt)), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 14,
+      fontWeight: 700
+    }
+  }, customerName(a))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--text-sub)',
+      marginTop: 2
+    }
+  }, nexusActivityDisplayLabel(a)), a.memo && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text-sub)',
+      marginTop: 2,
+      whiteSpace: 'pre-wrap'
+    }
+  }, a.memo)));
+  return /*#__PURE__*/React.createElement("div", {
+    className: "overlay",
+    onClick: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "drawer",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "drawer-handle"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "drawer-title"
+  }, label, "の内訳（", periodLabel, "）"), rows, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: {
+      marginTop: 12
+    },
+    onClick: onClose
+  }, "閉じる")));
+}
+// ── 紹介獲得数タイルの内訳シート。「顧客プロフィールの『紹介を受けた日』が選択中の期間内」
+// という定義そのものを一覧で見せることで、なぜその件数になっているかをFPが自分で確認・
+// 検証できるようにする（タップして初めて中身が分かる、を解消する）。
 function NexusReferralAcquiredDetailSheet({
   customers,
   allCustomers,
@@ -7889,7 +7996,7 @@ function NexusReferralAcquiredDetailSheet({
       color: 'var(--text-sub)',
       marginTop: 2
     }
-  }, resolveReferrerLabel(c), "　／　登録日：", fmtDate(nexusLocalDateStr(c.createdAt)) || '不明')));
+  }, resolveReferrerLabel(c), "　／　紹介を受けた日：", fmtDate(c.referredAt) || '不明')));
   return /*#__PURE__*/React.createElement("div", {
     className: "overlay",
     onClick: onClose
@@ -7907,7 +8014,7 @@ function NexusReferralAcquiredDetailSheet({
       lineHeight: 1.6,
       marginBottom: 10
     }
-  }, "定義：顧客の登録日が「", periodLabel, "」の期間内で、流入元が「紹介」、または紹介元（紹介してくれた方）が設定されている顧客の数です。紹介を依頼した日（紹介依頼数）ではなく、紹介によって顧客としてNEXUSに登録された日を基準にしています。"), rows, /*#__PURE__*/React.createElement("button", {
+  }, "定義：顧客プロフィールの「紹介を受けた日」が「", periodLabel, "」の期間内に入っている顧客の数です。NEXUSへの登録日（既契約の登録・Excel取込・情報の修正等）は一切関係なく、FPが自分で入力した「紹介を受けた日」だけを基準にしています。未入力の顧客はカウントされません。"), rows, /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "btn btn-outline btn-full",
     style: {
@@ -12976,21 +13083,30 @@ function nexusShouldBlockDuplicateActivity(activeLogs, type, nowMs, windowMs) {
   }, 0);
   return nowMs - mostRecent < windowMs;
 }
-// 紹介獲得数：流入元が「紹介」（または後方互換でreferredBy/referredByNameが入っている）の顧客のうち、
-// createdAtが期間内のものを数える。createdAtが無い（既存の古い顧客データ）は期間集計の対象外
-// （未入力を0件と混同しないための既存の一貫した方針に合わせる）。
+// 紹介獲得数：NEXUSへの登録日（createdAt）ではなく、FPが明示的に入力する「紹介を受けた日」
+// （customer.referredAt、YYYY-MM-DD）が期間内の顧客を数える。既契約の登録・Excel取込・
+// プロフィールの編集など「NEXUSに記録した日」と「実際に紹介を受けた日」がズレる操作では
+// 絶対に誤カウントしないよう、referredAtが未入力の顧客は流入元が「紹介」であっても一切
+// カウントしない（自動推測はしない。FPが自分で「紹介を受けた日」を入力した時だけ計上される）。
 // 内訳表示（KPIタイルをタップした時の一覧）用に、件数だけでなく該当する顧客そのものを返す。
 function nexusReferralAcquiredCustomers(customers, periodStart, periodEnd) {
-  const inPeriod = c => {
-    if (!c.createdAt) return false;
-    const d = nexusLocalDateStr(c.createdAt);
-    return d >= periodStart && d <= periodEnd;
-  };
-  const isReferral = c => c.acquisitionSource === '紹介' || !!(c.referredBy || c.referredByName);
-  return (customers || []).filter(c => isReferral(c) && inPeriod(c));
+  return (customers || []).filter(c => c.referredAt && c.referredAt >= periodStart && c.referredAt <= periodEnd);
 }
 function nexusReferralAcquiredCount(customers, periodStart, periodEnd) {
   return nexusReferralAcquiredCustomers(customers, periodStart, periodEnd).length;
+}
+// 営業KPIの各タイル（活動ログベース）に対応する、その期間の元データ一覧。タイルをタップした時の
+// 内訳表示に使う。new_contactのみ、既存のKPI集計（nexusActivityKpi）と同じOR条件
+// （type==='new_contact' || firstBusinessContact）で抽出し、他のタイルはtype一致のみで良い。
+function nexusKpiActivitiesForTile(activityLogs, tileType, periodStart, periodEnd) {
+  const active = nexusActiveLogs(activityLogs);
+  const inPeriod = a => {
+    if (!a.occurredAt) return false;
+    const d = nexusLocalDateStr(a.occurredAt);
+    return d >= periodStart && d <= periodEnd;
+  };
+  const matches = a => tileType === 'new_contact' ? a.type === 'new_contact' || a.firstBusinessContact : a.type === tileType;
+  return active.filter(a => inPeriod(a) && matches(a)).sort((a, b) => (b.occurredAt || '').localeCompare(a.occurredAt || ''));
 }
 // CustomerFormの保存時、createdAtをいつ「今」で埋めるかを決める。新規作成（formにidが無い）
 // 時だけ「今」をデフォルトにし、既存顧客の編集（idが既にある）でcreatedAtが未設定のまま
