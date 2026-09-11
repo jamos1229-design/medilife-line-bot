@@ -3025,7 +3025,7 @@ function CustomerForm({
     onSave({
       ...form,
       id: form.id || uid(),
-      createdAt: form.createdAt || new Date().toISOString()
+      createdAt: nexusResolveCustomerCreatedAt(form.id, form.createdAt, new Date().toISOString())
     });
     onClose();
   };
@@ -7687,6 +7687,7 @@ function NexusSalesKpiCard({
   onOpenAIAnalysis
 }) {
   const [period, setPeriod] = useState('今日');
+  const [showReferralDetail, setShowReferralDetail] = useState(false);
   const today = todayStr();
   const weekRaw = nexusWeekRange(today);
   // nexusWeekRangeは月曜〜日曜の暦週全体を返す（タスクの「今週」フィルタでは未来の
@@ -7718,7 +7719,8 @@ function NexusSalesKpiCard({
     end: today
   };
   const kpi = nexusActivityKpi(activityLogs, range.start, range.end);
-  const referralAcquired = nexusReferralAcquiredCount(customers, range.start, range.end);
+  const referralAcquiredCustomers = nexusReferralAcquiredCustomers(customers, range.start, range.end);
+  const referralAcquired = referralAcquiredCustomers.length;
   const pipelineExpectedRevenue = (tasks || []).filter(t => !t.completed && t.salesRank && t.expectedRevenue).reduce((s, t) => s + (Number(t.expectedRevenue) || 0), 0);
   const target = Number((sales || {}).target) || 0;
   const current = Number((sales || {}).current) || 0;
@@ -7733,19 +7735,32 @@ function NexusSalesKpiCard({
     className: `chip ${period === p ? 'active' : ''}`,
     onClick: () => setPeriod(p)
   }, p)));
-  const tile = (label, value, highlight) => /*#__PURE__*/React.createElement("div", {
+  // onClickを渡したタイルはタップ可能にし、右上に「内訳」の目印を出す（この期間の元データを
+  // 確認できるようにするため。現状は紹介獲得数のみ対応、他のタイルは従来通り非クリック）。
+  const tile = (label, value, highlight, onClick) => /*#__PURE__*/React.createElement("div", {
     key: label,
     className: "stat-card",
-    style: highlight ? {
-      border: '1.5px solid var(--accent)'
-    } : null
+    onClick,
+    style: {
+      ...(highlight ? { border: '1.5px solid var(--accent)' } : null),
+      ...(onClick ? { cursor: 'pointer', position: 'relative' } : null)
+    }
   }, /*#__PURE__*/React.createElement("div", {
     className: "stat-num"
   }, value), /*#__PURE__*/React.createElement("div", {
     className: "stat-label"
-  }, label));
+  }, label), onClick && /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: 'absolute',
+      top: 6,
+      right: 8,
+      fontSize: 10.5,
+      color: 'var(--accent)',
+      fontWeight: 700
+    }
+  }, "内訳 ›"));
   // 特に重視したい「新規接触→アポ確定→商談」を強調表示する
-  const tiles = [tile('新規接触数', kpi.newContact, true), tile('見込フォロー数', kpi.leadFollowUp), tile('紹介依頼数', kpi.referralRequest), tile('紹介獲得数', referralAcquired), tile('案件打診数', kpi.opportunityPitch), tile('相談・問合せ数', kpi.inquiry), tile('アポ依頼数', kpi.apptRequest), tile('アポ確定数', kpi.apptConfirmed, true), tile('商談数', kpi.deal, true), tile('提案数', kpi.proposal), tile('成約数', kpi.close), tile('成約率', kpi.closeRate === null ? '—' : `${Math.round(kpi.closeRate * 100)}%`)];
+  const tiles = [tile('新規接触数', kpi.newContact, true), tile('見込フォロー数', kpi.leadFollowUp), tile('紹介依頼数', kpi.referralRequest), tile('紹介獲得数', referralAcquired, false, () => setShowReferralDetail(true)), tile('案件打診数', kpi.opportunityPitch), tile('相談・問合せ数', kpi.inquiry), tile('アポ依頼数', kpi.apptRequest), tile('アポ確定数', kpi.apptConfirmed, true), tile('商談数', kpi.deal, true), tile('提案数', kpi.proposal), tile('成約数', kpi.close), tile('成約率', kpi.closeRate === null ? '—' : `${Math.round(kpi.closeRate * 100)}%`)];
   const statGrid = /*#__PURE__*/React.createElement("div", {
     className: "stat-grid"
   }, tiles);
@@ -7824,11 +7839,82 @@ function NexusSalesKpiCard({
     },
     onClick: onOpenAIAnalysis
   }, "🤖 AI分析用データ");
+  const referralDetailSheet = showReferralDetail && /*#__PURE__*/React.createElement(NexusReferralAcquiredDetailSheet, {
+    customers: referralAcquiredCustomers,
+    allCustomers: customers,
+    periodLabel: period,
+    onClose: () => setShowReferralDetail(false)
+  });
   return /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "card-title"
-  }, "📊 営業KPI"), periodChips, statGrid, rateGrid, marketSourceCard, salesRow, aiAnalysisBtn);
+  }, "📊 営業KPI"), periodChips, statGrid, rateGrid, marketSourceCard, salesRow, aiAnalysisBtn, referralDetailSheet);
+}
+// ── 紹介獲得数タイルの内訳シート。「顧客登録日が選択中の期間内で、流入元が『紹介』または
+// 紹介元が入力されている顧客」という定義そのものを一覧で見せることで、なぜその件数になって
+// いるかをFPが自分で確認・検証できるようにする（タップして初めて中身が分かる、を解消する）。
+function NexusReferralAcquiredDetailSheet({
+  customers,
+  allCustomers,
+  periodLabel,
+  onClose
+}) {
+  const resolveReferrerLabel = c => {
+    if (c.acquisitionSource === '紹介' && !c.referredBy && !c.referredByName) return '流入元：紹介';
+    if (c.referredByName) return `紹介元：${c.referredByName}`;
+    if (c.referredBy) {
+      const ref = (allCustomers || []).find(x => x.id === c.referredBy);
+      return `紹介元：${ref ? nexusDisplayName(ref) : '（登録済み顧客）'}`;
+    }
+    return '流入元：紹介';
+  };
+  const rows = customers.length === 0 ? /*#__PURE__*/React.createElement(EmptyState, {
+    icon: "🤝",
+    text: `${periodLabel}の紹介獲得はまだありません`
+  }) : customers.map(c => /*#__PURE__*/React.createElement("div", {
+    key: c.id,
+    style: {
+      padding: '10px 0',
+      borderBottom: '1px solid var(--border)'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 14,
+      fontWeight: 700
+    }
+  }, nexusDisplayName(c)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--text-sub)',
+      marginTop: 2
+    }
+  }, resolveReferrerLabel(c), "　／　登録日：", fmtDate(nexusLocalDateStr(c.createdAt)) || '不明')));
+  return /*#__PURE__*/React.createElement("div", {
+    className: "overlay",
+    onClick: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "drawer",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "drawer-handle"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "drawer-title"
+  }, "紹介獲得数の内訳（", periodLabel, "）"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text-sub)',
+      lineHeight: 1.6,
+      marginBottom: 10
+    }
+  }, "定義：顧客の登録日が「", periodLabel, "」の期間内で、流入元が「紹介」、または紹介元（紹介してくれた方）が設定されている顧客の数です。紹介を依頼した日（紹介依頼数）ではなく、紹介によって顧客としてNEXUSに登録された日を基準にしています。"), rows, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: {
+      marginTop: 12
+    },
+    onClick: onClose
+  }, "閉じる")));
 }
 
 // ── AI分析用データ（匿名化エクスポート）画面（改修11）。
@@ -12893,14 +12979,29 @@ function nexusShouldBlockDuplicateActivity(activeLogs, type, nowMs, windowMs) {
 // 紹介獲得数：流入元が「紹介」（または後方互換でreferredBy/referredByNameが入っている）の顧客のうち、
 // createdAtが期間内のものを数える。createdAtが無い（既存の古い顧客データ）は期間集計の対象外
 // （未入力を0件と混同しないための既存の一貫した方針に合わせる）。
-function nexusReferralAcquiredCount(customers, periodStart, periodEnd) {
+// 内訳表示（KPIタイルをタップした時の一覧）用に、件数だけでなく該当する顧客そのものを返す。
+function nexusReferralAcquiredCustomers(customers, periodStart, periodEnd) {
   const inPeriod = c => {
     if (!c.createdAt) return false;
     const d = nexusLocalDateStr(c.createdAt);
     return d >= periodStart && d <= periodEnd;
   };
   const isReferral = c => c.acquisitionSource === '紹介' || !!(c.referredBy || c.referredByName);
-  return (customers || []).filter(c => isReferral(c) && inPeriod(c)).length;
+  return (customers || []).filter(c => isReferral(c) && inPeriod(c));
+}
+function nexusReferralAcquiredCount(customers, periodStart, periodEnd) {
+  return nexusReferralAcquiredCustomers(customers, periodStart, periodEnd).length;
+}
+// CustomerFormの保存時、createdAtをいつ「今」で埋めるかを決める。新規作成（formにidが無い）
+// 時だけ「今」をデフォルトにし、既存顧客の編集（idが既にある）でcreatedAtが未設定のまま
+// 保存しても、絶対に「今日登録された顧客」に化けさせない。
+// 【不具合修正】以前はform.idの有無を見ずに「createdAtが無ければ今」としていたため、createdAt
+// フィールド導入前から登録されている古い顧客（紹介で獲得済みだが空のまま）を、その日たまたま
+// 電話番号の修正やメモの追記などで再保存しただけで「今日紹介獲得した新規顧客」として
+// 紹介獲得数KPIに誤って計上されてしまっていた。
+function nexusResolveCustomerCreatedAt(formId, formCreatedAt, nowIso) {
+  if (formCreatedAt) return formCreatedAt;
+  return formId ? '' : nowIso;
 }
 // 営業ファネル率：分母が0のときは「—」（NaN/Infinityを絶対に表示しない）
 function nexusFunnelRate(numerator, denominator) {
