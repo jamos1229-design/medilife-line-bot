@@ -14612,11 +14612,27 @@ function nexusCustomerAnalysisFilterPredicate(customer, filters, ctx) {
   }
   return true;
 }
+// anonymizedRows（オブジェクトの配列。ネストした配列・オブジェクトも含む）から、
+// 文字列型の値だけを再帰的に集める。数値フィールド（保険料合計等の正当な集計値）と
+// 文字列フィールドを区別せずにJSON文字列全体を走査すると、7桁以上の保険料（100万円以上、
+// 実データではごく普通に発生する）が毎回「証券番号らしき数字列」として誤検知され、
+// 出力ボタンが常に無効化されてしまうバグがあったため、文字列値だけを対象にする。
+function nexusCollectStringValues(value, acc) {
+  if (typeof value === 'string') {
+    acc.push(value);
+  } else if (Array.isArray(value)) {
+    value.forEach(v => nexusCollectStringValues(v, acc));
+  } else if (value && typeof value === 'object') {
+    Object.keys(value).forEach(k => nexusCollectStringValues(value[k], acc));
+  }
+  return acc;
+}
 // 出力直前の最終防衛ライン。許可リスト方式で作った匿名化済み行に対して、
 // 想定外の個人情報混入が無いかを走査する（コード変更で将来リークが起きても検知できるよう、
-// 変換後の出力文字列そのものをスキャン対象にする）。
+// 変換後の出力文字列そのものをスキャン対象にする）。数値フィールドは対象外
+// （nexusCollectStringValues参照）。
 function nexusScanForResidualPii(anonymizedRows, allCustomers) {
-  const text = JSON.stringify(anonymizedRows);
+  const text = nexusCollectStringValues(anonymizedRows, []).join('\n');
   const issues = [];
   const checks = [
     ['電話番号らしい文字列', /0\d{1,4}-?\d{1,4}-?\d{3,4}/g],
