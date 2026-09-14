@@ -10512,17 +10512,34 @@ function NexusCustomerAiExportScreen({ customers, activityLogs, nexusFanFollows,
     disabled: filteredCustomers.length === 0,
     onClick: runAnonymize
   }, "匿名化してプレビュー"));
-  const copyText = text => {
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(text).then(() => showToast('コピーしました'));
-    } else {
+  // navigator.clipboard.writeTextはiOSで権限拒否等により静かに失敗することがあり、
+  // .then()しか無いと何も起きたように見えず「反応しない」原因になっていた。
+  // 必ず.catch()で従来のexecCommand方式へフォールバックし、それも失敗した場合は
+  // 明示的にエラーをトーストで表示する（無反応に見える状態を無くす）。
+  const legacyCopyText = text => {
+    try {
       const el = document.createElement('textarea');
       el.value = text;
+      el.setAttribute('readonly', '');
+      el.style.position = 'fixed';
+      el.style.top = '0';
+      el.style.left = '0';
+      el.style.opacity = '0';
       document.body.appendChild(el);
-      el.select();
-      document.execCommand('copy');
+      el.focus();
+      el.setSelectionRange(0, text.length);
+      const ok = document.execCommand('copy');
       document.body.removeChild(el);
-      showToast('コピーしました');
+      showToast(ok ? 'コピーしました' : 'コピーできませんでした。下のダウンロードをお試しください');
+    } catch (e) {
+      showToast('コピーできませんでした：' + (e && e.message || e));
+    }
+  };
+  const copyText = text => {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => showToast('コピーしました')).catch(() => legacyCopyText(text));
+    } else {
+      legacyCopyText(text);
     }
   };
   const scanBox = scanResult && (scanResult.ok ? React.createElement("div", {
