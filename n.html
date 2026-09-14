@@ -2935,7 +2935,15 @@ function CustomerForm({
     acquisitionSource: '', // 流入元（紹介／既契約者から／セミナー／SNS等）。紹介の場合の紹介者はreferredBy/referredByNameを使う
     createdAt: '',
     contractDiagnosisCompleted: false,
-    assetDiagnosisCompleted: false
+    assetDiagnosisCompleted: false,
+    // 契約状況／関係ステータス：既存のstatus（接触管理・顧客ランク自動判定で使用中）とは別の、
+    // 詳細検索用の新規項目。空欄＝該当なしと判定しないよう、未設定はそれぞれ「未確認」「未設定」のまま扱う
+    contractStatus: '未確認',
+    relationshipStatus: '',
+    interestTags: [],
+    preferredContactMethods: [],
+    contactPolicy: '未確認',
+    contactMemo: ''
   };
   const [form, setForm] = useState({
     ...blank,
@@ -2946,6 +2954,7 @@ function CustomerForm({
     [k]: v
   }));
   const si = k => e => s(k)(e.target.value);
+  const [customTagInput, setCustomTagInput] = useState('');
   const addContract = () => s('contracts')([...form.contracts, {
     id: uid(),
     type: '',
@@ -3031,6 +3040,80 @@ function CustomerForm({
     });
     onClose();
   };
+  // ── 関係性・フォロー方針（契約状況・関係ステータス・興味テーマ・連絡方針等） ──
+  const registeredContractCount = (form.contracts || []).length;
+  const registeredActiveCount = (form.contracts || []).filter(ct => ct.contractStatus !== '解約' && ct.contractStatus !== '失効').length;
+  const addCustomTag = () => {
+    const v = (customTagInput || '').trim();
+    if (!v) return;
+    if (!(form.interestTags || []).includes(v)) s('interestTags')([...(form.interestTags || []), v]);
+    setCustomTagInput('');
+  };
+  const toggleInField = (key, value) => {
+    const arr = form[key] || [];
+    s(key)(arr.includes(value) ? arr.filter(x => x !== value) : [...arr, value]);
+  };
+  const relationshipSection = React.createElement(React.Fragment, null,
+    React.createElement("div", { className: "section-header" }, "関係性・フォロー方針"),
+    React.createElement("div", { className: "card" },
+      React.createElement("div", { className: "form-group" },
+        React.createElement("label", { className: "form-label" }, "契約状況"),
+        React.createElement("div", { className: "toggle-group" },
+          NEXUS_CONTRACT_STATUS_OPTIONS.map(st => React.createElement("button", {
+            key: st, type: "button", className: `toggle-btn ${form.contractStatus === st ? 'sel' : ''}`,
+            onClick: () => s('contractStatus')(st)
+          }, st))),
+        registeredContractCount > 0 && React.createElement("div", {
+          style: { fontSize: 11.5, color: 'var(--text-sub)', marginTop: 4 }
+        }, `参考：登録済み契約 ${registeredContractCount}件（うち有効扱い ${registeredActiveCount}件）。この項目は自動では変わりません。`)),
+      React.createElement("div", { className: "form-group", style: { marginTop: 12 } },
+        React.createElement("label", { className: "form-label" }, "関係ステータス（自由に変更できます）"),
+        React.createElement("div", { className: "toggle-group" },
+          NEXUS_RELATIONSHIP_STATUSES.map(st => React.createElement("button", {
+            key: st, type: "button", className: `toggle-btn ${form.relationshipStatus === st ? 'sel' : ''}`,
+            onClick: () => s('relationshipStatus')(form.relationshipStatus === st ? '' : st)
+          }, st)))),
+      React.createElement("div", { className: "form-group", style: { marginTop: 12 } },
+        React.createElement("label", { className: "form-label" }, "興味・関心テーマ（複数選択可）"),
+        React.createElement("div", { style: { display: 'flex', flexWrap: 'wrap', gap: 8 } },
+          NEXUS_INTEREST_TAG_PRESETS.map(tag => React.createElement("button", {
+            key: tag, type: "button", className: `chip ${(form.interestTags || []).includes(tag) ? 'active' : ''}`,
+            onClick: () => toggleInField('interestTags', tag)
+          }, tag))),
+        React.createElement("div", { style: { display: 'flex', gap: 8, marginTop: 8 } },
+          React.createElement("input", {
+            className: "form-input", placeholder: "その他のテーマを追加", value: customTagInput,
+            onChange: e => setCustomTagInput(e.target.value),
+            onKeyDown: e => { if (e.key === 'Enter') { e.preventDefault(); addCustomTag(); } }
+          }),
+          React.createElement("button", { type: "button", className: "btn btn-outline", onClick: addCustomTag }, "追加")),
+        (form.interestTags || []).filter(t => !NEXUS_INTEREST_TAG_PRESETS.includes(t)).length > 0 && React.createElement("div", {
+          style: { display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }
+        }, (form.interestTags || []).filter(t => !NEXUS_INTEREST_TAG_PRESETS.includes(t)).map(tag => React.createElement("button", {
+          key: tag, type: "button", className: "chip active",
+          onClick: () => toggleInField('interestTags', tag)
+        }, tag, " ×")))),
+      React.createElement("div", { className: "form-group", style: { marginTop: 12 } },
+        React.createElement("label", { className: "form-label" }, "希望連絡方法（複数選択可）"),
+        React.createElement("div", { style: { display: 'flex', flexWrap: 'wrap', gap: 8 } },
+          NEXUS_PREFERRED_CONTACT_METHODS.map(m => React.createElement("button", {
+            key: m, type: "button", className: `chip ${(form.preferredContactMethods || []).includes(m) ? 'active' : ''}`,
+            onClick: () => toggleInField('preferredContactMethods', m)
+          }, m)))),
+      React.createElement("div", { className: "form-group", style: { marginTop: 12 } },
+        React.createElement("label", { className: "form-label" }, "連絡方針"),
+        React.createElement("div", { className: "toggle-group" },
+          NEXUS_CONTACT_POLICY_OPTIONS.map(p => React.createElement("button", {
+            key: p, type: "button", className: `toggle-btn ${form.contactPolicy === p ? 'sel' : ''}`,
+            onClick: () => s('contactPolicy')(p)
+          }, p)))),
+      React.createElement("div", { className: "form-group", style: { marginTop: 12, marginBottom: 0 } },
+        React.createElement("label", { className: "form-label" }, "連絡メモ（任意）"),
+        React.createElement("textarea", {
+          className: "form-textarea", style: { resize: 'vertical', minHeight: 60 },
+          placeholder: "例：電話よりLINE希望／仕事中は電話不可／営業案内は不要",
+          value: form.contactMemo || '', onChange: si('contactMemo')
+        }))));
   return /*#__PURE__*/React.createElement("div", {
     className: "full-screen"
   }, /*#__PURE__*/React.createElement("div", {
@@ -3933,7 +4016,7 @@ function CustomerForm({
     onChange: v => s('referredTo')(v),
     customers: otherCustomers,
     multi: true
-  }))), /*#__PURE__*/React.createElement("button", {
+  }))), relationshipSection, /*#__PURE__*/React.createElement("button", {
     className: "btn btn-primary btn-full",
     style: {
       marginTop: 8
@@ -4662,6 +4745,75 @@ function CustomerDetail({
       marginTop: 8
     }
   }, "※ 婚姻状況・同居家族の登録内容から自動判定した参考情報です。実際の保障提案は個別の事情も踏まえてご検討ください。")), /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "関係性・フォロー方針"), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, (c.contactPolicy === '営業連絡NG' || c.contactPolicy === 'しばらく連絡を控える') && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: '#FEF2F2',
+      border: '1px solid var(--danger)',
+      borderRadius: 10,
+      padding: '10px 12px',
+      fontSize: 13,
+      fontWeight: 700,
+      color: 'var(--danger)',
+      marginBottom: 12,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6
+    }
+  }, "⚠️ ", c.contactPolicy, "：営業連絡は控えてください"), /*#__PURE__*/React.createElement("div", {
+    className: "customer-info-row",
+    style: { marginBottom: 10 }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-item"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-label"
+  }, "契約状況"), /*#__PURE__*/React.createElement("div", {
+    className: "info-value"
+  }, c.contractStatus || '未確認')), /*#__PURE__*/React.createElement("div", {
+    className: "info-item"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-label"
+  }, "関係ステータス"), /*#__PURE__*/React.createElement("div", {
+    className: "info-value"
+  }, c.relationshipStatus || '未設定'))), /*#__PURE__*/React.createElement("div", {
+    className: "customer-info-row",
+    style: { marginBottom: 10 }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-item"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-label"
+  }, "希望連絡方法"), /*#__PURE__*/React.createElement("div", {
+    className: "info-value"
+  }, (c.preferredContactMethods || []).length > 0 ? c.preferredContactMethods.join('・') : '未確認')), /*#__PURE__*/React.createElement("div", {
+    className: "info-item"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-label"
+  }, "連絡方針"), /*#__PURE__*/React.createElement("div", {
+    className: "info-value"
+  }, c.contactPolicy || '未確認'))), (c.interestTags || []).length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: { marginBottom: c.contactMemo ? 10 : 0 }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-label",
+    style: { marginBottom: 5 }
+  }, "興味・関心テーマ"), /*#__PURE__*/React.createElement("div", {
+    style: { display: 'flex', flexWrap: 'wrap', gap: 6 }
+  }, c.interestTags.map(tag => /*#__PURE__*/React.createElement("span", {
+    key: tag,
+    className: "chip active"
+  }, tag)))), c.contactMemo && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: 'var(--bg)',
+      borderRadius: 10,
+      padding: '10px 12px',
+      fontSize: 12.5,
+      lineHeight: 1.6,
+      color: 'var(--text)'
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: { fontWeight: 700 }
+  }, "📝 連絡メモ：\xa0"), c.contactMemo)), /*#__PURE__*/React.createElement("div", {
     className: "section-header"
   }, "接触管理"), /*#__PURE__*/React.createElement("div", {
     className: "card"
@@ -10008,7 +10160,8 @@ function CustomerListTab({
   setCustomers,
   onSelect,
   onAdd,
-  onOpenAiExport
+  onOpenAiExport,
+  onOpenSearch
 }) {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('すべて');
@@ -10106,7 +10259,14 @@ function CustomerListTab({
       marginBottom: 8
     },
     onClick: onOpenAiExport
-  }, "🤖 AI分析用データ"), /*#__PURE__*/React.createElement("div", {
+  }, "🤖 AI分析用データ"), onOpenSearch && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: {
+      marginBottom: 8
+    },
+    onClick: onOpenSearch
+  }, "🔍 詳細検索"), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
@@ -10627,6 +10787,226 @@ function NexusCustomerAiExportScreen({ customers, activityLogs, nexusFanFollows,
   }, "← 戻る"), React.createElement("div", {
     style: { flex: 1, fontSize: 16, fontWeight: 700 }
   }, phase === 'select' ? "🤖 AI分析用データ" : "プレビュー（AIへ渡す内容を確認）")), selectScreen, previewScreen, toastEl);
+}
+
+// ── 顧客詳細検索：最上位の全画面 ──
+// AI分析用データ画面（NexusCustomerAiExportScreen）と同じ.full-screenパターン。
+// カテゴリーごとに折りたたみ可能なカードで条件を組み立て、nexusCustomerSearchPredicateで
+// リアルタイムにAND検索する。既存のAI分析用データ機能・既存の簡易フィルタとは完全に独立。
+function NexusCustomerSearchScreen({ customers, activityLogs, nexusFanFollows, savedSearches, setSavedSearches, onClose, onOpenCustomer }) {
+  const [criteria, setCriteria] = useState({});
+  const [open, setOpen] = useState({ basic: true, family: false, contract: false, relationship: false, info: false, detail: false });
+  const [saveNameInput, setSaveNameInput] = useState('');
+  const toggleOpen = key => setOpen(o => ({ ...o, [key]: !o[key] }));
+  const setC = (key, val) => setCriteria(cr => ({ ...cr, [key]: val }));
+  const toggleArr = (key, val) => setCriteria(cr => {
+    const arr = cr[key] || [];
+    return { ...cr, [key]: arr.includes(val) ? arr.filter(x => x !== val) : [...arr, val] };
+  });
+  const setNum = (key, raw) => {
+    const v = raw === '' ? undefined : Number(raw);
+    setC(key, v === undefined || Number.isNaN(v) ? undefined : v);
+  };
+
+  const today = todayStr();
+  const ctx = { allCustomers: customers, activityLogs, fanFollows: nexusFanFollows, today };
+  const results = useMemo(() => (customers || []).filter(c => nexusCustomerSearchPredicate(c, criteria, ctx)), [customers, criteria, activityLogs, nexusFanFollows]);
+
+  const AGE_BAND_OPTIONS = ['10代以下', '20代', '30代', '40代', '50代', '60代', '70代以上'];
+  const RANK_OPTIONS = ['S', 'A', 'B', 'C', 'D'];
+  const LAST_CONTACT_BAND_OPTIONS = ['接触履歴なし', '1か月以内', '1〜3か月', '3〜6か月', '6〜12か月', '1〜2年', '2年以上'];
+  const HOUSEHOLD_OPTIONS = Object.values(HOUSEHOLD_CATEGORIES);
+
+  const chip = (active, label, onClick, key) => React.createElement("button", {
+    key: key || label, type: "button", className: `chip ${active ? 'active' : ''}`, onClick
+  }, label);
+  const field = (label, children) => React.createElement("div", {
+    className: "form-group", style: { marginTop: 10 }
+  }, React.createElement("label", { className: "form-label" }, label), children);
+  const chipRow = children => React.createElement("div", { style: { display: 'flex', flexWrap: 'wrap', gap: 8 } }, children);
+  const numberField = (placeholder, key, width) => React.createElement("input", {
+    className: "form-input", type: "number", placeholder, style: { width: width || 90, display: 'inline-block' },
+    value: criteria[key] === undefined ? '' : criteria[key],
+    onChange: e => setNum(key, e.target.value)
+  });
+  const rangeRow = (labelMin, keyMin, labelMax, keyMax) => React.createElement("div", {
+    style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }
+  }, numberField(labelMin, keyMin), React.createElement("span", { style: { fontSize: 12, color: 'var(--text-sub)' } }, "〜"), numberField(labelMax, keyMax));
+  const triState = (key, labelTrue, labelFalse) => chipRow([
+    chip(criteria[key] === undefined || criteria[key] === null, '指定なし', () => setC(key, null), 'null'),
+    chip(criteria[key] === true, labelTrue, () => setC(key, true), 'true'),
+    chip(criteria[key] === false, labelFalse, () => setC(key, false), 'false')
+  ]);
+
+  // ── カテゴリー：基本情報 ──
+  const basicBody = React.createElement(React.Fragment, null,
+    field("年代（複数選択可）", chipRow(AGE_BAND_OPTIONS.map(b => chip((criteria.ageBands || []).includes(b), b, () => toggleArr('ageBands', b))))),
+    field("年齢を直接指定（任意）", rangeRow("最小", 'ageMin', "最大", 'ageMax')),
+    field("都道府県（複数選択可）", React.createElement("div", { style: { maxHeight: 140, overflowY: 'auto', display: 'flex', flexWrap: 'wrap', gap: 8 } }, NEXUS_PREFECTURES.map(p => chip((criteria.prefectures || []).includes(p), p, () => toggleArr('prefectures', p))))),
+    field("市区町村（部分一致・任意）", React.createElement("input", {
+      className: "form-input", placeholder: "例：福岡市", value: criteria.cityText || '',
+      onChange: e => setC('cityText', e.target.value)
+    })),
+    field("LINE登録", triState('lineRegistered', '登録済', '未登録')),
+    field("希望連絡方法（複数選択可）", chipRow(NEXUS_PREFERRED_CONTACT_METHODS.map(m => chip((criteria.preferredContactMethods || []).includes(m), m, () => toggleArr('preferredContactMethods', m)))))
+  );
+
+  // ── カテゴリー：家族 ──
+  const familyBody = React.createElement(React.Fragment, null,
+    field("家族構成（複数選択可）", chipRow(HOUSEHOLD_OPTIONS.map(h => chip((criteria.householdCodes || []).includes(h.code), h.label, () => toggleArr('householdCodes', h.code), h.code)))),
+    field("お子様", triState('hasChildren', 'あり', 'なし'))
+  );
+
+  // ── カテゴリー：契約 ──
+  const contractBody = React.createElement(React.Fragment, null,
+    field("契約状況（複数選択可）", chipRow(NEXUS_CONTRACT_STATUS_OPTIONS.map(s2 => chip((criteria.contractStatuses || []).includes(s2), s2, () => toggleArr('contractStatuses', s2))))),
+    field("契約経過年数（年・任意）", rangeRow("最小", 'elapsedYearsMin', "最大", 'elapsedYearsMax')),
+    field("有効契約数（件・0件検索も可能）", rangeRow("最小", 'activeContractCountMin', "最大", 'activeContractCountMax')),
+    field("契約保険会社（部分一致・任意）", React.createElement("input", {
+      className: "form-input", placeholder: "例：〇〇生命", value: criteria.companyText || '',
+      onChange: e => setC('companyText', e.target.value)
+    })),
+    field("保障種類（確認済み：ありのみ抽出・複数選択可）", chipRow(NEXUS_COVERAGE_TYPE_OPTIONS.map(o => chip((criteria.coverageTypes || []).includes(o.key), o.label, () => toggleArr('coverageTypes', o.key), o.key)))),
+    field("一時払い等", triState('lumpSum', 'あり', 'なし'))
+  );
+
+  // ── カテゴリー：関係性 ──
+  const relationshipBody = React.createElement(React.Fragment, null,
+    field("関係ステータス（複数選択可）", chipRow(NEXUS_RELATIONSHIP_STATUSES.map(s2 => chip((criteria.relationshipStatuses || []).includes(s2), s2, () => toggleArr('relationshipStatuses', s2))))),
+    field("顧客ランク（複数選択可）", chipRow(RANK_OPTIONS.map(r => chip((criteria.ranks || []).includes(r), r, () => toggleArr('ranks', r))))),
+    field("紹介実績", triState('hasReferrals', 'あり', 'なし')),
+    field("紹介件数（件以上・任意）", numberField("例：2", 'referralCountMin', 100))
+  );
+
+  // ── カテゴリー：情報提供 ──
+  const lastContactModeRow = field("最終接触の指定方法", chipRow([
+    ['band', '期間帯から選ぶ'], ['days', '○日以上未接触'], ['range', '日付範囲']
+  ].map(([key, label]) => chip(criteria.lastContactMode === key, label, () => setC('lastContactMode', criteria.lastContactMode === key ? undefined : key)))));
+  const lastContactDetail =
+    criteria.lastContactMode === 'band' ? field("最終接触の期間帯（複数選択可）", chipRow(LAST_CONTACT_BAND_OPTIONS.map(b => chip((criteria.lastContactBands || []).includes(b), b, () => toggleArr('lastContactBands', b))))) :
+    criteria.lastContactMode === 'days' ? field("○日以上未接触", numberField("例：180", 'lastContactDaysMin', 100)) :
+    criteria.lastContactMode === 'range' ? field("日付範囲", React.createElement("div", { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+      React.createElement("input", { className: "form-input", type: "date", style: { width: 150 }, value: criteria.lastContactFrom || '', onChange: e => setC('lastContactFrom', e.target.value || undefined) }),
+      React.createElement("span", { style: { fontSize: 12, color: 'var(--text-sub)' } }, "〜"),
+      React.createElement("input", { className: "form-input", type: "date", style: { width: 150 }, value: criteria.lastContactTo || '', onChange: e => setC('lastContactTo', e.target.value || undefined) })
+    )) : null;
+  const infoBody = React.createElement(React.Fragment, null,
+    lastContactModeRow, lastContactDetail,
+    field("接触回数（回以上・任意）", numberField("例：3", 'contactCountMin', 100)),
+    field("相談回数（回以上・任意）", numberField("例：1", 'inquiryCountMin', 100)),
+    field("商談回数（回以上・任意）", numberField("例：1", 'dealCountMin', 100)),
+    field("ファン化フォロー送信数（回以上・任意）", numberField("例：1", 'fanFollowSentMin', 100)),
+    field("ファン化フォロー既読数（回以上・任意）", numberField("例：1", 'fanFollowReadMin', 100)),
+    field("ファン化フォロー返信数（回以上・任意）", numberField("例：1", 'fanFollowRepliedMin', 100))
+  );
+
+  // ── カテゴリー：詳細条件 ──
+  const detailBody = React.createElement(React.Fragment, null,
+    field("興味・関心テーマ（いずれか一致・複数選択可）", chipRow(NEXUS_INTEREST_TAG_PRESETS.map(t => chip((criteria.interestTags || []).includes(t), t, () => toggleArr('interestTags', t))))),
+    field("連絡方針（複数選択可）", chipRow(NEXUS_CONTACT_POLICY_OPTIONS.map(p => chip((criteria.contactPolicies || []).includes(p), p, () => toggleArr('contactPolicies', p))))),
+    field("連絡メモ（部分一致・任意）", React.createElement("input", {
+      className: "form-input", placeholder: "例：LINE希望", value: criteria.contactMemoText || '',
+      onChange: e => setC('contactMemoText', e.target.value)
+    })),
+    field("接点・登録のきっかけ（複数選択可）", chipRow(NEXUS_ACQUISITION_SOURCES.map(a => chip((criteria.acquisitionSources || []).includes(a), a, () => toggleArr('acquisitionSources', a)))))
+  );
+
+  const categorySection = (key, title, body) => React.createElement("div", {
+    className: "card", style: { marginBottom: 10 }
+  },
+    React.createElement("button", {
+      type: "button",
+      onClick: () => toggleOpen(key),
+      style: { display: 'flex', width: '100%', justifyContent: 'space-between', alignItems: 'center', background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 14.5, fontWeight: 700, color: 'var(--text)' }
+    }, title, React.createElement("span", { style: { fontSize: 12, color: 'var(--text-sub)', fontWeight: 600 } }, open[key] ? '▲ 閉じる' : '▼ 開く')),
+    open[key] && body
+  );
+
+  // ── 保存検索 ──
+  const applySavedSearch = ss => { setCriteria(ss.criteria || {}); };
+  const deleteSavedSearch = id => {
+    if (window.confirm('この保存検索を削除しますか？')) setSavedSearches((savedSearches || []).filter(s => s.id !== id));
+  };
+  const saveCurrentSearch = () => {
+    const name = (saveNameInput || '').trim();
+    if (!name) return;
+    setSavedSearches([...(savedSearches || []), { id: uid(), name, criteria, createdAt: new Date().toISOString() }]);
+    setSaveNameInput('');
+  };
+  const savedSearchArea = React.createElement("div", { className: "card", style: { marginBottom: 12 } },
+    (savedSearches || []).length > 0 && React.createElement("div", { style: { display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 } },
+      savedSearches.map(ss => React.createElement("div", {
+        key: ss.id, style: { display: 'flex', alignItems: 'center', gap: 2 }
+      },
+        React.createElement("button", {
+          type: "button", className: "chip", onClick: () => applySavedSearch(ss)
+        }, ss.name),
+        React.createElement("button", {
+          type: "button", onClick: () => deleteSavedSearch(ss.id),
+          style: { background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-sub)', fontSize: 13, padding: '0 4px' }
+        }, "×")
+      ))
+    ),
+    React.createElement("div", { style: { display: 'flex', gap: 8 } },
+      React.createElement("input", {
+        className: "form-input", placeholder: "現在の条件に名前を付けて保存", value: saveNameInput,
+        onChange: e => setSaveNameInput(e.target.value),
+        onKeyDown: e => { if (e.key === 'Enter') { e.preventDefault(); saveCurrentSearch(); } }
+      }),
+      React.createElement("button", { type: "button", className: "btn btn-outline", onClick: saveCurrentSearch, disabled: !saveNameInput.trim() }, "保存")
+    )
+  );
+
+  const countArea = React.createElement("div", {
+    className: "card", style: { textAlign: 'center', marginBottom: 12 }
+  }, React.createElement("div", { style: { fontSize: 13, color: 'var(--text-sub)' } }, "該当"), React.createElement("div", {
+    style: { fontSize: 30, fontWeight: 800, color: 'var(--accent)' }
+  }, results.length, "人"));
+
+  const resultCard = c => {
+    const age = c.birthdate ? nexusAgeAtDate(c.birthdate, today) : calcStoredAge(c.age, c.ageYear);
+    const household = nexusHouseholdCategoryForAnalysis(c, customers);
+    const rollup = nexusContractCoverageRollup(c, today);
+    const lastBand = nexusLastContactBand(c.lastContact, today);
+    const rank = calcCustomerRank(c, customers);
+    return React.createElement("div", {
+      key: c.id, className: "card", style: { marginBottom: 8, cursor: 'pointer' },
+      onClick: () => onOpenCustomer(c)
+    },
+      React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 } },
+        React.createElement("div", { style: { fontSize: 15, fontWeight: 700 } }, nexusCustomerDisplayName(c)),
+        React.createElement("div", { style: { fontSize: 11, color: 'var(--accent)', fontWeight: 700 } }, rank ? `ランク${rank}` : '')
+      ),
+      React.createElement("div", { style: { fontSize: 12, color: 'var(--text-sub)', lineHeight: 1.8 } },
+        [age !== null ? `${nexusAgeBand(age) || age + '歳'}` : '年代不明', household.label, c.contractStatus || '未確認', c.relationshipStatus || '関係ステータス未設定', `最終接触:${lastBand}`, `契約経過${rollup.elapsedYearsSinceFirstContract === null ? '−' : rollup.elapsedYearsSinceFirstContract + '年'}`, `有効契約${rollup.activeContractCount}件`, c.lineRegistered ? 'LINE登録済' : 'LINE未登録'].join('　')
+      ),
+      (c.interestTags || []).length > 0 && React.createElement("div", { style: { display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 6 } },
+        c.interestTags.map(tag => React.createElement("span", { key: tag, className: "chip active", style: { fontSize: 10.5, padding: '3px 8px' } }, tag))
+      )
+    );
+  };
+
+  return React.createElement("div", { className: "full-screen" },
+    React.createElement("div", { className: "full-header" },
+      React.createElement("button", {
+        onClick: onClose,
+        style: { background: 'none', border: 'none', cursor: 'pointer', fontSize: 15, color: 'var(--text-sub)', fontWeight: 600, padding: '4px 8px' }
+      }, "← 戻る"),
+      React.createElement("div", { style: { flex: 1, fontSize: 16, fontWeight: 700 } }, "🔍 詳細検索")
+    ),
+    React.createElement("div", { style: { padding: 16 } },
+      savedSearchArea,
+      countArea,
+      categorySection('basic', '基本情報', basicBody),
+      categorySection('family', '家族', familyBody),
+      categorySection('contract', '契約', contractBody),
+      categorySection('relationship', '関係性', relationshipBody),
+      categorySection('info', '情報提供', infoBody),
+      categorySection('detail', '詳細条件', detailBody),
+      React.createElement("div", { className: "section-header" }, `検索結果（${results.length}人）`),
+      results.length === 0 ? React.createElement("div", { className: "card", style: { textAlign: 'center', color: 'var(--text-sub)', fontSize: 13 } }, "条件に一致する顧客がいません") : results.map(resultCard)
+    )
+  );
 }
 
 // ── Tab: Appointments ─────────────────────────────────────────
@@ -14453,7 +14833,10 @@ function nexusHasChildrenForAnalysis(customer) {
 }
 function nexusContractCoverageRollup(customer, todayStrVal) {
   const contracts = customer.contracts || [];
-  const activeContracts = contracts.filter(ct => ct.status !== '解約' && ct.status !== '失効');
+  // ★フィールド名修正：契約のステータスは ct.status ではなく ct.contractStatus（CONTRACT_STATUSES）。
+  // 以前は ct.status を参照していたため常にundefinedとなり、この絞り込みが実質無効化されていた
+  // （有効契約数が常に全契約数と一致してしまうバグ）。
+  const activeContracts = contracts.filter(ct => ct.contractStatus !== '解約' && ct.contractStatus !== '失効');
   const companies = [...new Set(contracts.map(ct => ct.company).filter(Boolean))];
   const coverageCategories = { death: false, medical: false, cancer: false, care: false, annuity: false, variable: false, foreignCurrency: false };
   let totalMonthlyPremiumJpy = 0, totalAnnualPremiumJpy = 0, hasLumpSumPayment = false;
@@ -14656,6 +15039,152 @@ function nexusScanForResidualPii(anonymizedRows, allCustomers) {
     if (name && name.trim().length >= 2 && text.includes(name)) issues.push({ pattern: '氏名', sample: name });
   });
   return { ok: issues.length === 0, issues };
+}
+
+// ── 顧客詳細検索：定数・純粋関数群 ──
+const NEXUS_CONTRACT_STATUS_OPTIONS = ['現在契約あり', '現在契約なし', '過去契約あり／現在なし', '未確認'];
+const NEXUS_RELATIONSHIP_STATUSES = ['新規登録', 'まだ接点が浅い', '情報提供中', '相談あり', '見込', '提案中', '既契約', '紹介者', 'セミナー参加者', '継続フォロー', '長期未接触', '現在フォロー不要', 'その他'];
+const NEXUS_INTEREST_TAG_PRESETS = ['相続', '認知症', '介護', '親なきあと', '教育費', '老後資金', '資産形成', 'NISA', 'iDeCo', '住宅', '住宅ローン', '医療費', '退職', '年金', '法人', '事業承継', '自社株', '保険金請求', '保障内容確認', '保険契約整理', 'その他'];
+const NEXUS_PREFERRED_CONTACT_METHODS = ['LINE', 'SMS', '電話', 'メール', '郵送', '対面', '特に希望なし', '未確認'];
+const NEXUS_CONTACT_POLICY_OPTIONS = ['通常フォロー可', '情報提供のみ', '必要時のみ', '営業連絡NG', 'しばらく連絡を控える', '本人ではなく家族経由', 'その他', '未確認'];
+const NEXUS_COVERAGE_TYPE_OPTIONS = [{ key: 'death', label: '死亡保障' }, { key: 'medical', label: '医療保障' }, { key: 'cancer', label: 'がん保障' }, { key: 'care', label: '介護保障' }, { key: 'annuity', label: '個人年金' }, { key: 'variable', label: '変額保険' }, { key: 'foreignCurrency', label: '外貨建保険' }];
+
+// 保障種類・一時払い等の「確認済み：あり／確認済み：なし／未確認」の三値判定。
+// 契約が1件も登録されていない顧客は必ず「未確認」とし、「なし」と混同しない
+// （空欄＝該当なしと判定しないという既存の絶対条件に合わせる）。
+function nexusCoverageConfirmedState(customer, key, rollup) {
+  const contracts = customer.contracts || [];
+  if (contracts.length === 0) return '未確認';
+  return rollup.coverageCategories[key] ? '確認済み：あり' : '確認済み：なし';
+}
+function nexusLumpSumConfirmedState(customer, rollup) {
+  const contracts = customer.contracts || [];
+  if (contracts.length === 0) return '未確認';
+  return rollup.hasLumpSumPayment ? '確認済み：あり' : '確認済み：なし';
+}
+
+// 顧客詳細検索のメイン判定関数（既存のAI分析用データ機能のnexusCustomerAnalysisFilterPredicateとは
+// 別の新規関数。criteriaの各フィールドが未指定＝そのままAND条件から除外される）。
+function nexusCustomerSearchPredicate(customer, criteria, ctx) {
+  const c = criteria || {};
+  const context = ctx || {};
+  const today = context.today || todayStr();
+  const allCustomers = context.allCustomers;
+  const activityLogs = context.activityLogs;
+  const fanFollows = context.fanFollows;
+
+  // ── 基本情報 ──
+  const age = customer.birthdate ? nexusAgeAtDate(customer.birthdate, today) : calcStoredAge(customer.age, customer.ageYear);
+  if (c.ageMin !== undefined && c.ageMin !== null && (age === null || age < c.ageMin)) return false;
+  if (c.ageMax !== undefined && c.ageMax !== null && (age === null || age > c.ageMax)) return false;
+  if (c.ageBands && c.ageBands.length > 0) {
+    const band = nexusAgeBand(age);
+    if (!band || !c.ageBands.includes(band)) return false;
+  }
+  if (c.prefectures && c.prefectures.length > 0) {
+    const pref = nexusExtractPrefecture(customer.address);
+    if (!pref || !c.prefectures.includes(pref)) return false;
+  }
+  if (c.cityText) {
+    const city = nexusExtractCity(customer.address) || '';
+    if (!city.includes(c.cityText)) return false;
+  }
+  if (c.lineRegistered === true && !customer.lineRegistered) return false;
+  if (c.lineRegistered === false && customer.lineRegistered) return false;
+  if (c.preferredContactMethods && c.preferredContactMethods.length > 0) {
+    const methods = customer.preferredContactMethods || [];
+    if (!c.preferredContactMethods.some(m => methods.includes(m))) return false;
+  }
+
+  // ── 家族 ──
+  if (c.householdCodes && c.householdCodes.length > 0) {
+    const household = nexusHouseholdCategoryForAnalysis(customer, allCustomers);
+    if (!c.householdCodes.includes(household.code)) return false;
+  }
+  if (c.hasChildren === true && !nexusHasChildrenForAnalysis(customer)) return false;
+  if (c.hasChildren === false && nexusHasChildrenForAnalysis(customer)) return false;
+
+  // ── 契約 ──
+  if (c.contractStatuses && c.contractStatuses.length > 0) {
+    const cs = customer.contractStatus || '未確認';
+    if (!c.contractStatuses.includes(cs)) return false;
+  }
+  const rollup = nexusContractCoverageRollup(customer, today);
+  if (c.elapsedYearsMin !== undefined && c.elapsedYearsMin !== null) {
+    if (rollup.elapsedYearsSinceFirstContract === null || rollup.elapsedYearsSinceFirstContract < c.elapsedYearsMin) return false;
+  }
+  if (c.elapsedYearsMax !== undefined && c.elapsedYearsMax !== null) {
+    if (rollup.elapsedYearsSinceFirstContract === null || rollup.elapsedYearsSinceFirstContract > c.elapsedYearsMax) return false;
+  }
+  if (c.activeContractCountMin !== undefined && c.activeContractCountMin !== null) {
+    if (rollup.activeContractCount < c.activeContractCountMin) return false;
+  }
+  if (c.activeContractCountMax !== undefined && c.activeContractCountMax !== null) {
+    if (rollup.activeContractCount > c.activeContractCountMax) return false;
+  }
+  if (c.companyText) {
+    if (!rollup.companies.some(co => co.includes(c.companyText))) return false;
+  }
+  if (c.coverageTypes && c.coverageTypes.length > 0) {
+    if (!c.coverageTypes.every(key => rollup.coverageCategories[key])) return false;
+  }
+  if (c.lumpSum === true && !rollup.hasLumpSumPayment) return false;
+  if (c.lumpSum === false && rollup.hasLumpSumPayment) return false;
+
+  // ── 関係性 ──
+  if (c.relationshipStatuses && c.relationshipStatuses.length > 0) {
+    if (!c.relationshipStatuses.includes(customer.relationshipStatus || '')) return false;
+  }
+  if (c.ranks && c.ranks.length > 0) {
+    if (!c.ranks.includes(calcCustomerRank(customer, allCustomers))) return false;
+  }
+  if (c.hasReferrals === true && !nexusReferralHasAny(customer, allCustomers)) return false;
+  if (c.hasReferrals === false && nexusReferralHasAny(customer, allCustomers)) return false;
+  if (c.referralCountMin !== undefined && c.referralCountMin !== null) {
+    if (nexusReferralCount(customer, allCustomers) < c.referralCountMin) return false;
+  }
+
+  // ── 情報提供 ──
+  if (c.lastContactMode === 'band' && c.lastContactBands && c.lastContactBands.length > 0) {
+    const band = nexusLastContactBand(customer.lastContact, today);
+    if (!c.lastContactBands.includes(band)) return false;
+  }
+  if (c.lastContactMode === 'days' && c.lastContactDaysMin !== undefined && c.lastContactDaysMin !== null) {
+    if (customer.lastContact) {
+      const days = Math.floor((new Date(today) - new Date(customer.lastContact)) / (1000 * 60 * 60 * 24));
+      if (days < c.lastContactDaysMin) return false;
+    }
+    // 接触履歴なしは「○日以上未接触」に常に該当する
+  }
+  if (c.lastContactMode === 'range') {
+    if (c.lastContactFrom && (!customer.lastContact || customer.lastContact < c.lastContactFrom)) return false;
+    if (c.lastContactTo && (!customer.lastContact || customer.lastContact > c.lastContactTo)) return false;
+  }
+  const activity = nexusActivityCountsForAnalysis(customer.id, activityLogs);
+  if (c.contactCountMin !== undefined && c.contactCountMin !== null && activity.contactCount < c.contactCountMin) return false;
+  if (c.inquiryCountMin !== undefined && c.inquiryCountMin !== null && activity.inquiryCount < c.inquiryCountMin) return false;
+  if (c.dealCountMin !== undefined && c.dealCountMin !== null && activity.dealCount < c.dealCountMin) return false;
+  const fanFollow = nexusFanFollowSummaryForCustomer(customer.id, fanFollows);
+  if (c.fanFollowSentMin !== undefined && c.fanFollowSentMin !== null && fanFollow.sentCount < c.fanFollowSentMin) return false;
+  if (c.fanFollowReadMin !== undefined && c.fanFollowReadMin !== null && fanFollow.readCount < c.fanFollowReadMin) return false;
+  if (c.fanFollowRepliedMin !== undefined && c.fanFollowRepliedMin !== null && fanFollow.repliedCount < c.fanFollowRepliedMin) return false;
+
+  // ── 詳細条件 ──
+  if (c.interestTags && c.interestTags.length > 0) {
+    const tags = customer.interestTags || [];
+    if (!c.interestTags.some(t => tags.includes(t))) return false;
+  }
+  if (c.contactPolicies && c.contactPolicies.length > 0) {
+    if (!c.contactPolicies.includes(customer.contactPolicy || '未確認')) return false;
+  }
+  if (c.contactMemoText) {
+    if (!(customer.contactMemo || '').includes(c.contactMemoText)) return false;
+  }
+  if (c.acquisitionSources && c.acquisitionSources.length > 0) {
+    if (!c.acquisitionSources.includes(customer.acquisitionSource || '')) return false;
+  }
+
+  return true;
 }
 
 // AI分析用データ本体を組み立てる（この時点で実名・電話・メール・住所・証券番号等は一切含まれない）
@@ -16703,6 +17232,7 @@ function importJSON(file, handlers) {
         if (data.nexusServices && handlers.setNexusServices) handlers.setNexusServices(data.nexusServices);
         if (data.nexusServiceLinks && handlers.setNexusServiceLinks) handlers.setNexusServiceLinks(data.nexusServiceLinks);
         if (data.nexusMission && handlers.setNexusMission) handlers.setNexusMission(data.nexusMission);
+        if (data.nexusSavedSearches && handlers.setNexusSavedSearches) handlers.setNexusSavedSearches(data.nexusSavedSearches);
         alert('✅ 全データを復元しました');
         return;
       }
@@ -18967,7 +19497,8 @@ function exportJSON(state) {
     sales: state.sales,
     nexusServices: state.nexusServices,
     nexusServiceLinks: state.nexusServiceLinks,
-    nexusMission: state.nexusMission
+    nexusMission: state.nexusMission,
+    nexusSavedSearches: state.nexusSavedSearches
   }, null, 2);
   const blob = new Blob([data], {
     type: 'application/json'
@@ -33113,9 +33644,11 @@ function App() {
     how: '',
     dailyAction: ''
   });
+  const [nexusSavedSearches, setNexusSavedSearches] = useLS('nexus_saved_searches_v1', []);
   const [tab, setTab] = useState('dashboard');
   const [corpPlanningTargetId, setCorpPlanningTargetId] = useState('');
   const [showAiExport, setShowAiExport] = useState(false);
+  const [showCustomerSearch, setShowCustomerSearch] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [editingCustomer, setEditingCustomer] = useState(null);
   const [showCustomerForm, setShowCustomerForm] = useState(false);
@@ -33302,7 +33835,8 @@ function App() {
           setKpiSettings,
           setNexusServices,
           setNexusServiceLinks,
-          setNexusMission
+          setNexusMission,
+          setNexusSavedSearches
         });
         e.target.value = '';
       }
@@ -33324,7 +33858,8 @@ function App() {
       sales,
       nexusServices,
       nexusServiceLinks,
-      nexusMission
+      nexusMission,
+      nexusSavedSearches
     }),
     style: {
       fontSize: 11,
@@ -33366,12 +33901,24 @@ function App() {
     setCustomers: setCustomers,
     onSelect: setSelectedCustomer,
     onAdd: openNewCustomer,
-    onOpenAiExport: () => setShowAiExport(true)
+    onOpenAiExport: () => setShowAiExport(true),
+    onOpenSearch: () => setShowCustomerSearch(true)
   }), showAiExport && /*#__PURE__*/React.createElement(NexusCustomerAiExportScreen, {
     customers: customers,
     activityLogs: activityLogs,
     nexusFanFollows: nexusFanFollows,
     onClose: () => setShowAiExport(false)
+  }), showCustomerSearch && /*#__PURE__*/React.createElement(NexusCustomerSearchScreen, {
+    customers: customers,
+    activityLogs: activityLogs,
+    nexusFanFollows: nexusFanFollows,
+    savedSearches: nexusSavedSearches,
+    setSavedSearches: setNexusSavedSearches,
+    onClose: () => setShowCustomerSearch(false),
+    onOpenCustomer: c => {
+      setShowCustomerSearch(false);
+      setSelectedCustomer(c);
+    }
   }), tab === 'memo' && /*#__PURE__*/React.createElement(NegotiationTab, {
     memos: memos,
     setMemos: setMemos,
