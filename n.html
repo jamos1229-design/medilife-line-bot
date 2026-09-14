@@ -10365,26 +10365,44 @@ function nexusCustomerAnalysisCsvRows(rows) {
   const rowsOut = rows.map(r => [r.analysisId, r.ageBand || '', r.prefecture || '', r.city || '', r.occupationCategory || '', r.householdLabel || '', r.hasChildren ? 'あり' : 'なし', r.rank || '', r.existingOrNew || '', r.lineRegistered ? '登録済' : '未登録', r.lastContactBand || '', r.contactCount, r.dealCount, r.inquiryCount, r.referralHasAny ? 'あり' : 'なし', r.referralCount, r.activeContractCount, r.totalContractCount, (r.companies || []).join('・'), r.coverageCategories.death ? '○' : '', r.coverageCategories.medical ? '○' : '', r.coverageCategories.cancer ? '○' : '', r.coverageCategories.care ? '○' : '', r.coverageCategories.annuity ? '○' : '', r.coverageCategories.variable ? '○' : '', r.coverageCategories.foreignCurrency ? '○' : '', r.totalMonthlyPremiumJpy, r.totalAnnualPremiumJpy, r.hasLumpSumPayment ? 'あり' : 'なし', r.earliestContractYearMonth || '', r.elapsedYearsSinceFirstContract === null || r.elapsedYearsSinceFirstContract === undefined ? '' : r.elapsedYearsSinceFirstContract, r.fanFollowSentCount, r.fanFollowReadCount, r.fanFollowRepliedCount]);
   return [header, ...rowsOut];
 }
-function nexusDownloadCustomerAnalysisCsv(rows) {
+function nexusCustomerAnalysisCsvText(rows) {
   const csvRows = nexusCustomerAnalysisCsvRows(rows);
   const esc = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
-  const csv = csvRows.map(r => r.map(esc).join(',')).join('\n');
-  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
+  return '﻿' + csvRows.map(r => r.map(esc).join(',')).join('\n');
+}
+// iOSのSafari（特にホーム画面に追加したPWA/スタンドアロン表示）では、Blob＋<a download>クリックが
+// 何も起きずに終わることがある（既知の制限）。Web Share API（ファイル共有）に対応していれば
+// そちらを優先し、共有シート経由で「ファイルに保存」できるようにする。非対応環境では、
+// 従来通りBlob＋<a>のダウンロード方式にフォールバックする（DOM追加してからクリックする、
+// より確実な書き方に統一）。戻り値は共有シートを開けたかどうか（呼び出し側のトースト表示用）。
+function nexusShareOrDownloadFile(filename, content, mime) {
+  const blob = new Blob([content], { type: mime });
+  if (typeof navigator.share === 'function' && typeof navigator.canShare === 'function') {
+    try {
+      const file = new File([blob], filename, { type: mime });
+      if (navigator.canShare({ files: [file] })) {
+        navigator.share({ files: [file] }).catch(() => {});
+        return true;
+      }
+    } catch (e) {
+      // File／ファイル共有が使えない環境は下のダウンロード処理へフォールバック
+    }
+  }
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `NEXUS_AI_ANALYSIS_${todayStr()}.csv`;
+  a.download = filename;
+  document.body.appendChild(a);
   a.click();
+  document.body.removeChild(a);
   URL.revokeObjectURL(url);
+  return false;
+}
+function nexusDownloadCustomerAnalysisCsv(rows) {
+  return nexusShareOrDownloadFile(`NEXUS_AI_ANALYSIS_${todayStr()}.csv`, nexusCustomerAnalysisCsvText(rows), 'text/csv;charset=utf-8');
 }
 function nexusDownloadCustomerAnalysisJson(rows) {
-  const blob = new Blob([JSON.stringify(rows, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `NEXUS_AI_ANALYSIS_${todayStr()}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
+  return nexusShareOrDownloadFile(`NEXUS_AI_ANALYSIS_${todayStr()}.json`, JSON.stringify(rows, null, 2), 'application/json');
 }
 // ユーザーが指定した、顧客戦略分析用の固定プロンプト文言（既存のgenerateAIAnalysisPromptとは
 // 完全に別物。既存の営業KPI用AI分析機能には一切触れない）。
@@ -10522,12 +10540,26 @@ function NexusCustomerAiExportScreen({ customers, activityLogs, nexusFanFollows,
     type: "button",
     className: "btn btn-primary btn-full",
     disabled: !scanResult || !scanResult.ok,
-    onClick: () => nexusDownloadCustomerAnalysisCsv(rows)
+    onClick: () => {
+      try {
+        const shared = nexusDownloadCustomerAnalysisCsv(rows);
+        showToast(shared ? '共有シートを開きました' : 'ダウンロードを開始しました');
+      } catch (e) {
+        showToast('ダウンロードに失敗しました：' + (e && e.message || e));
+      }
+    }
   }, "⬇️ CSVをダウンロード"), React.createElement("button", {
     type: "button",
     className: "btn btn-outline btn-full",
     disabled: !scanResult || !scanResult.ok,
-    onClick: () => nexusDownloadCustomerAnalysisJson(rows)
+    onClick: () => {
+      try {
+        const shared = nexusDownloadCustomerAnalysisJson(rows);
+        showToast(shared ? '共有シートを開きました' : 'ダウンロードを開始しました');
+      } catch (e) {
+        showToast('ダウンロードに失敗しました：' + (e && e.message || e));
+      }
+    }
   }, "⬇️ JSONをダウンロード"), React.createElement("button", {
     type: "button",
     className: "btn btn-outline btn-full",
