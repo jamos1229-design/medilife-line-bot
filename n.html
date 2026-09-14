@@ -10371,21 +10371,33 @@ function nexusCustomerAnalysisCsvText(rows) {
   return '﻿' + csvRows.map(r => r.map(esc).join(',')).join('\n');
 }
 // iOSのSafari（特にホーム画面に追加したPWA/スタンドアロン表示）では、Blob＋<a download>クリックが
-// 何も起きずに終わることがある（既知の制限）。Web Share API（ファイル共有）に対応していれば
-// そちらを優先し、共有シート経由で「ファイルに保存」できるようにする。非対応環境では、
-// 従来通りBlob＋<a>のダウンロード方式にフォールバックする（DOM追加してからクリックする、
-// より確実な書き方に統一）。戻り値は共有シートを開けたかどうか（呼び出し側のトースト表示用）。
+// 何も起きずに終わることがある（既知の制限。data:URIを新しいタブで開く方式もブラウザによっては
+// ブロックされることが確認できたため使わない）。Web Share API（ファイル共有）に対応していれば
+// それを使い、ファイル共有に対応していなくてもWeb Share API自体には対応していれば、テキストとして
+// 共有する（ファイル共有よりも広くサポートされており、スタンドアロン表示でも共有シートは開ける）。
+// どちらも使えない環境だけ、従来通りBlob＋<a>のダウンロード方式にフォールバックする。
+// 戻り値は実際に何が起きたか（'shared-file'|'shared-text'|'downloaded'、呼び出し側のトースト表示用）。
+// ダウンロードがどうしても反応しない端末向けに、呼び出し元の画面には別途
+// 「コピー」ボタン（既存のAI分析用プロンプトコピーと同じ、動作実績のある仕組み）も用意してある。
 function nexusShareOrDownloadFile(filename, content, mime) {
   const blob = new Blob([content], { type: mime });
-  if (typeof navigator.share === 'function' && typeof navigator.canShare === 'function') {
-    try {
-      const file = new File([blob], filename, { type: mime });
-      if (navigator.canShare({ files: [file] })) {
-        navigator.share({ files: [file] }).catch(() => {});
-        return true;
+  if (typeof navigator.share === 'function') {
+    if (typeof navigator.canShare === 'function') {
+      try {
+        const file = new File([blob], filename, { type: mime });
+        if (navigator.canShare({ files: [file] })) {
+          navigator.share({ files: [file] }).catch(() => {});
+          return 'shared-file';
+        }
+      } catch (e) {
+        // File／ファイル共有が使えない環境は下のテキスト共有へ
       }
+    }
+    try {
+      navigator.share({ title: filename, text: content }).catch(() => {});
+      return 'shared-text';
     } catch (e) {
-      // File／ファイル共有が使えない環境は下のダウンロード処理へフォールバック
+      // Web Share API自体が使えない環境は下のダウンロード処理へフォールバック
     }
   }
   const url = URL.createObjectURL(blob);
@@ -10396,7 +10408,7 @@ function nexusShareOrDownloadFile(filename, content, mime) {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
-  return false;
+  return 'downloaded';
 }
 function nexusDownloadCustomerAnalysisCsv(rows) {
   return nexusShareOrDownloadFile(`NEXUS_AI_ANALYSIS_${todayStr()}.csv`, nexusCustomerAnalysisCsvText(rows), 'text/csv;charset=utf-8');
@@ -10536,14 +10548,34 @@ function NexusCustomerAiExportScreen({ customers, activityLogs, nexusFanFollows,
     style: { fontSize: 12.5, color: 'var(--text-sub)', marginBottom: 10 }
   }, filteredCustomers.length, "名を匿名化しました。内容を確認してください。"), rows.map(previewCard), React.createElement("div", {
     style: { display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }
-  }, React.createElement("button", {
+  },
+  // 「コピー」は既存のAI分析用プロンプトコピーと全く同じ仕組み（動作実績あり）を使うため、
+  // 端末・ブラウザを問わず最も確実に使える方法として先頭に置く。ダウンロードは端末によっては
+  // 反応しないことがあるため（iOSのSafari等）、コピーできなかった場合の代替手段として残す。
+  React.createElement("button", {
     type: "button",
     className: "btn btn-primary btn-full",
     disabled: !scanResult || !scanResult.ok,
+    onClick: () => copyText(nexusCustomerAnalysisCsvText(rows))
+  }, "📋 CSVをコピー（推奨）"), React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    disabled: !scanResult || !scanResult.ok,
+    onClick: () => copyText(JSON.stringify(rows, null, 2))
+  }, "📋 JSONをコピー"), React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    onClick: () => copyText(nexusCustomerAnalysisPromptTemplate())
+  }, "📋 AI分析用プロンプトをコピー"), React.createElement("div", {
+    style: { fontSize: 11.5, color: 'var(--text-sub)', textAlign: 'center', marginTop: 2 }
+  }, "コピーがうまくいかない場合は、下のダウンロードもお試しください"), React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    disabled: !scanResult || !scanResult.ok,
     onClick: () => {
       try {
-        const shared = nexusDownloadCustomerAnalysisCsv(rows);
-        showToast(shared ? '共有シートを開きました' : 'ダウンロードを開始しました');
+        const result = nexusDownloadCustomerAnalysisCsv(rows);
+        showToast(result === 'shared-file' || result === 'shared-text' ? '共有シートを開きました' : 'ダウンロードを開始しました');
       } catch (e) {
         showToast('ダウンロードに失敗しました：' + (e && e.message || e));
       }
@@ -10554,17 +10586,13 @@ function NexusCustomerAiExportScreen({ customers, activityLogs, nexusFanFollows,
     disabled: !scanResult || !scanResult.ok,
     onClick: () => {
       try {
-        const shared = nexusDownloadCustomerAnalysisJson(rows);
-        showToast(shared ? '共有シートを開きました' : 'ダウンロードを開始しました');
+        const result = nexusDownloadCustomerAnalysisJson(rows);
+        showToast(result === 'shared-file' || result === 'shared-text' ? '共有シートを開きました' : 'ダウンロードを開始しました');
       } catch (e) {
         showToast('ダウンロードに失敗しました：' + (e && e.message || e));
       }
     }
   }, "⬇️ JSONをダウンロード"), React.createElement("button", {
-    type: "button",
-    className: "btn btn-outline btn-full",
-    onClick: () => copyText(nexusCustomerAnalysisPromptTemplate())
-  }, "📋 AI分析用プロンプトをコピー"), React.createElement("button", {
     type: "button",
     className: "btn btn-outline btn-full",
     onClick: () => setPhase('select')
