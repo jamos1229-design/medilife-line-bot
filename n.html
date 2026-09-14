@@ -10007,7 +10007,8 @@ function CustomerListTab({
   customers,
   setCustomers,
   onSelect,
-  onAdd
+  onAdd,
+  onOpenAiExport
 }) {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('すべて');
@@ -10098,7 +10099,14 @@ function CustomerListTab({
     key: f,
     className: `chip ${lineFilter === f ? 'active' : ''}`,
     onClick: () => setLineFilter(f)
-  }, f))), /*#__PURE__*/React.createElement("div", {
+  }, f))), onOpenAiExport && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: {
+      marginBottom: 8
+    },
+    onClick: onOpenAiExport
+  }, "🤖 AI分析用データ"), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
@@ -10349,6 +10357,199 @@ function CustomerListTab({
       setMergeSelection([]);
     }
   }));
+}
+
+// ── 顧客一覧のAI戦略分析用データ出力：CSV変換・ダウンロードヘルパー ──
+function nexusCustomerAnalysisCsvRows(rows) {
+  const header = ['AI分析用ID', '年代', '都道府県', '市区町村', '職業カテゴリ', '家族構成', '子どもの有無', '顧客ランク', '既契約/見込', 'LINE登録', '最終接触', '接触回数', '商談回数', '相談回数', '紹介実績', '紹介件数', '有効契約数', '契約数(解約含む)', '契約保険会社', '死亡保障', '医療保障', 'がん保障', '介護保障', '個人年金', '変額保険', '外貨建保険', '月額保険料(円)', '年払保険料(円)', '一時払等あり', '最古契約年月', '契約経過年数', 'ファン化フォロー送信数', '既読数', '返信数'];
+  const rowsOut = rows.map(r => [r.analysisId, r.ageBand || '', r.prefecture || '', r.city || '', r.occupationCategory || '', r.householdLabel || '', r.hasChildren ? 'あり' : 'なし', r.rank || '', r.existingOrNew || '', r.lineRegistered ? '登録済' : '未登録', r.lastContactBand || '', r.contactCount, r.dealCount, r.inquiryCount, r.referralHasAny ? 'あり' : 'なし', r.referralCount, r.activeContractCount, r.totalContractCount, (r.companies || []).join('・'), r.coverageCategories.death ? '○' : '', r.coverageCategories.medical ? '○' : '', r.coverageCategories.cancer ? '○' : '', r.coverageCategories.care ? '○' : '', r.coverageCategories.annuity ? '○' : '', r.coverageCategories.variable ? '○' : '', r.coverageCategories.foreignCurrency ? '○' : '', r.totalMonthlyPremiumJpy, r.totalAnnualPremiumJpy, r.hasLumpSumPayment ? 'あり' : 'なし', r.earliestContractYearMonth || '', r.elapsedYearsSinceFirstContract === null || r.elapsedYearsSinceFirstContract === undefined ? '' : r.elapsedYearsSinceFirstContract, r.fanFollowSentCount, r.fanFollowReadCount, r.fanFollowRepliedCount]);
+  return [header, ...rowsOut];
+}
+function nexusDownloadCustomerAnalysisCsv(rows) {
+  const csvRows = nexusCustomerAnalysisCsvRows(rows);
+  const esc = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
+  const csv = csvRows.map(r => r.map(esc).join(',')).join('\n');
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `NEXUS_AI_ANALYSIS_${todayStr()}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+function nexusDownloadCustomerAnalysisJson(rows) {
+  const blob = new Blob([JSON.stringify(rows, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `NEXUS_AI_ANALYSIS_${todayStr()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+// ユーザーが指定した、顧客戦略分析用の固定プロンプト文言（既存のgenerateAIAnalysisPromptとは
+// 完全に別物。既存の営業KPI用AI分析機能には一切触れない）。
+function nexusCustomerAnalysisPromptTemplate() {
+  return ['以下は、FP・保険代理店の顧客管理システムから', '個人情報を匿名化した顧客データです。', '', '個人を特定することを目的に分析しないでください。', '', '目的は、既契約者に無理な営業をすることではありません。', '', 'お客様との関係を深め、', '必要な情報を必要な方へ届け、', '相談しやすい環境を作ることが目的です。', '', '', 'このデータから、', '', '①顧客全体の特徴', '', '②年代別の特徴', '', '③家族構成別の特徴', '', '④契約内容の傾向', '', '⑤長期間フォローできていない層', '', '⑥情報提供をすると喜ばれそうな層', '', '⑦note記事を届けるとよさそうな層', '', '⑧LINEフォローが適している層', '', '⑨相続・介護セミナーが役立ちそうな層', '', '⑩保障内容の確認が必要そうな層', '', '⑪紹介が自然に発生しやすそうな顧客層の特徴', '', '⑫今は営業・連絡を控えた方がよい層', '', 'を分析してください。', '', '', 'さらに、', '', '・何人いるか', '・どういう特徴か', '・なぜその分類になるか', '・どんな情報提供が適しているか', '・どんなnote記事を作ればよいか', '・どんなセミナーを企画すればよいか', '', 'まで提案してください。', '', '', 'ただし、', '', '「保険を売ること」', '', 'だけを目的にしないでください。', '', '顧客に役立つことを優先してください。', '', '不明な情報は推測せず、', '', '「データからは判断できない」', '', 'としてください。', '', '---', '', '【データ】', '（この下に、Nexusから出力したCSVまたはJSONデータを貼り付けてください）'].join('\n');
+}
+
+// ── 顧客一覧のAI戦略分析用データ出力：最上位の全画面 ──
+// phase='select'（対象を選ぶ）→phase='preview'（匿名化・PIIスキャン・出力）の2段階。
+// 既存のNexusContractImportScreen等と同じ「phase文字列stateを条件分岐で出し分ける」規約に合わせる。
+function NexusCustomerAiExportScreen({ customers, activityLogs, nexusFanFollows, onClose }) {
+  const [phase, setPhase] = useState('select');
+  const [segment, setSegment] = useState('all');
+  const [ageBands, setAgeBands] = useState([]);
+  const [lineRegistered, setLineRegistered] = useState(null);
+  const [lastContactMonthsAtLeast, setLastContactMonthsAtLeast] = useState(null);
+  const [hasReferrals, setHasReferrals] = useState(false);
+  const [medicalHolder, setMedicalHolder] = useState(false);
+  const [deathHolder, setDeathHolder] = useState(false);
+  const [inheritanceHolder, setInheritanceHolder] = useState(false);
+  const [ranks, setRanks] = useState([]);
+  const [includeCity, setIncludeCity] = useState(false);
+  const [rows, setRows] = useState([]);
+  const [scanResult, setScanResult] = useState(null);
+  const [toast, setToast] = useState('');
+  const showToast = msg => {
+    setToast(msg);
+    setTimeout(() => setToast(''), 3000);
+  };
+  const today = todayStr();
+  const ctx = { allCustomers: customers, activityLogs, fanFollows: nexusFanFollows, today };
+  const filters = {
+    existingOnly: segment === 'existing',
+    prospectOnly: segment === 'prospect',
+    ageBands,
+    lineRegistered,
+    lastContactMonthsAtLeast,
+    hasReferrals,
+    medicalHolder,
+    deathHolder,
+    inheritanceHolder,
+    ranks
+  };
+  const filteredCustomers = (customers || []).filter(c => nexusCustomerAnalysisFilterPredicate(c, filters, ctx));
+  const toggleInArray = (arr, setArr, value) => setArr(arr.includes(value) ? arr.filter(x => x !== value) : [...arr, value]);
+  const AGE_BAND_OPTIONS = ['10代以下', '20代', '30代', '40代', '50代', '60代', '70代以上'];
+  const RANK_OPTIONS = ['S', 'A', 'B', 'C', 'D'];
+  const chip = (active, label, onClick) => React.createElement("button", {
+    key: label,
+    type: "button",
+    className: `chip ${active ? 'active' : ''}`,
+    onClick
+  }, label);
+  const filterGroup = (title, children) => React.createElement("div", {
+    className: "form-group"
+  }, React.createElement("label", { className: "form-label" }, title), React.createElement("div", {
+    style: { display: 'flex', flexWrap: 'wrap', gap: 8 }
+  }, children));
+  const segmentRow = filterGroup("対象", [['all', '全顧客'], ['existing', '既契約者のみ'], ['prospect', '見込客のみ']].map(([key, label]) => chip(segment === key, label, () => setSegment(key))));
+  const ageBandRow = filterGroup("年代（複数選択可）", AGE_BAND_OPTIONS.map(band => chip(ageBands.includes(band), band, () => toggleInArray(ageBands, setAgeBands, band))));
+  const lineRow = filterGroup("LINE登録", [[null, '指定なし'], [true, 'LINE登録者'], [false, 'LINE未登録']].map(([val, label]) => chip(lineRegistered === val, label, () => setLineRegistered(val))));
+  const lastContactRow = filterGroup("最終接触", [[null, '指定なし'], [6, '6か月以上'], [12, '1年以上']].map(([val, label]) => chip(lastContactMonthsAtLeast === val, label, () => setLastContactMonthsAtLeast(val))));
+  const flagsRow = filterGroup("その他の条件", [chip(hasReferrals, '紹介実績あり', () => setHasReferrals(v => !v)), chip(medicalHolder, '医療保険加入者', () => setMedicalHolder(v => !v)), chip(deathHolder, '死亡保険加入者', () => setDeathHolder(v => !v)), chip(inheritanceHolder, '相続対策の契約を保有', () => setInheritanceHolder(v => !v))]);
+  const rankRow = filterGroup("顧客ランク（複数選択可）", RANK_OPTIONS.map(r => chip(ranks.includes(r), r, () => toggleInArray(ranks, setRanks, r))));
+  const cityToggleRow = React.createElement("div", {
+    className: "form-group"
+  }, React.createElement("label", { className: "form-label" }, "住所の粒度"), React.createElement("div", {
+    style: { display: 'flex', flexWrap: 'wrap', gap: 8 }
+  }, chip(!includeCity, '都道府県まで', () => setIncludeCity(false)), chip(includeCity, '市区町村まで含める', () => setIncludeCity(true))), React.createElement("div", {
+    style: { fontSize: 11.5, color: 'var(--text-sub)', marginTop: 4 }
+  }, "番地・建物名はどちらを選んでも絶対に出力されません。"));
+  const runAnonymize = () => {
+    const anonRows = filteredCustomers.map((c, i) => nexusAnonymizeCustomerForAnalysis(c, i, { includeCity }, ctx));
+    const scan = nexusScanForResidualPii(anonRows, customers);
+    setRows(anonRows);
+    setScanResult(scan);
+    setPhase('preview');
+  };
+  const selectScreen = phase === 'select' && React.createElement("div", {
+    style: { padding: 16 }
+  }, React.createElement("div", {
+    className: "card",
+    style: { marginBottom: 12, fontSize: 12.5, color: 'var(--text-sub)', lineHeight: 1.6 }
+  }, "氏名・電話番号・メールアドレス・詳細住所・証券番号など、個人を特定できる情報は一切出力されません。自由記述（メモ）も出力しません。外部のAI（ChatGPT・Claude・Gemini等）へ自動送信することもありません。"), segmentRow, ageBandRow, lineRow, lastContactRow, flagsRow, rankRow, cityToggleRow, React.createElement("div", {
+    className: "card",
+    style: { marginTop: 12, textAlign: 'center' }
+  }, React.createElement("div", {
+    style: { fontSize: 13, color: 'var(--text-sub)' }
+  }, "対象"), React.createElement("div", {
+    style: { fontSize: 28, fontWeight: 800, color: 'var(--accent)' }
+  }, filteredCustomers.length, "名")), React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-full",
+    style: { marginTop: 12 },
+    disabled: filteredCustomers.length === 0,
+    onClick: runAnonymize
+  }, "匿名化してプレビュー"));
+  const copyText = text => {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(() => showToast('コピーしました'));
+    } else {
+      const el = document.createElement('textarea');
+      el.value = text;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand('copy');
+      document.body.removeChild(el);
+      showToast('コピーしました');
+    }
+  };
+  const scanBox = scanResult && (scanResult.ok ? React.createElement("div", {
+    className: "card",
+    style: { marginBottom: 10, background: '#E8F5E9', color: '#2E7D32', fontWeight: 700, fontSize: 13 }
+  }, "✅ 個人情報の混入は検出されませんでした") : React.createElement("div", {
+    className: "card",
+    style: { marginBottom: 10, background: '#FEF2F2', border: '1.5px solid var(--danger)' }
+  }, React.createElement("div", {
+    style: { color: 'var(--danger)', fontWeight: 700, fontSize: 13, marginBottom: 6 }
+  }, "⚠️ 個人情報らしき情報が残っています。出力できません。"), scanResult.issues.map((issue, i) => React.createElement("div", {
+    key: i,
+    style: { fontSize: 12, color: 'var(--danger)' }
+  }, "・", issue.pattern, "：", issue.sample))));
+  const previewCard = c => React.createElement("div", {
+    key: c.analysisId,
+    className: "card",
+    style: { marginBottom: 8, fontSize: 12.5, lineHeight: 1.8 }
+  }, React.createElement("div", { style: { fontWeight: 700, marginBottom: 4 } }, "AI ID：", c.analysisId), React.createElement("div", null, "年代：", c.ageBand || '—'), React.createElement("div", null, "地域：", c.prefecture || '—', c.city ? c.city : ''), React.createElement("div", null, "職業：", c.occupationCategory || '—'), React.createElement("div", null, "家族：", c.householdLabel || '—'), React.createElement("div", null, "LINE：", c.lineRegistered ? '登録済' : '未登録'), React.createElement("div", null, "契約件数：", c.activeContractCount), React.createElement("div", null, "最終接触：", c.lastContactBand), React.createElement("div", null, "紹介実績：", c.referralHasAny ? `${c.referralCount}件` : 'なし'));
+  const previewScreen = phase === 'preview' && React.createElement("div", {
+    style: { padding: 16 }
+  }, scanBox, React.createElement("div", {
+    style: { fontSize: 12.5, color: 'var(--text-sub)', marginBottom: 10 }
+  }, filteredCustomers.length, "名を匿名化しました。内容を確認してください。"), rows.map(previewCard), React.createElement("div", {
+    style: { display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }
+  }, React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-full",
+    disabled: !scanResult || !scanResult.ok,
+    onClick: () => nexusDownloadCustomerAnalysisCsv(rows)
+  }, "⬇️ CSVをダウンロード"), React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    disabled: !scanResult || !scanResult.ok,
+    onClick: () => nexusDownloadCustomerAnalysisJson(rows)
+  }, "⬇️ JSONをダウンロード"), React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    onClick: () => copyText(nexusCustomerAnalysisPromptTemplate())
+  }, "📋 AI分析用プロンプトをコピー"), React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    onClick: () => setPhase('select')
+  }, "← 対象選択に戻る")));
+  const toastEl = toast && React.createElement("div", {
+    style: { position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', background: 'rgba(0,0,0,0.8)', color: '#fff', padding: '10px 18px', borderRadius: 20, fontSize: 13, zIndex: 200 }
+  }, toast);
+  return React.createElement("div", {
+    className: "full-screen"
+  }, React.createElement("div", {
+    className: "full-header"
+  }, React.createElement("button", {
+    onClick: onClose,
+    style: { background: 'none', border: 'none', cursor: 'pointer', fontSize: 15, color: 'var(--text-sub)', fontWeight: 600, padding: '4px 8px' }
+  }, "← 戻る"), React.createElement("div", {
+    style: { flex: 1, fontSize: 16, fontWeight: 700 }
+  }, phase === 'select' ? "🤖 AI分析用データ" : "プレビュー（AIへ渡す内容を確認）")), selectScreen, previewScreen, toastEl);
 }
 
 // ── Tab: Appointments ─────────────────────────────────────────
@@ -14143,6 +14344,225 @@ function sanitizePersonalData(customer, opts) {
     expectedRevenue: opts.expectedRevenue || 0,
     confirmedRevenue: opts.confirmedRevenue || 0
   };
+}
+
+// ── 顧客一覧のAI戦略分析用データ出力：匿名化用の純粋関数群 ──
+// 既存のsanitizePersonalData等（活動期間・営業KPI向けの別機能）とは別に、
+// 「既契約者約300名全員（またはフィルタで絞った集団）の属性・契約傾向」を
+// 出す新機能のための関数群。ここでも許可リスト方式（安全と確認したフィールドだけを
+// 新規オブジェクトに詰める。生のcustomerを一切spreadしない）を徹底する。
+function nexusExtractPrefecture(address) {
+  const a = address || '';
+  return NEXUS_PREFECTURES.find(p => a.startsWith(p)) || null;
+}
+function nexusExtractCity(address) {
+  const a = address || '';
+  const pref = nexusExtractPrefecture(a);
+  const rest = pref ? a.slice(pref.length) : a;
+  const m = rest.match(/^.*?[市区町村郡]/);
+  return m ? m[0] : null;
+}
+function nexusHouseholdCategoryForAnalysis(customer, allCustomers) {
+  return classifyHousehold(buildHouseholdInput(customer, allCustomers));
+}
+// buildHouseholdInputと全く同じ「同居フラグ＋22歳未満」の基準で子の有無を判定する
+// （世帯分類classifyHouseholdと矛盾しないよう、判定基準を完全に揃える）
+function nexusHasChildrenForAnalysis(customer) {
+  const members = (customer.suspects || []).filter(sp => sp.cohabiting && sp.relation === '子供');
+  return members.some(sp => {
+    const age = sp.birthdate ? calcAge(sp.birthdate) : calcStoredAge(sp.age, sp.ageYear);
+    return age === null || age === undefined || age < 22;
+  });
+}
+function nexusContractCoverageRollup(customer, todayStrVal) {
+  const contracts = customer.contracts || [];
+  const activeContracts = contracts.filter(ct => ct.status !== '解約' && ct.status !== '失効');
+  const companies = [...new Set(contracts.map(ct => ct.company).filter(Boolean))];
+  const coverageCategories = { death: false, medical: false, cancer: false, care: false, annuity: false, variable: false, foreignCurrency: false };
+  let totalMonthlyPremiumJpy = 0, totalAnnualPremiumJpy = 0, hasLumpSumPayment = false;
+  let earliestDate = null;
+  activeContracts.forEach(ct => {
+    const purposes = nexusContractPurposes(ct);
+    if (purposes.some(p => CONTRACT_PURPOSE_DEATH_GROUP.includes(p))) coverageCategories.death = true;
+    if (purposes.includes('医療保障')) coverageCategories.medical = true;
+    if (purposes.includes('特定疾病（ガン）')) coverageCategories.cancer = true;
+    if (purposes.includes('介護・就労不能保障')) coverageCategories.care = true;
+    if (purposes.includes('年金・貯蓄型')) coverageCategories.annuity = true;
+    if ((Number(ct.separateAccountRatio) || 0) > 0 || ct.accountType === '特別勘定') coverageCategories.variable = true;
+    if (ct.currency === 'ドル') coverageCategories.foreignCurrency = true;
+    const amt = Number(ct.premium) || 0;
+    const jpy = Number(ct.premiumJpy) || 0;
+    const rate = Number(ct.exchangeRate) || 1;
+    const cur = ct.currency || '円';
+    const cyc = ct.paymentCycle || '月払';
+    if (LUMP_LIKE_PAYMENT_CYCLES.includes(cyc)) {
+      hasLumpSumPayment = true;
+    } else {
+      const monthlyJpy = cyc === '年払' ? (cur === 'ドル' ? (jpy || amt * rate) / 12 : amt / 12) : cur === 'ドル' ? jpy || amt * rate : amt;
+      totalMonthlyPremiumJpy += monthlyJpy;
+      totalAnnualPremiumJpy += monthlyJpy * 12;
+    }
+    if (ct.date && (!earliestDate || ct.date < earliestDate)) earliestDate = ct.date;
+  });
+  const earliestContractYearMonth = earliestDate ? earliestDate.slice(0, 7) : null;
+  const elapsedYearsSinceFirstContract = earliestDate && todayStrVal ? nexusAgeAtDate(earliestDate, todayStrVal) : null;
+  return {
+    activeContractCount: activeContracts.length,
+    totalContractCount: contracts.length,
+    companies,
+    coverageCategories,
+    totalMonthlyPremiumJpy: Math.round(totalMonthlyPremiumJpy),
+    totalAnnualPremiumJpy: Math.round(totalAnnualPremiumJpy),
+    hasLumpSumPayment,
+    earliestContractYearMonth,
+    elapsedYearsSinceFirstContract
+  };
+}
+function nexusLastContactBand(lastContact, todayStrVal) {
+  if (!lastContact) return '接触履歴なし';
+  const days = Math.floor((new Date(todayStrVal) - new Date(lastContact)) / (1000 * 60 * 60 * 24));
+  if (days <= 30) return '1か月以内';
+  if (days <= 90) return '1〜3か月';
+  if (days <= 180) return '3〜6か月';
+  if (days <= 365) return '6〜12か月';
+  if (days <= 730) return '1〜2年';
+  return '2年以上';
+}
+// 「紹介実績あり／なし」はcalcCustomerRankのhasReferrals判定と完全に一致させる
+// （referredToが配列/単一値どちらの形でも許容）。「紹介件数」表示にはアプリ内の
+// 既存パターン（referredBy===idの件数、他画面と同じ集計方法）を使う。
+function nexusReferralHasAny(customer, allCustomers) {
+  const referredToIds = Array.isArray(customer.referredTo) ? customer.referredTo : customer.referredTo ? [customer.referredTo] : [];
+  return referredToIds.length > 0 || (allCustomers || []).some(x => x.referredBy === customer.id);
+}
+function nexusReferralCount(customer, allCustomers) {
+  return (allCustomers || []).filter(x => x.referredBy === customer.id).length;
+}
+function nexusActivityCountsForAnalysis(customerId, activityLogs) {
+  const logs = nexusActiveLogs(activityLogs).filter(a => a.customerId === customerId);
+  return {
+    contactCount: logs.length,
+    dealCount: logs.filter(a => a.type === 'deal').length,
+    inquiryCount: logs.filter(a => a.type === 'inquiry').length
+  };
+}
+function nexusFanFollowSummaryForCustomer(customerId, fanFollows) {
+  const records = (fanFollows || []).filter(f => f.customerId === customerId && !f.deletedAt);
+  return {
+    sentCount: records.length,
+    readCount: records.filter(f => f.readAt).length,
+    repliedCount: records.filter(f => f.repliedAt).length
+  };
+}
+function nexusCustomerAnalysisId(index) {
+  return `C${String(index + 1).padStart(4, '0')}`;
+}
+// メイン変換関数：生のcustomerを一切spreadせず、安全と確認したフィールドだけを詰めた
+// 新規オブジェクトを返す（sanitizePersonalDataと同じ設計方針）。
+function nexusAnonymizeCustomerForAnalysis(customer, index, opts, ctx) {
+  const options = opts || {};
+  const context = ctx || {};
+  const today = context.today || todayStr();
+  const age = customer.birthdate ? nexusAgeAtDate(customer.birthdate, today) : calcStoredAge(customer.age, customer.ageYear);
+  const household = nexusHouseholdCategoryForAnalysis(customer, context.allCustomers);
+  const rollup = nexusContractCoverageRollup(customer, today);
+  const activity = nexusActivityCountsForAnalysis(customer.id, context.activityLogs);
+  const fanFollow = nexusFanFollowSummaryForCustomer(customer.id, context.fanFollows);
+  const out = {
+    analysisId: nexusCustomerAnalysisId(index),
+    ageBand: nexusAgeBand(age),
+    prefecture: nexusExtractPrefecture(customer.address),
+    occupationCategory: customer.customerType === '法人' ? null : nexusOccupationCategory(customer.occupation),
+    householdLabel: household.label,
+    hasChildren: nexusHasChildrenForAnalysis(customer),
+    rank: calcCustomerRank(customer, context.allCustomers),
+    existingOrNew: (customer.contracts || []).length > 0 ? '既契約' : '見込',
+    lineRegistered: !!customer.lineRegistered,
+    lastContactBand: nexusLastContactBand(customer.lastContact, today),
+    contactCount: activity.contactCount,
+    dealCount: activity.dealCount,
+    inquiryCount: activity.inquiryCount,
+    referralHasAny: nexusReferralHasAny(customer, context.allCustomers),
+    referralCount: nexusReferralCount(customer, context.allCustomers),
+    activeContractCount: rollup.activeContractCount,
+    totalContractCount: rollup.totalContractCount,
+    companies: rollup.companies,
+    coverageCategories: rollup.coverageCategories,
+    totalMonthlyPremiumJpy: rollup.totalMonthlyPremiumJpy,
+    totalAnnualPremiumJpy: rollup.totalAnnualPremiumJpy,
+    hasLumpSumPayment: rollup.hasLumpSumPayment,
+    earliestContractYearMonth: rollup.earliestContractYearMonth,
+    elapsedYearsSinceFirstContract: rollup.elapsedYearsSinceFirstContract,
+    fanFollowSentCount: fanFollow.sentCount,
+    fanFollowReadCount: fanFollow.readCount,
+    fanFollowRepliedCount: fanFollow.repliedCount
+  };
+  if (options.includeCity) out.city = nexusExtractCity(customer.address);
+  return out;
+}
+// 抽出条件フィルタ。「相続相談経験あり」は構造化された相談履歴が存在しないため、
+// 実データに基づくcontracts[].purposesの「相続対策」を使う（ラベルは「相続対策の契約を保有」）。
+// 「セミナー参加者」フィルタは該当データが存在しないため実装しない。
+function nexusCustomerAnalysisFilterPredicate(customer, filters, ctx) {
+  const f = filters || {};
+  const context = ctx || {};
+  const today = context.today || todayStr();
+  if (f.existingOnly && (customer.contracts || []).length === 0) return false;
+  if (f.prospectOnly && (customer.contracts || []).length > 0) return false;
+  if (f.ageBands && f.ageBands.length > 0) {
+    const age = customer.birthdate ? nexusAgeAtDate(customer.birthdate, today) : calcStoredAge(customer.age, customer.ageYear);
+    const band = nexusAgeBand(age);
+    if (!band || !f.ageBands.includes(band)) return false;
+  }
+  if (f.lineRegistered === true && !customer.lineRegistered) return false;
+  if (f.lineRegistered === false && customer.lineRegistered) return false;
+  if (f.lastContactMonthsAtLeast) {
+    const band = nexusLastContactBand(customer.lastContact, today);
+    const order = ['1か月以内', '1〜3か月', '3〜6か月', '6〜12か月', '1〜2年', '2年以上'];
+    const thresholdIdx = f.lastContactMonthsAtLeast === 6 ? order.indexOf('6〜12か月') : order.indexOf('1〜2年');
+    if (band !== '接触履歴なし' && order.indexOf(band) < thresholdIdx) return false;
+  }
+  if (f.hasReferrals && !nexusReferralHasAny(customer, context.allCustomers)) return false;
+  if (f.medicalHolder || f.deathHolder || f.inheritanceHolder) {
+    const purposesAll = (customer.contracts || []).flatMap(ct => nexusContractPurposes(ct));
+    if (f.medicalHolder && !purposesAll.includes('医療保障')) return false;
+    if (f.deathHolder && !purposesAll.some(p => CONTRACT_PURPOSE_DEATH_GROUP.includes(p))) return false;
+    if (f.inheritanceHolder && !purposesAll.includes('相続対策')) return false;
+  }
+  if (f.ranks && f.ranks.length > 0) {
+    const rank = calcCustomerRank(customer, context.allCustomers);
+    if (!f.ranks.includes(rank)) return false;
+  }
+  return true;
+}
+// 出力直前の最終防衛ライン。許可リスト方式で作った匿名化済み行に対して、
+// 想定外の個人情報混入が無いかを走査する（コード変更で将来リークが起きても検知できるよう、
+// 変換後の出力文字列そのものをスキャン対象にする）。
+function nexusScanForResidualPii(anonymizedRows, allCustomers) {
+  const text = JSON.stringify(anonymizedRows);
+  const issues = [];
+  const checks = [
+    ['電話番号らしい文字列', /0\d{1,4}-?\d{1,4}-?\d{3,4}/g],
+    ['メールアドレス', /[\w.+-]+@[\w-]+\.[\w.-]+/g],
+    ['郵便番号', /\d{3}-\d{4}/g],
+    ['証券番号らしき数字列', /\d{7,}/g],
+    ['URL', /https?:\/\/\S+/g]
+  ];
+  checks.forEach(([label, re]) => {
+    const m = text.match(re);
+    if (m && m.length) issues.push({ pattern: label, sample: m[0] });
+  });
+  const names = new Set();
+  (allCustomers || []).forEach(c => {
+    if (c.name) names.add(c.name);
+    if (c.furigana) names.add(c.furigana);
+    if (c.corporateName) names.add(c.corporateName);
+    (c.suspects || []).forEach(sp => { if (sp.name) names.add(sp.name); });
+  });
+  names.forEach(name => {
+    if (name && name.trim().length >= 2 && text.includes(name)) issues.push({ pattern: '氏名', sample: name });
+  });
+  return { ok: issues.length === 0, issues };
 }
 
 // AI分析用データ本体を組み立てる（この時点で実名・電話・メール・住所・証券番号等は一切含まれない）
@@ -32602,6 +33022,7 @@ function App() {
   });
   const [tab, setTab] = useState('dashboard');
   const [corpPlanningTargetId, setCorpPlanningTargetId] = useState('');
+  const [showAiExport, setShowAiExport] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [editingCustomer, setEditingCustomer] = useState(null);
   const [showCustomerForm, setShowCustomerForm] = useState(false);
@@ -32851,7 +33272,13 @@ function App() {
     customers: customers,
     setCustomers: setCustomers,
     onSelect: setSelectedCustomer,
-    onAdd: openNewCustomer
+    onAdd: openNewCustomer,
+    onOpenAiExport: () => setShowAiExport(true)
+  }), showAiExport && /*#__PURE__*/React.createElement(NexusCustomerAiExportScreen, {
+    customers: customers,
+    activityLogs: activityLogs,
+    nexusFanFollows: nexusFanFollows,
+    onClose: () => setShowAiExport(false)
   }), tab === 'memo' && /*#__PURE__*/React.createElement(NegotiationTab, {
     memos: memos,
     setMemos: setMemos,
