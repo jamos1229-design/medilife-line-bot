@@ -14404,6 +14404,14 @@ function TaskTab({
     const upcoming = onceOnly.filter(t => t.date && t.date > td);
     const undated = onceOnly.filter(t => !t.date);
     const clientName = id => clients.find(c => c.id === id)?.name;
+    // 営業ToDo（NexusActivityFormの「次のアクション」等）はclientIdではなくcustomerId
+    // （NEXUS顧客CRM）で紐づくため、こちらも別途解決する（clientIdとcustomerIdは別のID空間）。
+    // これが無いと、活動記録から自動作成されたタスクをこの一覧で開いても、誰の件だったか
+    // 一切分からなくなってしまう。
+    const customerName = id => {
+      const c = (customers || []).find(x => x.id === id);
+      return c ? nexusDisplayName(c) : '';
+    };
     const toggleStep = (taskId, stepId) => {
       setTasks(prev => prev.map(t => t.id !== taskId ? t : {
         ...t,
@@ -14513,7 +14521,16 @@ function TaskTab({
           borderRadius: 4,
           fontWeight: 600
         }
-      }, clientName(t.clientId)), t.axis && /*#__PURE__*/React.createElement(AxisBadge, {
+      }, clientName(t.clientId)), t.customerId && customerName(t.customerId) && /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontSize: 11,
+          background: 'var(--accent-light)',
+          color: 'var(--accent)',
+          padding: '1px 6px',
+          borderRadius: 4,
+          fontWeight: 600
+        }
+      }, "👤 ", customerName(t.customerId)), t.axis && /*#__PURE__*/React.createElement(AxisBadge, {
         axis: t.axis
       }), steps.length > 0 && /*#__PURE__*/React.createElement("span", {
         style: {
@@ -14814,6 +14831,8 @@ function TaskTab({
   }, editingTask ? 'タスクを編集' : 'タスクを追加'), /*#__PURE__*/React.createElement(TaskForm, {
     editing: editingTask,
     clients: clients,
+    customers: customers,
+    onOpenCustomer: onOpenCustomer,
     onSave: saveTask,
     onClose: () => {
       setShowTaskForm(false);
@@ -14979,6 +14998,8 @@ function ClientForm({
 function TaskForm({
   editing,
   clients,
+  customers,
+  onOpenCustomer,
   onSave,
   onClose
 }) {
@@ -15048,7 +15069,36 @@ function TaskForm({
     color: active ? color : 'var(--text-sub)',
     textAlign: 'center'
   });
-  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  // 活動記録の「次のアクション」等から自動作成されたタスクはcustomerId（NEXUS顧客CRM）で
+  // 紐づいており、下のclientId（別の商談先リスト）とは別のID空間のため選択肢には出てこない。
+  // これが無いと、そのタスクを開いても誰の件か一切分からなくなるため、分かる形で表示する。
+  const linkedCustomer = form.customerId ? (customers || []).find(c => c.id === form.customerId) : null;
+  const linkedCustomerBanner = form.customerId && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 8,
+      padding: '8px 10px',
+      marginBottom: 10,
+      background: 'var(--accent-light)',
+      border: '1px solid var(--accent)',
+      borderRadius: 10,
+      fontSize: 12.5
+    }
+  }, /*#__PURE__*/React.createElement("span", null, "👤 関連する顧客：", linkedCustomer ? nexusDisplayName(linkedCustomer) : '（削除済み顧客）'), linkedCustomer && onOpenCustomer && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => onOpenCustomer(linkedCustomer.id),
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--accent)',
+      fontWeight: 700,
+      cursor: 'pointer',
+      whiteSpace: 'nowrap'
+    }
+  }, "顧客詳細へ →"));
+  return /*#__PURE__*/React.createElement(React.Fragment, null, linkedCustomerBanner, /*#__PURE__*/React.createElement("div", {
     className: "form-group"
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
