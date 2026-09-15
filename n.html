@@ -7302,12 +7302,29 @@ function NexusFanFollowRecordForm({
     style: { marginTop: 12 }
   }, React.createElement("label", {
     className: "form-label"
-  }, "次回フォロー日（任意）"), React.createElement("input", {
+  }, "次回フォロー日（任意）"), React.createElement("div", {
+    style: { display: 'flex', gap: 8, alignItems: 'center' }
+  }, React.createElement("input", {
     type: "date",
     className: "form-input",
+    style: { flex: 1 },
     value: form.nextFollowDate,
     onChange: si('nextFollowDate')
-  })), React.createElement("div", {
+  }), form.nextFollowDate && React.createElement("button", {
+    type: "button",
+    onClick: () => s('nextFollowDate')(''),
+    style: {
+      flexShrink: 0,
+      padding: '11px 14px',
+      borderRadius: 10,
+      border: '1.5px solid var(--border)',
+      background: '#fff',
+      color: 'var(--text-sub)',
+      fontSize: 13,
+      fontWeight: 600,
+      cursor: 'pointer'
+    }
+  }, "クリア"))), React.createElement("div", {
     className: "form-group"
   }, React.createElement("label", {
     className: "form-label"
