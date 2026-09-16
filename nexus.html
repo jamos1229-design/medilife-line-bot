@@ -7099,6 +7099,7 @@ function NexusFanFollowRecordForm({
     id: '',
     campaignId: campaignId || '',
     customerId: '',
+    customerNameText: '',
     attribute: '',
     sentDate: todayStr(),
     articleTitle: '',
@@ -7123,7 +7124,7 @@ function NexusFanFollowRecordForm({
   const relatedCustomer = (customers || []).find(c => c.id === form.customerId);
   const stage = nexusFanFollowDownstreamStage(form, activityLogs, customers);
   const save = () => {
-    if (!form.customerId) return;
+    if (!form.customerId && !(form.customerNameText || '').trim()) return;
     const now = new Date().toISOString();
     onSave({
       ...form,
@@ -7188,7 +7189,7 @@ function NexusFanFollowRecordForm({
   }), React.createElement("div", {
     className: "drawer-title"
   }, "相談・問合せを登録"), React.createElement(NexusActivityForm, {
-    editing: { type: 'inquiry', customerId: form.customerId, customerNameText: relatedCustomer ? nexusDisplayName(relatedCustomer) : '' },
+    editing: { type: 'inquiry', customerId: form.customerId, customerNameText: relatedCustomer ? nexusDisplayName(relatedCustomer) : (form.customerNameText || '') },
     customers: customers,
     onSave: handleBridgeSave,
     onDelete: () => {},
@@ -7209,7 +7210,7 @@ function NexusFanFollowRecordForm({
   }, "✅ 相談・問合せ登録済み（活動履歴で確認できます）") : React.createElement("button", {
     type: "button",
     className: "btn btn-outline btn-full",
-    disabled: !form.customerId,
+    disabled: !form.customerId && !(form.customerNameText || '').trim(),
     onClick: () => setBridgeOpen(true)
   }, "💬 相談になった → 相談・問合せへ登録");
   // 面談・提案・成約・紹介はボタンを置かず、常に自動判定した結果だけを読み取り専用で表示する
@@ -7237,11 +7238,23 @@ function NexusFanFollowRecordForm({
   }), React.createElement("div", {
     className: "drawer-title"
   }, editing ? "記録を編集" : "記録を追加"), React.createElement(CustomerSelect, {
-    label: "顧客（必須）",
+    label: "顧客（登録済みの方はこちらから選択）",
     value: form.customerId,
-    onChange: s('customerId'),
+    onChange: v => setForm(f => ({ ...f, customerId: v, customerNameText: v ? '' : f.customerNameText })),
     customers: customers
   }), React.createElement("div", {
+    className: "form-group"
+  }, React.createElement("label", {
+    className: "form-label"
+  }, "お客様のお名前（未登録の場合はこちらに直接入力）"), React.createElement("input", {
+    className: "form-input",
+    value: form.customerNameText,
+    placeholder: "例：山田太郎",
+    disabled: !!form.customerId,
+    onChange: e => setForm(f => ({ ...f, customerNameText: e.target.value, customerId: e.target.value ? '' : f.customerId }))
+  }), !form.customerId && (form.customerNameText || '').trim() && React.createElement("div", {
+    style: { fontSize: 11.5, color: 'var(--text-sub)', marginTop: 4 }
+  }, "後から「記録一覧」の「登録」ボタンで、正式な顧客として登録できます。")), React.createElement("div", {
     className: "form-group"
   }, React.createElement("label", {
     className: "form-label"
@@ -7342,7 +7355,7 @@ function NexusFanFollowRecordForm({
   }, "キャンセル"), React.createElement("button", {
     type: "button",
     className: "btn btn-primary btn-full",
-    disabled: !form.customerId,
+    disabled: !form.customerId && !(form.customerNameText || '').trim(),
     onClick: () => { save(); onClose(); }
   }, "保存"))));
 }
@@ -7391,6 +7404,7 @@ function NexusFanFollowRecordList({
   filterRecordIds,
   hideAddButton,
   emptyText,
+  onRegisterCustomer,
   customers,
   activityLogs,
   setActivityLogs,
@@ -7426,11 +7440,26 @@ function NexusFanFollowRecordList({
       style: { marginBottom: 8, cursor: 'pointer' },
       onClick: () => setEditingRecord(f)
     }, React.createElement("div", {
-      style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }
+      style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }
     }, React.createElement("div", {
-      style: { fontWeight: 700 }
-    }, customerName(f.customerId)), React.createElement("div", {
-      style: { fontSize: 11.5, color: 'var(--text-sub)' }
+      style: { fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
+    }, f.customerId ? customerName(f.customerId) : (f.customerNameText || '（名前未入力）')), !f.customerId && f.customerNameText && onRegisterCustomer && React.createElement("button", {
+      type: "button",
+      onClick: e => { e.stopPropagation(); onRegisterCustomer(f.customerNameText); },
+      style: {
+        flexShrink: 0,
+        padding: '3px 8px',
+        fontSize: 11,
+        fontWeight: 700,
+        color: 'var(--accent)',
+        background: 'var(--accent-light)',
+        border: '1px solid var(--accent)',
+        borderRadius: 6,
+        cursor: 'pointer',
+        whiteSpace: 'nowrap'
+      }
+    }, "登録"), React.createElement("div", {
+      style: { fontSize: 11.5, color: 'var(--text-sub)', flexShrink: 0 }
     }, f.sentDate)), f.articleTitle && React.createElement("div", {
       style: { fontSize: 12.5, color: 'var(--text-sub)', marginTop: 2 }
     }, "📄 ", f.articleTitle), badges.length > 0 && React.createElement("div", {
@@ -7544,6 +7573,7 @@ function NexusFanFollowScreen({
   const [selectedCampaignId, setSelectedCampaignId] = useState(() => (campaigns && campaigns[0] && campaigns[0].id) || '');
   const [campaignFormOpen, setCampaignFormOpen] = useState(false);
   const [aiExportOpen, setAiExportOpen] = useState(false);
+  const [registerCustomerName, setRegisterCustomerName] = useState(null);
   const [tab, setTab] = useState('dashboard');
   React.useEffect(() => {
     if (!selectedCampaignId && campaigns && campaigns.length > 0) setSelectedCampaignId(campaigns[0].id);
@@ -7600,7 +7630,8 @@ function NexusFanFollowScreen({
     opportunities: opportunities,
     setOpportunities: setOpportunities,
     setCustomers: setCustomers,
-    setTasks: setTasks
+    setTasks: setTasks,
+    onRegisterCustomer: setRegisterCustomerName
   });
   const recordsView = tab === 'records' && selectedCampaign && React.createElement(NexusFanFollowRecordList, {
     follows: follows,
@@ -7612,11 +7643,28 @@ function NexusFanFollowScreen({
     opportunities: opportunities,
     setOpportunities: setOpportunities,
     setCustomers: setCustomers,
-    setTasks: setTasks
+    setTasks: setTasks,
+    onRegisterCustomer: setRegisterCustomerName
   });
   const campaignFormSheet = campaignFormOpen && React.createElement(NexusFanCampaignForm, {
     onSave: saveCampaign,
     onClose: () => setCampaignFormOpen(false)
+  });
+  // ファン化フォローの手入力名（customerNameText）から新規顧客を登録する。保存時に、同じ名前で
+  // 未登録のまま残っている他の記録もまとめて新しい顧客IDへ紐づける（既存の活動履歴側の
+  // registerActivityCustomer／nexusLinkActivityLogsByNameと全く同じ考え方）。
+  const registerFormSheet = registerCustomerName !== null && React.createElement(CustomerForm, {
+    editing: { name: registerCustomerName, status: '未接触', contactMethod: '電話', contracts: [], suspects: [] },
+    customers: customers,
+    onSave: c => {
+      setCustomers(prev => {
+        const idx = prev.findIndex(x => x.id === c.id);
+        return idx >= 0 ? prev.map((x, i) => i === idx ? c : x) : [...prev, c];
+      });
+      setFollows(prev => nexusFanFollowLinkByName(prev, registerCustomerName, c.id, new Date().toISOString()));
+      setRegisterCustomerName(null);
+    },
+    onClose: () => setRegisterCustomerName(null)
   });
   return React.createElement("div", {
     className: "full-screen"
@@ -7648,7 +7696,7 @@ function NexusFanFollowScreen({
     customers: customers,
     tasks: tasks,
     onClose: () => setAiExportOpen(false)
-  }));
+  }), registerFormSheet);
 }
 // ── ファン化フォローのAI戦略分析用データ出力：CSV変換・ダウンロード・プロンプトヘルパー ──
 function nexusFanFollowAnalysisCsvRows(rows) {
@@ -14539,6 +14587,18 @@ function nexusLinkActivityLogsByName(activityLogs, name, customerId, now) {
   const trimmed = (name || '').trim();
   if (!trimmed) return activityLogs;
   return activityLogs.map(x => !x.customerId && (x.customerNameText || '').trim() === trimmed ? {
+    ...x,
+    customerId,
+    customerNameText: '',
+    updatedAt: now
+  } : x);
+}
+// ファン化フォロー版（考え方はnexusLinkActivityLogsByNameと全く同じ）。顧客登録後、同じ手入力名
+// （customerNameText）で未登録のまま残っているファン化フォロー記録をまとめて新規顧客IDに紐づける。
+function nexusFanFollowLinkByName(follows, name, customerId, now) {
+  const trimmed = (name || '').trim();
+  if (!trimmed) return follows;
+  return follows.map(x => !x.customerId && (x.customerNameText || '').trim() === trimmed ? {
     ...x,
     customerId,
     customerNameText: '',
