@@ -500,6 +500,87 @@ const EmptyState = ({
   className: "empty-icon"
 }, icon), /*#__PURE__*/React.createElement("div", null, text));
 
+// ── クリップボードコピー共通ヘルパー（AI分析用ID等の短い文字列コピーで使う）──
+// navigator.clipboard.writeTextが使えない・拒否される環境（iOS Safari等）向けに、
+// 既存のAI分析用データ機能で実績のあるdocument.execCommand('copy')フォールバックを
+// 共通化した（各画面でコピー処理を個別実装せず、ここに一本化する）。
+function nexusLegacyCopyToClipboard(text) {
+  try {
+    const el = document.createElement('textarea');
+    el.value = text;
+    el.setAttribute('readonly', '');
+    el.style.position = 'fixed';
+    el.style.top = '0';
+    el.style.left = '0';
+    el.style.opacity = '0';
+    document.body.appendChild(el);
+    el.focus();
+    el.setSelectionRange(0, text.length);
+    const ok = document.execCommand('copy');
+    document.body.removeChild(el);
+    return ok;
+  } catch (e) {
+    return false;
+  }
+}
+function nexusCopyToClipboard(text) {
+  return new Promise(resolve => {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => resolve(true)).catch(() => resolve(nexusLegacyCopyToClipboard(text)));
+    } else {
+      resolve(nexusLegacyCopyToClipboard(text));
+    }
+  });
+}
+// AI分析用IDを表示し、タップでコピーできる共通部品。顧客一覧・顧客詳細・顧客選択・
+// ファン化フォロー記録一覧など、IDを表示する全画面で共通して使う。
+// compact=trueの場合は一覧の行内などに収まる小さいバッジ表示になる。
+function NexusCopyIdButton({ id, compact }) {
+  const [copied, setCopied] = useState(false);
+  if (!id) return null;
+  const onClick = e => {
+    e.stopPropagation();
+    nexusCopyToClipboard(id).then(ok => {
+      if (ok) {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }
+    });
+  };
+  return React.createElement("button", {
+    type: "button",
+    onClick,
+    title: "タップしてコピー",
+    style: compact ? {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 3,
+      fontSize: 10.5,
+      fontWeight: 700,
+      padding: '1px 7px',
+      borderRadius: 8,
+      border: '1px solid var(--border)',
+      background: copied ? '#E8F5E9' : 'var(--bg)',
+      color: copied ? '#2E7D32' : 'var(--text-sub)',
+      cursor: 'pointer',
+      whiteSpace: 'nowrap'
+    } : {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      fontSize: 13,
+      fontWeight: 700,
+      padding: '4px 10px',
+      borderRadius: 8,
+      border: '1px solid var(--border)',
+      background: copied ? '#E8F5E9' : 'var(--bg)',
+      color: copied ? '#2E7D32' : 'var(--text-sub)',
+      cursor: 'pointer',
+      whiteSpace: 'nowrap'
+    }
+  }, copied ? (compact ? '✓ コピー済' : '✓ コピーしました') : compact ? `🆔 ${id}` : `🆔 AI分析用ID：${id}`);
+}
+
 // ── Contract Form Block ───────────────────────────────────────
 const PAYMENT_CYCLES = ['月払', '年払', '前期前納', '全期前納', '一時払'];
 // 保険料が「毎月/毎年かかり続ける」タイプではなく、まとまった額を一括で払い込むタイプの払込方法
@@ -4052,7 +4133,7 @@ function CustomerSelect({
   const filtered = list.filter(c => {
     if (!query) return true;
     const name = nexusCustomerDisplayName(c);
-    return name.includes(query) || (c.phone || '').includes(query);
+    return name.includes(query) || (c.phone || '').includes(query) || nexusCustomerMatchesAiId(c, nexusNormalizeAiIdQuery(query));
   });
   const toggle = id => {
     if (!multi) {
@@ -4134,7 +4215,7 @@ function CustomerSelect({
   }, /*#__PURE__*/React.createElement("input", {
     autoFocus: true,
     className: "form-input",
-    placeholder: "名前で検索...",
+    placeholder: "名前・AI分析用IDで検索...",
     value: query,
     onChange: e => setQuery(e.target.value),
     style: {
@@ -4229,12 +4310,20 @@ function CustomerSelect({
       }
     }, sel ? '✓' : ''), /*#__PURE__*/React.createElement("span", {
       style: {
-        flex: 1
+        flex: 1,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 2,
+        minWidth: 0
       }
-    }, nexusCustomerDisplayName(c)), c.age && /*#__PURE__*/React.createElement("span", {
+    }, /*#__PURE__*/React.createElement("span", null, nexusCustomerDisplayName(c)), c.aiAnalysisId && /*#__PURE__*/React.createElement(NexusCopyIdButton, {
+      id: c.aiAnalysisId,
+      compact: true
+    })), c.age && /*#__PURE__*/React.createElement("span", {
       style: {
         fontSize: 12,
-        color: 'var(--text-sub)'
+        color: 'var(--text-sub)',
+        flexShrink: 0
       }
     }, c.age, "歳"));
   })), multi && /*#__PURE__*/React.createElement("div", {
@@ -4342,7 +4431,13 @@ function CustomerDetail({
       fontWeight: 800,
       letterSpacing: -0.5
     }
-  }, c.customerType === '法人' ? c.corporateName || c.name : c.name), c.customerType !== '法人' && c.furigana && /*#__PURE__*/React.createElement("div", {
+  }, c.customerType === '法人' ? c.corporateName || c.name : c.name), c.aiAnalysisId && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 4
+    }
+  }, /*#__PURE__*/React.createElement(NexusCopyIdButton, {
+    id: c.aiAnalysisId
+  })), c.customerType !== '法人' && c.furigana && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12,
       color: 'var(--text-sub)',
@@ -7420,8 +7515,9 @@ function NexusFanFollowRecordList({
   if (filterRecordIds) scoped = scoped.filter(f => filterRecordIds.includes(f.id));
   scoped = scoped.sort((a, b) => (b.sentDate || '').localeCompare(a.sentDate || ''));
   const list = limit ? scoped.slice(0, limit) : scoped;
+  const findCustomer = id => (customers || []).find(x => x.id === id);
   const customerName = id => {
-    const c = (customers || []).find(x => x.id === id);
+    const c = findCustomer(id);
     return c ? nexusDisplayName(c) : '（削除済み顧客）';
   };
   const saveRecord = r => {
@@ -7434,16 +7530,22 @@ function NexusFanFollowRecordList({
   const row = f => {
     const stage = nexusFanFollowDownstreamStage(f, activityLogs, customers);
     const badges = [f.readAt && '既読', f.repliedAt && '返信', stage.consultedAt && '相談', stage.metAt && '面談', stage.proposedAt && '提案', stage.closedAt && '成約'].filter(Boolean);
+    const rowCustomer = f.customerId ? findCustomer(f.customerId) : null;
     return React.createElement("div", {
       key: f.id,
       className: "card",
       style: { marginBottom: 8, cursor: 'pointer' },
       onClick: () => setEditingRecord(f)
     }, React.createElement("div", {
-      style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }
+      style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }
+    }, React.createElement("div", {
+      style: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }
     }, React.createElement("div", {
       style: { fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
-    }, f.customerId ? customerName(f.customerId) : (f.customerNameText || '（名前未入力）')), !f.customerId && f.customerNameText && onRegisterCustomer && React.createElement("button", {
+    }, f.customerId ? customerName(f.customerId) : (f.customerNameText || '（名前未入力）')), rowCustomer && rowCustomer.aiAnalysisId && React.createElement(NexusCopyIdButton, {
+      id: rowCustomer.aiAnalysisId,
+      compact: true
+    })), !f.customerId && f.customerNameText && onRegisterCustomer && React.createElement("button", {
       type: "button",
       onClick: e => { e.stopPropagation(); onRegisterCustomer(f.customerNameText); },
       style: {
@@ -10444,7 +10546,9 @@ function CustomerListTab({
   onSelect,
   onAdd,
   onOpenAiExport,
-  onOpenSearch
+  onOpenSearch,
+  onOpenAiIdMigration,
+  needsAiIdMigration
 }) {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('すべて');
@@ -10465,14 +10569,20 @@ function CustomerListTab({
       return [...prev, id];
     });
   };
-  const filtered = useMemo(() => {
-    const list = customers.filter(c => statusFilter === 'すべて' || (c.status || '未接触') === statusFilter).filter(c => lineFilter === 'すべて' || (lineFilter === 'LINE登録' ? c.lineRegistered : !c.lineRegistered)).filter(c => {
+  // AI分析用IDでの検索は全角・大文字小文字・前後の空白を許容するため、既存の氏名等の検索とは
+  // 別に正規化した上でnexusCustomerMatchesAiIdで判定する（既存の検索条件はそのまま維持する）。
+  const matchesSearchText = useMemo(() => {
+    const normalizedIdQuery = nexusNormalizeAiIdQuery(search);
+    return c => {
       if (!search) return true;
       const q = search.toLowerCase();
       // 契約情報（保険会社・保険種類）を結合して検索
       const contractText = (c.contracts || []).map(ct => [ct.company, ct.type].filter(Boolean).join(' ')).join(' ').toLowerCase();
-      return c.name.includes(search) || (c.corporateName || '').includes(search) || (c.formerName || '').includes(search) || (c.phone || '').includes(q) || (c.memo || '').includes(search) || (c.email || '').toLowerCase().includes(q) || (c.address || '').includes(search) || (c.postalCode || '').includes(search) || contractText.includes(q);
-    });
+      return c.name.includes(search) || (c.corporateName || '').includes(search) || (c.formerName || '').includes(search) || (c.phone || '').includes(q) || (c.memo || '').includes(search) || (c.email || '').toLowerCase().includes(q) || (c.address || '').includes(search) || (c.postalCode || '').includes(search) || contractText.includes(q) || nexusCustomerMatchesAiId(c, normalizedIdQuery);
+    };
+  }, [search]);
+  const filtered = useMemo(() => {
+    const list = customers.filter(c => statusFilter === 'すべて' || (c.status || '未接触') === statusFilter).filter(c => lineFilter === 'すべて' || (lineFilter === 'LINE登録' ? c.lineRegistered : !c.lineRegistered)).filter(matchesSearchText);
     const STATUS_ORDER = ['未接触', 'アポ済', '面談済', 'フォロー中'];
     list.sort((a, b) => {
       switch (sortKey) {
@@ -10496,7 +10606,27 @@ function CustomerListTab({
       }
     });
     return list;
-  }, [customers, search, statusFilter, lineFilter, sortKey]);
+  }, [customers, matchesSearchText, statusFilter, lineFilter, sortKey]);
+  // 検索条件には一致するが、ステータス／LINEの絞り込みによって隠れている顧客がいる場合、
+  // 「該当なし」だけでは見つけられない状態になってしまうため、解除の手がかりを表示する。
+  const hiddenByFilterCount = useMemo(() => {
+    if (!search || filtered.length > 0) return 0;
+    if (statusFilter === 'すべて' && lineFilter === 'すべて') return 0;
+    return customers.filter(matchesSearchText).length;
+  }, [customers, matchesSearchText, filtered.length, search, statusFilter, lineFilter]);
+  const hiddenByFilterHint = hiddenByFilterCount > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: { marginBottom: 10, background: '#FFFBEB', border: '1px solid var(--warning)', fontSize: 13 }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: { marginBottom: 8 }
+  }, "⚠️ 「ステータス」または「LINE」の絞り込み条件により、該当する顧客（", hiddenByFilterCount, "件）が一覧から隠れています。"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-sm",
+    onClick: () => {
+      setStatusFilter('すべて');
+      setLineFilter('すべて');
+    }
+  }, "フィルタを解除する"));
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
       position: 'sticky',
@@ -10509,7 +10639,7 @@ function CustomerListTab({
     className: "search-wrap"
   }, /*#__PURE__*/React.createElement("span", null, "🔍"), /*#__PURE__*/React.createElement("input", {
     className: "search-input",
-    placeholder: "名前・住所・保険会社・保険種類・電話・メモ...",
+    placeholder: "名前・AI分析用ID・住所・保険会社・保険種類・電話・メモ...",
     value: search,
     onChange: e => setSearch(e.target.value)
   }), search && /*#__PURE__*/React.createElement("button", {
@@ -10549,7 +10679,16 @@ function CustomerListTab({
       marginBottom: 8
     },
     onClick: onOpenSearch
-  }, "🔍 詳細検索"), /*#__PURE__*/React.createElement("div", {
+  }, "🔍 詳細検索"), needsAiIdMigration && onOpenAiIdMigration && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: {
+      marginBottom: 8,
+      borderColor: 'var(--warning)',
+      color: '#B45309'
+    },
+    onClick: onOpenAiIdMigration
+  }, "🆔 AI分析用IDを設定"), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
@@ -10628,7 +10767,7 @@ function CustomerListTab({
       textAlign: 'left',
       cursor: 'pointer'
     }
-  }, sortKey === o.key ? '✓ ' : '　', o.label))))))), filtered.length === 0 ? /*#__PURE__*/React.createElement(EmptyState, {
+  }, sortKey === o.key ? '✓ ' : '　', o.label))))))), hiddenByFilterHint, filtered.length === 0 ? /*#__PURE__*/React.createElement(EmptyState, {
     icon: "👤",
     text: customers.length === 0 ? '顧客を追加してください' : '該当する顧客はいません'
   }) : filtered.map(c => {
@@ -10752,7 +10891,10 @@ function CustomerListTab({
         background: 'var(--bg)',
         color: 'var(--text-sub)'
       }
-    }, c.contactMethod)), c.nextAppt && /*#__PURE__*/React.createElement("div", {
+    }, c.contactMethod), c.aiAnalysisId && /*#__PURE__*/React.createElement(NexusCopyIdButton, {
+      id: c.aiAnalysisId,
+      compact: true
+    })), c.nextAppt && /*#__PURE__*/React.createElement("div", {
       className: "customer-info-row"
     }, /*#__PURE__*/React.createElement("div", {
       className: "info-item"
@@ -10863,6 +11005,83 @@ function nexusDownloadCustomerAnalysisJson(rows) {
 // 完全に別物。既存の営業KPI用AI分析機能には一切触れない）。
 function nexusCustomerAnalysisPromptTemplate() {
   return ['以下は、FP・保険代理店の顧客管理システムから', '個人情報を匿名化した顧客データです。', '', '個人を特定することを目的に分析しないでください。', '', '目的は、既契約者に無理な営業をすることではありません。', '', 'お客様との関係を深め、', '必要な情報を必要な方へ届け、', '相談しやすい環境を作ることが目的です。', '', '', 'このデータから、', '', '①顧客全体の特徴', '', '②年代別の特徴', '', '③家族構成別の特徴', '', '④契約内容の傾向', '', '⑤長期間フォローできていない層', '', '⑥情報提供をすると喜ばれそうな層', '', '⑦note記事を届けるとよさそうな層', '', '⑧LINEフォローが適している層', '', '⑨相続・介護セミナーが役立ちそうな層', '', '⑩保障内容の確認が必要そうな層', '', '⑪紹介が自然に発生しやすそうな顧客層の特徴', '', '⑫今は営業・連絡を控えた方がよい層', '', 'を分析してください。', '', '', 'さらに、', '', '・何人いるか', '・どういう特徴か', '・なぜその分類になるか', '・どんな情報提供が適しているか', '・どんなnote記事を作ればよいか', '・どんなセミナーを企画すればよいか', '', 'まで提案してください。', '', '', 'ただし、', '', '「保険を売ること」', '', 'だけを目的にしないでください。', '', '顧客に役立つことを優先してください。', '', '不明な情報は推測せず、', '', '「データからは判断できない」', '', 'としてください。', '', '---', '', '【データ】', '（この下に、Nexusから出力したCSVまたはJSONデータを貼り付けてください）'].join('\n');
+}
+
+// ── AI分析用ID：既存顧客への固定ID一括付与画面 ──
+// customer.aiAnalysisIdを持たない顧客に、nexusAssignAiAnalysisIdsで新しい固定IDを割り当てる。
+// 「バックアップ→確認→実行」の順に進める、明示的なユーザー操作を必要とする画面
+// （既存データへの一括変更のため、自動では実行しない）。
+function NexusAiIdMigrationScreen({ customers, setCustomers, aiIdCounter, setAiIdCounter, backupState, onClose, onComplete }) {
+  const [result, setResult] = useState(null);
+  const [toast, setToast] = useState('');
+  const showToast = msg => { setToast(msg); setTimeout(() => setToast(''), 3000); };
+  const targetCount = (customers || []).filter(c => !c.aiAnalysisId).length;
+  const downloadBackup = () => {
+    try {
+      exportJSON(backupState);
+      showToast('バックアップをダウンロードしました');
+    } catch (e) {
+      showToast('バックアップに失敗しました：' + (e && e.message || e));
+    }
+  };
+  const runAssignment = () => {
+    const r = nexusAssignAiAnalysisIds(customers, aiIdCounter);
+    setCustomers(r.customers);
+    setAiIdCounter(r.nextCounter);
+    setResult(r);
+  };
+  const previewRows = result ? result.assignedCustomers.slice(0, 5) : [];
+  const toastEl = toast && React.createElement("div", {
+    style: { position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', background: 'rgba(0,0,0,0.8)', color: '#fff', padding: '10px 18px', borderRadius: 20, fontSize: 13, zIndex: 200 }
+  }, toast);
+  return React.createElement("div", { className: "full-screen" },
+    React.createElement("div", { className: "full-header" },
+      React.createElement("button", {
+        onClick: onClose,
+        style: { background: 'none', border: 'none', cursor: 'pointer', fontSize: 15, color: 'var(--text-sub)', fontWeight: 600, padding: '4px 8px' }
+      }, "← 戻る"),
+      React.createElement("div", { style: { flex: 1, fontSize: 16, fontWeight: 700 } }, "🆔 AI分析用IDを設定")
+    ),
+    React.createElement("div", { style: { padding: 16 } },
+      React.createElement("div", {
+        className: "card", style: { marginBottom: 12, fontSize: 12.5, color: 'var(--text-sub)', lineHeight: 1.7 }
+      },
+        "各お客様に固定のAI分析用ID（例：C0331）を割り当てます。一度割り当てたIDは、並び替え・絞り込み・CSVの再出力・他の顧客の追加や削除によって変わりません。",
+        React.createElement("div", { style: { marginTop: 8, fontWeight: 700, color: 'var(--text)' } }, "⚠️ 過去に出力したCSV（C0001〜C0330）との対応について"),
+        "過去のCSVのID（C0001〜C0330）は、その時点の出力順から一時的に作られていた番号で、顧客レコードには保存されていませんでした。そのため、どの顧客が過去のどの番号だったかを確実に復元することはできません（対応未確認）。今回新しく割り当てるIDは、過去の番号と混同しないよう、C0331以降の新しい番号になります。"
+      ),
+      React.createElement("div", { className: "card", style: { marginBottom: 12, textAlign: 'center' } },
+        React.createElement("div", { style: { fontSize: 13, color: 'var(--text-sub)' } }, "ID未設定の顧客"),
+        React.createElement("div", { style: { fontSize: 28, fontWeight: 800, color: 'var(--accent)' } }, targetCount, "名")
+      ),
+      !result && React.createElement(React.Fragment, null,
+        React.createElement("button", {
+          type: "button", className: "btn btn-outline btn-full", style: { marginBottom: 10 },
+          onClick: downloadBackup
+        }, "① 💾 念のため、バックアップをダウンロード"),
+        React.createElement("button", {
+          type: "button", className: "btn btn-primary btn-full",
+          disabled: targetCount === 0,
+          onClick: runAssignment
+        }, targetCount === 0 ? "設定するIDはありません" : `② IDを設定する（${targetCount}名）`)
+      ),
+      result && React.createElement(React.Fragment, null,
+        React.createElement("div", {
+          className: "card", style: { marginBottom: 10, background: '#E8F5E9', color: '#2E7D32', fontWeight: 700, fontSize: 13 }
+        }, "✅ ", result.assignedCount, "件に新しいAI分析用IDを割り当てました"),
+        previewRows.length > 0 && React.createElement("div", { className: "card", style: { marginBottom: 10, fontSize: 12.5 } },
+          React.createElement("div", { style: { fontWeight: 700, marginBottom: 6 } }, "割り当て例（先頭", previewRows.length, "件）"),
+          previewRows.map(c => React.createElement("div", {
+            key: c.id, style: { display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid var(--border)' }
+          }, React.createElement("span", null, nexusCustomerDisplayName(c)), React.createElement("span", { style: { fontWeight: 700 } }, c.aiAnalysisId)))
+        ),
+        React.createElement("button", {
+          type: "button", className: "btn btn-primary btn-full", onClick: onComplete
+        }, "閉じる")
+      )
+    ),
+    toastEl
+  );
 }
 
 // ── 顧客一覧のAI戦略分析用データ出力：最上位の全画面 ──
@@ -15306,8 +15525,56 @@ function nexusFanFollowSummaryForCustomer(customerId, fanFollows) {
     repliedCount: records.filter(f => f.repliedAt).length
   };
 }
-function nexusCustomerAnalysisId(index) {
-  return `C${String(index + 1).padStart(4, '0')}`;
+// ── AI分析用ID（固定・永続）：顧客レコードのcustomer.aiAnalysisIdをそのまま使う ──
+// 以前はエクスポート時の配列インデックスから毎回「C0001, C0002...」を作り直していたため、
+// 絞り込み条件や顧客の追加・削除で同じ顧客でも番号が変わってしまっていた（画面で番号を
+// 確認してもCSVの番号と一致しない・再出力すると番号がずれる、という不具合の原因）。
+// customer.aiAnalysisIdはNexusAiIdMigrationScreen／新規顧客登録時に一度だけ採番され、
+// 以後は顧客レコードに固定で保存される値をそのまま使う。
+function nexusFormatAiAnalysisId(n) {
+  return `C${String(n).padStart(4, '0')}`;
+}
+// customers配列の各顧客に、既に持っているaiAnalysisId（有効かつ未重複）はそのまま残し、
+// 持っていない・不正な形式・他の顧客と重複している場合だけ、新しい採番カウンターから
+// 連番を割り当てる。カウンターは「これまでに使った最大値」を下回らないよう自動的に
+// 引き上げてから使う（インポート等で先に大きい番号を持つ顧客が混在していても安全）。
+// 既存の有効なIDには一切触れない（すでに正しく割り当てられている顧客の番号を変更しない）。
+function nexusAssignAiAnalysisIds(customers, counter) {
+  const list = customers || [];
+  const idPattern = /^C(\d{4,})$/;
+  let floor = Number(counter) || 0;
+  list.forEach(c => {
+    const m = c && typeof c.aiAnalysisId === 'string' && c.aiAnalysisId.match(idPattern);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n > floor) floor = n;
+    }
+  });
+  const seen = new Set();
+  const assignedCustomers = [];
+  const result = list.map(c => {
+    const m = c && typeof c.aiAnalysisId === 'string' && c.aiAnalysisId.match(idPattern);
+    if (m && !seen.has(c.aiAnalysisId)) {
+      seen.add(c.aiAnalysisId);
+      return c;
+    }
+    floor += 1;
+    const newId = nexusFormatAiAnalysisId(floor);
+    seen.add(newId);
+    const updated = { ...c, aiAnalysisId: newId };
+    assignedCustomers.push(updated);
+    return updated;
+  });
+  return { customers: result, nextCounter: floor, assignedCount: assignedCustomers.length, assignedCustomers };
+}
+// 検索用正規化：全角英数字・前後の空白を許容できるようにする（半角化＋trim＋小文字化）。
+function nexusNormalizeAiIdQuery(s) {
+  if (!s) return '';
+  return s.trim().replace(/[Ａ-Ｚａ-ｚ０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0)).toLowerCase();
+}
+function nexusCustomerMatchesAiId(customer, normalizedQuery) {
+  if (!normalizedQuery || !customer || !customer.aiAnalysisId) return false;
+  return customer.aiAnalysisId.toLowerCase().includes(normalizedQuery);
 }
 // メイン変換関数：生のcustomerを一切spreadせず、安全と確認したフィールドだけを詰めた
 // 新規オブジェクトを返す（sanitizePersonalDataと同じ設計方針）。
@@ -15321,7 +15588,7 @@ function nexusAnonymizeCustomerForAnalysis(customer, index, opts, ctx) {
   const activity = nexusActivityCountsForAnalysis(customer.id, context.activityLogs);
   const fanFollow = nexusFanFollowSummaryForCustomer(customer.id, context.fanFollows);
   const out = {
-    analysisId: nexusCustomerAnalysisId(index),
+    analysisId: customer.aiAnalysisId || 'C-UNASSIGNED',
     ageBand: nexusAgeBand(age),
     prefecture: nexusExtractPrefecture(customer.address),
     occupationCategory: customer.customerType === '法人' ? null : nexusOccupationCategory(customer.occupation),
@@ -17625,6 +17892,8 @@ function importJSON(file, handlers) {
         if (data.nexusServiceLinks && handlers.setNexusServiceLinks) handlers.setNexusServiceLinks(data.nexusServiceLinks);
         if (data.nexusMission && handlers.setNexusMission) handlers.setNexusMission(data.nexusMission);
         if (data.nexusSavedSearches && handlers.setNexusSavedSearches) handlers.setNexusSavedSearches(data.nexusSavedSearches);
+        if (data.nexusAiIdCounter !== undefined && handlers.setNexusAiIdCounter) handlers.setNexusAiIdCounter(data.nexusAiIdCounter);
+        if (data.nexusAiIdMigrationDone !== undefined && handlers.setNexusAiIdMigrationDone) handlers.setNexusAiIdMigrationDone(data.nexusAiIdMigrationDone);
         alert('✅ 全データを復元しました');
         return;
       }
@@ -19890,7 +20159,9 @@ function exportJSON(state) {
     nexusServices: state.nexusServices,
     nexusServiceLinks: state.nexusServiceLinks,
     nexusMission: state.nexusMission,
-    nexusSavedSearches: state.nexusSavedSearches
+    nexusSavedSearches: state.nexusSavedSearches,
+    nexusAiIdCounter: state.nexusAiIdCounter,
+    nexusAiIdMigrationDone: state.nexusAiIdMigrationDone
   }, null, 2);
   const blob = new Blob([data], {
     type: 'application/json'
@@ -34037,6 +34308,33 @@ function App() {
     dailyAction: ''
   });
   const [nexusSavedSearches, setNexusSavedSearches] = useLS('nexus_saved_searches_v1', []);
+  // AI分析用ID（固定・永続）の採番カウンター。330スタートなのは、過去にエクスポートした
+  // CSVがC0001〜C0330だったため（本セッションで確認：保存された対応表は存在せず、過去の番号との
+  // 対応は復元できない）。新しく割り当てる番号が過去の番号と絶対に衝突しないよう、
+  // 331から採番を始める。
+  const [nexusAiIdCounter, setNexusAiIdCounter] = useLS('nexus_ai_id_counter_v1', 330);
+  // 既存330件への「最初の一括付与」だけは、バックアップ→確認→実行のNexusAiIdMigrationScreenを
+  // ユーザーが明示的に完了させた時だけtrueにする（既存データへの一括変更のため自動実行しない）。
+  const [nexusAiIdMigrationDone, setNexusAiIdMigrationDone] = useLS('nexus_ai_id_migration_done_v1', false);
+  const [showAiIdMigration, setShowAiIdMigration] = useState(false);
+  const needsAiIdMigration = customers.some(c => !c.aiAnalysisId);
+  // ★意図的に「不要なら自動でmigrationDone扱いにする」処理は置かない：
+  // 一時的に顧客が0件の状態（例：全顧客削除直後）を経由しただけでmigrationDoneがtrueになってしまうと、
+  // その後にバックアップ復元等で一括インポートされた大量の顧客が確認なしに自動採番されてしまう
+  // （テストで実際に踏んだ不具合）。migrationDoneはNexusAiIdMigrationScreenの完了操作でのみtrueにする。
+  // 一括付与が完了した後は、新規顧客の登録・インポート・ファン化フォロー経由の顧客登録など、
+  // customersが更新されるあらゆる経路で、IDが未設定の顧客（1件程度の増分）が残っていれば
+  // 自動的に補完する。一括付与が完了する前は、ここでは何もしない
+  // （既存データへの大きな変更をユーザーの確認なしに行わないため）。
+  React.useEffect(() => {
+    if (!nexusAiIdMigrationDone || !needsAiIdMigration) return;
+    const r = nexusAssignAiAnalysisIds(customers, nexusAiIdCounter);
+    if (r.assignedCount > 0) {
+      setCustomers(r.customers);
+      setNexusAiIdCounter(r.nextCounter);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customers, nexusAiIdMigrationDone]);
   const [tab, setTab] = useState('dashboard');
   const [corpPlanningTargetId, setCorpPlanningTargetId] = useState('');
   const [showAiExport, setShowAiExport] = useState(false);
@@ -34228,7 +34526,9 @@ function App() {
           setNexusServices,
           setNexusServiceLinks,
           setNexusMission,
-          setNexusSavedSearches
+          setNexusSavedSearches,
+          setNexusAiIdCounter,
+          setNexusAiIdMigrationDone
         });
         e.target.value = '';
       }
@@ -34251,7 +34551,9 @@ function App() {
       nexusServices,
       nexusServiceLinks,
       nexusMission,
-      nexusSavedSearches
+      nexusSavedSearches,
+      nexusAiIdCounter,
+      nexusAiIdMigrationDone
     }),
     style: {
       fontSize: 11,
@@ -34294,7 +34596,40 @@ function App() {
     onSelect: setSelectedCustomer,
     onAdd: openNewCustomer,
     onOpenAiExport: () => setShowAiExport(true),
-    onOpenSearch: () => setShowCustomerSearch(true)
+    onOpenSearch: () => setShowCustomerSearch(true),
+    onOpenAiIdMigration: () => setShowAiIdMigration(true),
+    needsAiIdMigration: needsAiIdMigration
+  }), showAiIdMigration && /*#__PURE__*/React.createElement(NexusAiIdMigrationScreen, {
+    customers: customers,
+    setCustomers: setCustomers,
+    aiIdCounter: nexusAiIdCounter,
+    setAiIdCounter: setNexusAiIdCounter,
+    backupState: {
+      customers,
+      memos,
+      kpiSettings,
+      tasks,
+      activityLogs,
+      opportunities,
+      nexusFanCampaigns,
+      nexusFanFollows,
+      clients,
+      vision,
+      suspects,
+      logs,
+      sales,
+      nexusServices,
+      nexusServiceLinks,
+      nexusMission,
+      nexusSavedSearches,
+      nexusAiIdCounter,
+      nexusAiIdMigrationDone
+    },
+    onClose: () => setShowAiIdMigration(false),
+    onComplete: () => {
+      setNexusAiIdMigrationDone(true);
+      setShowAiIdMigration(false);
+    }
   }), showAiExport && /*#__PURE__*/React.createElement(NexusCustomerAiExportScreen, {
     customers: customers,
     activityLogs: activityLogs,
