@@ -7214,7 +7214,7 @@ function NexusFanFollowRecordForm({
     onClick: () => setBridgeOpen(true)
   }, "💬 相談になった → 相談・問合せへ登録");
   // 面談・提案・成約・紹介はボタンを置かず、常に自動判定した結果だけを読み取り専用で表示する
-  const downstreamLabels = [stage.metAt && `面談 ${stage.metAt}`, stage.proposedAt && `提案 ${stage.proposedAt}`, stage.closedAt && `成約 ${stage.closedAt}`, stage.referredAt && `紹介 ${stage.referredAt}`].filter(Boolean);
+  const downstreamLabels = [stage.metAt && `面談 ${stage.metAt}`, stage.proposedAt && `提案 ${stage.proposedAt}`, stage.closedAt && `成約 ${stage.closedAt}`].filter(Boolean);
   const downstreamSection = downstreamLabels.length > 0 && React.createElement("div", {
     style: {
       fontSize: 12,
@@ -7433,7 +7433,7 @@ function NexusFanFollowRecordList({
   const badgeStyle = { fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 10, background: '#E3F2FD', color: '#1565C0' };
   const row = f => {
     const stage = nexusFanFollowDownstreamStage(f, activityLogs, customers);
-    const badges = [f.readAt && '既読', f.repliedAt && '返信', stage.consultedAt && '相談', stage.metAt && '面談', stage.proposedAt && '提案', stage.closedAt && '成約', stage.referredAt && '紹介'].filter(Boolean);
+    const badges = [f.readAt && '既読', f.repliedAt && '返信', stage.consultedAt && '相談', stage.metAt && '面談', stage.proposedAt && '提案', stage.closedAt && '成約'].filter(Boolean);
     return React.createElement("div", {
       key: f.id,
       className: "card",
@@ -7518,7 +7518,7 @@ function NexusFanCampaignDashboardPanel({ campaign, follows, activityLogs, custo
     key: label,
     className: "stat-card"
   }, React.createElement("div", { className: "stat-num" }, value), React.createElement("div", { className: "stat-label" }, label));
-  const tiles = [tile('目標人数', campaign.targetCount || '—'), tile('送信済', campaign.targetCount ? `${dash.sent}/${campaign.targetCount}` : dash.sent), tile('既読', dash.read), tile('返信', dash.replied), tile('返信率', fmtRate(dash.replyRate)), tile('相談', dash.consulted), tile('相談化率', fmtRate(dash.consultRate)), tile('面談', dash.met), tile('提案', dash.proposed), tile('成約', dash.closed), tile('紹介', dash.referred), tile('見込売上', `${dash.expectedRevenue.toLocaleString()}円`), tile('確定売上', `${dash.confirmedRevenue.toLocaleString()}円`)];
+  const tiles = [tile('目標人数', campaign.targetCount || '—'), tile('送信済', campaign.targetCount ? `${dash.sent}/${campaign.targetCount}` : dash.sent), tile('既読', dash.read), tile('返信', dash.replied), tile('返信率', fmtRate(dash.replyRate)), tile('相談', dash.consulted), tile('相談化率', fmtRate(dash.consultRate)), tile('面談', dash.met), tile('提案', dash.proposed), tile('成約', dash.closed), tile('見込売上', `${dash.expectedRevenue.toLocaleString()}円`), tile('確定売上', `${dash.confirmedRevenue.toLocaleString()}円`)];
   const statGrid = React.createElement("div", { className: "stat-grid" }, tiles);
   const funnelStages = [['送信', dash.sent], ['返信', dash.replied], ['相談', dash.consulted], ['面談', dash.met], ['提案', dash.proposed], ['成約', dash.closed]];
   const funnelMax = Math.max(1, dash.sent);
@@ -7700,9 +7700,9 @@ function NexusFanFollowScreen({
 }
 // ── ファン化フォローのAI戦略分析用データ出力：CSV変換・ダウンロード・プロンプトヘルパー ──
 function nexusFanFollowAnalysisCsvRows(rows) {
-  const header = ['グループ', '名称', 'キャンペーン名', '送信数', '既読数', '返信数', '返信率', '相談数', '相談化率', '面談数', '提案数', '成約数', '紹介数', '見込売上(円)', '確定売上(円)'];
+  const header = ['グループ', '名称', 'キャンペーン名', '送信数', '既読数', '返信数', '返信率', '相談数', '相談化率', '面談数', '提案数', '成約数', '見込売上(円)', '確定売上(円)'];
   const pct = r => r === null || r === undefined ? '' : `${Math.round(r * 100)}%`;
-  const rowsOut = rows.map(r => [r.group, r.name, r.campaignName, r.sent, r.read, r.replied, pct(r.replyRate), r.consulted, pct(r.consultRate), r.met, r.proposed, r.closed, r.referred, r.expectedRevenue, r.confirmedRevenue]);
+  const rowsOut = rows.map(r => [r.group, r.name, r.campaignName, r.sent, r.read, r.replied, pct(r.replyRate), r.consulted, pct(r.consultRate), r.met, r.proposed, r.closed, r.expectedRevenue, r.confirmedRevenue]);
   return [header, ...rowsOut];
 }
 function nexusFanFollowAnalysisCsvText(rows) {
@@ -7826,7 +7826,7 @@ function NexusFanFollowAiExportScreen({ campaigns, follows, activityLogs, custom
     ['送信', exportData.overall.sent], ['既読', exportData.overall.read], ['返信', exportData.overall.replied],
     ['返信率', fmtPct(exportData.overall.replyRate)], ['相談', exportData.overall.consulted], ['相談化率', fmtPct(exportData.overall.consultRate)],
     ['面談', exportData.overall.met], ['提案', exportData.overall.proposed], ['成約', exportData.overall.closed],
-    ['紹介', exportData.overall.referred], ['見込売上', `${exportData.overall.expectedRevenue.toLocaleString()}円`], ['確定売上', `${exportData.overall.confirmedRevenue.toLocaleString()}円`]
+    ['見込売上', `${exportData.overall.expectedRevenue.toLocaleString()}円`], ['確定売上', `${exportData.overall.confirmedRevenue.toLocaleString()}円`]
   ].map(([label, value]) => React.createElement("div", { key: label, className: "stat-card" },
     React.createElement("div", { className: "stat-num" }, value), React.createElement("div", { className: "stat-label" }, label))));
   const campaignPreviewCard = c => React.createElement("div", {
@@ -14809,25 +14809,23 @@ function nexusFanActiveFollows(follows) {
 // まだ案件（opportunity）を持たない新規見込客に相談・問合せを登録しても案件が自動作成されない
 // ため、relatedOpportunityIdでの照合では「面談・成約になったのに検出されない」不具合を生む。
 // customerId＋相談ログのoccurredAt以降、という条件でactivityLogsを直接検索する。
+// ★紹介（referredAt）は意図的に判定しない：紹介は「誰が紹介したか／いつ紹介を受けたか」しか
+// データを持たず、「どの送信・どのやり取りがきっかけだったか」を示す情報が存在しない。
+// 以前は「この記録の送信日以降に、その顧客が誰かを紹介していたら『紹介』にカウントする」という
+// 日付の前後関係だけの判定をしていたが、実際には無関係な紹介（例：別の機会に対面で紹介された）
+// まで「この記事がきっかけの紹介」であるかのように表示してしまい、かつ同じ顧客に複数回送信して
+// いた場合は同じ1件の紹介が複数の送信記録に重複集計される不具合があった。不明な因果関係を
+// 推測しないという方針に基づき、この判定自体を廃止した（紹介実績そのものは既存の紹介実績KPI
+// ／顧客詳細検索で確認できる。ファン化フォロー側だけが持つ「この送信が原因」という主張をやめる）。
 function nexusFanFollowDownstreamStage(record, activityLogs, customers) {
   const result = {
     consultedAt: null,
     metAt: null,
     proposedAt: null,
     closedAt: null,
-    referredAt: null,
     confirmedRevenue: null
   };
   if (!record) return result;
-  // 紹介は相談への橋渡し（relatedActivityLogId）とは独立して起こりうる（相談を経由せず
-  // 直接紹介されるケースもあるため）。relatedActivityLogIdの有無に関わらず判定する。
-  // 既存の紹介獲得数KPIが信頼しているreferredAt（紹介を受けた日）をそのまま再利用し、
-  // このファン化フォローの送信日以降の紹介だけを対象にする（それより前の紹介と誤って
-  // 結びつけない）。
-  if (record.customerId && record.sentDate) {
-    const referredCustomer = (customers || []).find(c => c.referredBy === record.customerId && c.referredAt && c.referredAt >= record.sentDate);
-    if (referredCustomer) result.referredAt = referredCustomer.referredAt;
-  }
   if (!record.relatedActivityLogId) return result;
   const active = nexusActiveLogs(activityLogs);
   const inquiryLog = active.find(a => a.id === record.relatedActivityLogId);
@@ -14863,7 +14861,6 @@ function nexusFanFollowMetricsGroup(recordsWithStage) {
   const met = recordsWithStage.filter(r => r.stage.metAt).length;
   const proposed = recordsWithStage.filter(r => r.stage.proposedAt).length;
   const closed = recordsWithStage.filter(r => r.stage.closedAt).length;
-  const referred = recordsWithStage.filter(r => r.stage.referredAt).length;
   const expectedRevenue = recordsWithStage.reduce((s, r) => s + r.expectedRevenue, 0);
   const confirmedRevenue = recordsWithStage.reduce((s, r) => s + (r.stage.confirmedRevenue || 0), 0);
   const rate = (num, den) => den > 0 ? num / den : null;
@@ -14875,7 +14872,6 @@ function nexusFanFollowMetricsGroup(recordsWithStage) {
     met,
     proposed,
     closed,
-    referred,
     expectedRevenue,
     confirmedRevenue,
     replyRate: rate(replied, sent),
@@ -15010,7 +15006,7 @@ function nexusFanFollowExportRows(exportData) {
     group, name, campaignName,
     sent: m.sent, read: m.read, replied: m.replied, replyRate: m.replyRate,
     consulted: m.consulted, consultRate: m.consultRate, met: m.met, proposed: m.proposed,
-    closed: m.closed, referred: m.referred, expectedRevenue: m.expectedRevenue, confirmedRevenue: m.confirmedRevenue
+    closed: m.closed, expectedRevenue: m.expectedRevenue, confirmedRevenue: m.confirmedRevenue
   });
   (exportData.campaigns || []).forEach(c => {
     pushRow('キャンペーン全体', c.name, c.name, c.metrics);
