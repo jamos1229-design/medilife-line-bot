@@ -2369,7 +2369,13 @@ const calcStoredAge = (age, ageYear) => {
 // 自動採番プレースホルダー名のまま生年月日／年齢が未入力のものも「未使用の枠」とみなす
 // （候補チップで名前を確定した後もこの古い空き枠が残ってしまい、実在の子と重複して
 // カウントされてしまう不具合があったため）。
-const nexusHasRealChildIdentity = sp => {
+// 既存の顧客と連携（linkedCustomerId）している子は、名前・生年月日をサスペクト側では
+// なく本人の顧客レコードにしか持たないことが多く、サスペクト側だけを見ると「実在しない
+// 空き枠」と誤判定されてしまう（教育資金プランニング等で登録済みの子が「未登録」表示に
+// なってしまう不具合の原因だった）ため、連携先の顧客レコードも確認する。
+const nexusHasRealChildIdentity = (sp, customers) => {
+  const linked = sp.linkedCustomerId && customers ? customers.find(x => x.id === sp.linkedCustomerId) : null;
+  if (linked) return true;
   const name = (sp.name || '').trim();
   const hasAge = !!(sp.birthdate || sp.age || sp.ageYear);
   if (hasAge) return true;
@@ -25981,6 +25987,20 @@ function nexusPortfolioListTotal(list) {
 function nexusPortfolioCorporateDcTotal(list) {
   return (list || []).reduce((s, r) => s + (parseFloat(r.currentValue) || 0), 0);
 }
+// iDeCo（個人型確定拠出年金）も企業型DCと同じ考え方で、評価額（currentValue）を使う。
+function nexusPortfolioIdecoTotal(list) {
+  return (list || []).reduce((s, r) => s + (parseFloat(r.currentValue) || 0), 0);
+}
+// 小規模企業共済・国民年金基金（自営業者・法人役員向けの退職金・年金準備制度）。
+// 運用実績の評価額という概念がない制度もあるため、現評価額が未入力の口座は掛金累計額
+// （原資）を代わりに使う（企業型DC・iDeCoと異なり、無入力を0円として切り捨てない）。
+function nexusPortfolioMutualPensionTotal(list) {
+  return (list || []).reduce((s, r) => {
+    const currentValue = parseFloat(r.currentValue) || 0;
+    const principal = parseFloat(r.principal) || 0;
+    return s + (currentValue > 0 ? currentValue : principal);
+  }, 0);
+}
 
 // 契約1件のJPY換算額（外貨建てはレートがあれば換算、なければ換算不可として扱う）
 // 「現在の解約返戻金」は、外貨建て契約でも解約時は円で払い戻される実務に合わせて、
@@ -26165,6 +26185,8 @@ function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
   });
   const manualFundsStocksJpy = parseFloat(portfolioInputs.fundsStocksJpy) || 0;
   const corporateDcJpy = parseFloat(portfolioInputs.corporateDcJpy) || 0;
+  const idecoJpy = parseFloat(portfolioInputs.idecoJpy) || 0;
+  const mutualPensionJpy = parseFloat(portfolioInputs.mutualPensionJpy) || 0;
   const depositsJpy = parseFloat(portfolioInputs.depositsJpy) || 0;
   const bondsJpy = parseFloat(portfolioInputs.bondsJpy) || 0;
   const fxJpy = parseFloat(portfolioInputs.fxJpy) || 0;
@@ -26184,7 +26206,7 @@ function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
   const miscOtherJpy = golfMembershipJpy + carJpy + householdItemsJpy + artJpy + graveJpy + othersJpy;
   // 預貯金・債券・FX・不動産・退職金・相続・自社株・その他は、円建てはそのままの金額として扱う
   // （不動産等は評価額を円で入力する運用のため、外貨建てという概念を想定していない）。
-  const manualJpyAssetsTotal = depositsJpy + bondsJpy + fxJpy + cryptoJpy + realEstateJpy + retirementJpy + inheritanceJpy + corpOtherJpy + miscOtherJpy + corporateDcJpy;
+  const manualJpyAssetsTotal = depositsJpy + bondsJpy + fxJpy + cryptoJpy + realEstateJpy + retirementJpy + inheritanceJpy + corpOtherJpy + miscOtherJpy + corporateDcJpy + idecoJpy + mutualPensionJpy;
   const assetClassChart = [{
     label: '現金・預貯金',
     value: Math.round(depositsJpy),
@@ -26197,6 +26219,14 @@ function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
     label: '企業型DC（確定拠出年金）',
     value: Math.round(corporateDcJpy),
     color: '#0D9488'
+  }, {
+    label: 'iDeCo（個人型確定拠出年金）',
+    value: Math.round(idecoJpy),
+    color: '#0F766E'
+  }, {
+    label: '小規模企業共済・国民年金基金',
+    value: Math.round(mutualPensionJpy),
+    color: '#059669'
   }, {
     label: '債券',
     value: Math.round(bondsJpy),
@@ -29872,6 +29902,48 @@ function NexusPlanningSection({
   const removeCorporateDc = id => updateLpPortfolio({
     corporateDc: (customer.lp && customer.lp.portfolio && customer.lp.portfolio.corporateDc || []).filter(d => d.id !== id)
   });
+  // iDeCo（個人型確定拠出年金）：企業型DCと違い掛金は全額本人負担のため「うち本人負担額」欄は持たない。
+  const addIdeco = () => updateLpPortfolio({
+    ideco: [...(customer.lp && customer.lp.portfolio && customer.lp.portfolio.ideco || []), {
+      id: uid(),
+      name: '',
+      owner: '',
+      principal: '',
+      currentValue: '',
+      monthlyContribution: '',
+      funds: ''
+    }]
+  });
+  const updateIdeco = (id, patch) => updateLpPortfolio({
+    ideco: (customer.lp && customer.lp.portfolio && customer.lp.portfolio.ideco || []).map(d => d.id === id ? {
+      ...d,
+      ...patch
+    } : d)
+  });
+  const removeIdeco = id => updateLpPortfolio({
+    ideco: (customer.lp && customer.lp.portfolio && customer.lp.portfolio.ideco || []).filter(d => d.id !== id)
+  });
+  // 小規模企業共済・国民年金基金（自営業者・法人役員向け）：運用商品の銘柄という概念がないため
+  // 「保有ファンド」欄は持たない。制度名欄に「小規模企業共済」「国民年金基金」等を記入してもらう。
+  const addMutualPension = () => updateLpPortfolio({
+    mutualPension: [...(customer.lp && customer.lp.portfolio && customer.lp.portfolio.mutualPension || []), {
+      id: uid(),
+      name: '',
+      owner: '',
+      principal: '',
+      currentValue: '',
+      monthlyContribution: ''
+    }]
+  });
+  const updateMutualPension = (id, patch) => updateLpPortfolio({
+    mutualPension: (customer.lp && customer.lp.portfolio && customer.lp.portfolio.mutualPension || []).map(d => d.id === id ? {
+      ...d,
+      ...patch
+    } : d)
+  });
+  const removeMutualPension = id => updateLpPortfolio({
+    mutualPension: (customer.lp && customer.lp.portfolio && customer.lp.portfolio.mutualPension || []).filter(d => d.id !== id)
+  });
   // 預貯金・債券・FX・不動産は、株式・投資信託と違って数量×単価の評価損益計算が不要な
   // 「名称＋残高／評価額」だけのシンプルな銘柄別リストのため、共通の追加・更新・削除処理にまとめる。
   const makePortfolioListOps = key => ({
@@ -30072,8 +30144,8 @@ function NexusPlanningSection({
   // お子様も、配偶者側の顧客レコードにだけ登録されている場合があるため合算する（名前が同じ子は重複除外）。
   // 実在の情報を持たない「空の子供枠」（過去バージョンの名残等）は、実在の子として
   // 数えると教育資金プランニング等で誤って表示されてしまうため、集計対象から除外する。
-  const ownKids = (customer.suspects || []).filter(sp => sp.relation === '子供' && nexusHasRealChildIdentity(sp));
-  const spouseKids = linkedSpouseCustomer ? (linkedSpouseCustomer.suspects || []).filter(sp => sp.relation === '子供' && nexusHasRealChildIdentity(sp)) : [];
+  const ownKids = (customer.suspects || []).filter(sp => sp.relation === '子供' && nexusHasRealChildIdentity(sp, customers));
+  const spouseKids = linkedSpouseCustomer ? (linkedSpouseCustomer.suspects || []).filter(sp => sp.relation === '子供' && nexusHasRealChildIdentity(sp, customers)) : [];
   const kids = [...ownKids, ...spouseKids.filter(sk => !ownKids.some(k => (k.name || '').trim() && (k.name || '').trim() === (sk.name || '').trim()))];
   const kidsSummary = kids.length ? kids.map(k => {
     const a = nexusResolveMemberAge(k, customers);
@@ -30165,6 +30237,8 @@ function NexusPlanningSection({
   const portfolioInputsFor = p => ({
     fundsStocksJpy: nexusPortfolioFundsStocksTotal(p),
     corporateDcJpy: nexusPortfolioCorporateDcTotal(p.corporateDc),
+    idecoJpy: nexusPortfolioIdecoTotal(p.ideco),
+    mutualPensionJpy: nexusPortfolioMutualPensionTotal(p.mutualPension),
     depositsJpy: nexusPortfolioListTotal(p.deposits),
     bondsJpy: nexusPortfolioListTotal(p.bonds),
     fxJpy: nexusPortfolioListTotal(p.fx),
@@ -30533,6 +30607,34 @@ function NexusPlanningSection({
       <div class="print-section">
         <h3>企業型DC（確定拠出年金）一覧${isCoupleScope ? '｜夫婦合算' : ''}</h3>
         <table><tr><th>制度名・勤務先</th><th>名義</th><th>原資</th><th>現評価額</th><th>評価損益</th><th>月の積立金額</th><th>うち本人負担額</th><th>保有ファンド</th></tr>${dcRows || '<tr><td colspan="8">登録なし</td></tr>'}</table>
+      </div>`;
+    })()}
+      ${(() => {
+      const idecoAll = isCoupleScope ? [...(portfolio.ideco || []), ...(spousePortfolioInputs.ideco || [])] : portfolio.ideco || [];
+      if (idecoAll.length === 0) return '';
+      const idecoRows = idecoAll.map(dc => {
+        const principal = parseFloat(dc.principal) || 0;
+        const currentValue = parseFloat(dc.currentValue) || 0;
+        const gain = currentValue - principal;
+        const hasGain = principal > 0 && currentValue > 0;
+        return `<tr><td>${escapeHtmlForPrint(dc.name)}</td><td>${escapeHtmlForPrint(dc.owner || '—')}</td><td>${nexusHasValue(dc.principal) ? Number(dc.principal).toLocaleString() + '円' : '未入力'}</td><td>${nexusHasValue(dc.currentValue) ? Number(dc.currentValue).toLocaleString() + '円' : '未入力'}</td><td>${hasGain ? (gain >= 0 ? '+' : '') + Math.round(gain).toLocaleString() + '円' : '未算出'}</td><td>${nexusHasValue(dc.monthlyContribution) ? Number(dc.monthlyContribution).toLocaleString() + '円' : '未入力'}</td><td>${escapeHtmlForPrint(dc.funds || '—')}</td></tr>`;
+      }).join('');
+      return `
+      <div class="print-section">
+        <h3>iDeCo（個人型確定拠出年金）一覧${isCoupleScope ? '｜夫婦合算' : ''}</h3>
+        <table><tr><th>制度名・運営管理機関</th><th>名義</th><th>原資</th><th>現評価額</th><th>評価損益</th><th>掛金月額</th><th>保有ファンド</th></tr>${idecoRows || '<tr><td colspan="7">登録なし</td></tr>'}</table>
+      </div>`;
+    })()}
+      ${(() => {
+      const mpAll = isCoupleScope ? [...(portfolio.mutualPension || []), ...(spousePortfolioInputs.mutualPension || [])] : portfolio.mutualPension || [];
+      if (mpAll.length === 0) return '';
+      const mpRows = mpAll.map(dc => {
+        return `<tr><td>${escapeHtmlForPrint(dc.name)}</td><td>${escapeHtmlForPrint(dc.owner || '—')}</td><td>${nexusHasValue(dc.principal) ? Number(dc.principal).toLocaleString() + '円' : '未入力'}</td><td>${nexusHasValue(dc.currentValue) ? Number(dc.currentValue).toLocaleString() + '円' : '未入力'}</td><td>${nexusHasValue(dc.monthlyContribution) ? Number(dc.monthlyContribution).toLocaleString() + '円' : '未入力'}</td></tr>`;
+      }).join('');
+      return `
+      <div class="print-section">
+        <h3>小規模企業共済・国民年金基金一覧${isCoupleScope ? '｜夫婦合算' : ''}</h3>
+        <table><tr><th>制度名</th><th>名義</th><th>掛金累計額</th><th>現在の評価額（任意）</th><th>掛金月額</th></tr>${mpRows || '<tr><td colspan="5">登録なし</td></tr>'}</table>
       </div>`;
     })()}
       ${(() => {
@@ -31024,6 +31126,27 @@ function NexusPlanningSection({
           const hasGain = principal > 0 && currentValue > 0;
           return [dc.name || '', dc.owner || '', nexusHasValue(dc.principal) ? Number(dc.principal) : '未入力', nexusHasValue(dc.currentValue) ? Number(dc.currentValue) : '未入力', hasGain ? Math.round(currentValue - principal) : '未算出', nexusHasValue(dc.monthlyContribution) ? Number(dc.monthlyContribution) : '未入力', nexusHasValue(dc.employeeContribution) ? Number(dc.employeeContribution) : '', dc.funds || ''];
         }), [3, 4, 5, 6, 7]);
+        row += 1;
+      }
+      const idecoAll = isCoupleScope ? [...(portfolio.ideco || []), ...(spousePortfolioInputs.ideco || [])] : portfolio.ideco || [];
+      if (idecoAll.length > 0) {
+        row = nexusXlsxSubTitle(ws, row, `iDeCo（個人型確定拠出年金）一覧${scopeNote}`, 7);
+        row = nexusXlsxHeaderRow(ws, row, ['制度名・運営管理機関', '名義', '原資', '現評価額', '評価損益', '掛金月額', '保有ファンド']);
+        row = nexusXlsxDataRows(ws, row, idecoAll.map(dc => {
+          const principal = parseFloat(dc.principal) || 0;
+          const currentValue = parseFloat(dc.currentValue) || 0;
+          const hasGain = principal > 0 && currentValue > 0;
+          return [dc.name || '', dc.owner || '', nexusHasValue(dc.principal) ? Number(dc.principal) : '未入力', nexusHasValue(dc.currentValue) ? Number(dc.currentValue) : '未入力', hasGain ? Math.round(currentValue - principal) : '未算出', nexusHasValue(dc.monthlyContribution) ? Number(dc.monthlyContribution) : '未入力', dc.funds || ''];
+        }), [3, 4, 5, 6]);
+        row += 1;
+      }
+      const mpAll = isCoupleScope ? [...(portfolio.mutualPension || []), ...(spousePortfolioInputs.mutualPension || [])] : portfolio.mutualPension || [];
+      if (mpAll.length > 0) {
+        row = nexusXlsxSubTitle(ws, row, `小規模企業共済・国民年金基金一覧${scopeNote}`, 5);
+        row = nexusXlsxHeaderRow(ws, row, ['制度名', '名義', '掛金累計額', '現在の評価額（任意）', '掛金月額']);
+        row = nexusXlsxDataRows(ws, row, mpAll.map(dc => {
+          return [dc.name || '', dc.owner || '', nexusHasValue(dc.principal) ? Number(dc.principal) : '未入力', nexusHasValue(dc.currentValue) ? Number(dc.currentValue) : '未入力', nexusHasValue(dc.monthlyContribution) ? Number(dc.monthlyContribution) : '未入力'];
+        }), [3, 4, 5]);
         row += 1;
       }
       const catList = [['預貯金', portfolio.deposits, spousePortfolioInputs.deposits], ['債券', portfolio.bonds, spousePortfolioInputs.bonds], ['FX', portfolio.fx, spousePortfolioInputs.fx], ['仮想通貨', portfolio.crypto, spousePortfolioInputs.crypto], ['不動産', portfolio.realEstate, spousePortfolioInputs.realEstate], ['その他資産', portfolio.others, spousePortfolioInputs.others]];
@@ -32998,6 +33121,318 @@ function NexusPlanningSection({
     },
     onClick: addCorporateDc
   }, "＋ 企業型DCを追加")), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 13,
+      color: 'var(--text)',
+      marginBottom: 10
+    }
+  }, "iDeCo（個人型確定拠出年金）"), (portfolio.ideco || []).length === 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text-sub)',
+      marginBottom: 8
+    }
+  }, "登録なし"), (portfolio.ideco || []).map(dc => {
+    const dcPrincipal = parseFloat(dc.principal) || 0;
+    const dcCurrentValue = parseFloat(dc.currentValue) || 0;
+    const dcGain = dcCurrentValue - dcPrincipal;
+    return /*#__PURE__*/React.createElement("div", {
+      key: dc.id,
+      style: {
+        border: '1px solid var(--border)',
+        borderRadius: 8,
+        padding: 10,
+        marginBottom: 8,
+        background: 'var(--bg)'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 6,
+        alignItems: 'center',
+        marginBottom: 6
+      }
+    }, /*#__PURE__*/React.createElement("input", {
+      className: "form-input",
+      style: {
+        flex: 1
+      },
+      placeholder: "制度名・運営管理機関（例：〇〇証券iDeCo）",
+      value: dc.name || '',
+      onChange: e => updateIdeco(dc.id, {
+        name: e.target.value
+      })
+    }), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => removeIdeco(dc.id),
+      style: {
+        background: 'none',
+        border: 'none',
+        color: 'var(--danger)',
+        fontSize: 18,
+        cursor: 'pointer',
+        flexShrink: 0
+      }
+    }, "×")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        flexWrap: 'wrap',
+        fontSize: 12,
+        marginBottom: 6
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        whiteSpace: 'nowrap'
+      }
+    }, "原資（拠出累計額）", /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      className: "form-input",
+      style: {
+        width: 100
+      },
+      value: dc.principal || '',
+      onChange: e => updateIdeco(dc.id, {
+        principal: e.target.value
+      })
+    }), "円"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        whiteSpace: 'nowrap'
+      }
+    }, "現評価額", /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      className: "form-input",
+      style: {
+        width: 100
+      },
+      value: dc.currentValue || '',
+      onChange: e => updateIdeco(dc.id, {
+        currentValue: e.target.value
+      })
+    }), "円"), /*#__PURE__*/React.createElement(NexusAssetOwnerSelect, {
+      value: dc.owner,
+      onChange: v => updateIdeco(dc.id, {
+        owner: v
+      })
+    })), dcPrincipal > 0 && dcCurrentValue > 0 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12,
+        marginBottom: 6
+      }
+    }, "評価損益：", /*#__PURE__*/React.createElement("b", {
+      style: {
+        color: dcGain >= 0 ? 'var(--success)' : 'var(--danger)'
+      }
+    }, dcGain >= 0 ? '+' : '', Math.round(dcGain).toLocaleString(), "円")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        flexWrap: 'wrap',
+        fontSize: 12,
+        marginBottom: 6
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        whiteSpace: 'nowrap'
+      }
+    }, "掛金月額", /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      className: "form-input",
+      style: {
+        width: 100
+      },
+      value: dc.monthlyContribution || '',
+      onChange: e => updateIdeco(dc.id, {
+        monthlyContribution: e.target.value
+      })
+    }), "円")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: 'var(--text-sub)',
+        marginBottom: 3
+      }
+    }, "保有ファンド"), /*#__PURE__*/React.createElement("input", {
+      type: "text",
+      className: "form-input",
+      style: {
+        fontSize: 12
+      },
+      placeholder: "例：外国株式インデックス、国内債券 等",
+      value: dc.funds || '',
+      onChange: e => updateIdeco(dc.id, {
+        funds: e.target.value
+      })
+    }));
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline",
+    style: {
+      fontSize: 12,
+      padding: '8px 12px'
+    },
+    onClick: addIdeco
+  }, "＋ iDeCoを追加")), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 13,
+      color: 'var(--text)',
+      marginBottom: 10
+    }
+  }, "小規模企業共済・国民年金基金"), (portfolio.mutualPension || []).length === 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text-sub)',
+      marginBottom: 8
+    }
+  }, "登録なし"), (portfolio.mutualPension || []).map(dc => {
+    const dcPrincipal = parseFloat(dc.principal) || 0;
+    const dcCurrentValue = parseFloat(dc.currentValue) || 0;
+    const dcGain = dcCurrentValue - dcPrincipal;
+    return /*#__PURE__*/React.createElement("div", {
+      key: dc.id,
+      style: {
+        border: '1px solid var(--border)',
+        borderRadius: 8,
+        padding: 10,
+        marginBottom: 8,
+        background: 'var(--bg)'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 6,
+        alignItems: 'center',
+        marginBottom: 6
+      }
+    }, /*#__PURE__*/React.createElement("input", {
+      className: "form-input",
+      style: {
+        flex: 1
+      },
+      placeholder: "制度名（例：小規模企業共済／国民年金基金）",
+      value: dc.name || '',
+      onChange: e => updateMutualPension(dc.id, {
+        name: e.target.value
+      })
+    }), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => removeMutualPension(dc.id),
+      style: {
+        background: 'none',
+        border: 'none',
+        color: 'var(--danger)',
+        fontSize: 18,
+        cursor: 'pointer',
+        flexShrink: 0
+      }
+    }, "×")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        flexWrap: 'wrap',
+        fontSize: 12,
+        marginBottom: 6
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        whiteSpace: 'nowrap'
+      }
+    }, "掛金累計額", /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      className: "form-input",
+      style: {
+        width: 100
+      },
+      value: dc.principal || '',
+      onChange: e => updateMutualPension(dc.id, {
+        principal: e.target.value
+      })
+    }), "円"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        whiteSpace: 'nowrap'
+      }
+    }, "現在の評価額（任意）", /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      className: "form-input",
+      style: {
+        width: 100
+      },
+      value: dc.currentValue || '',
+      onChange: e => updateMutualPension(dc.id, {
+        currentValue: e.target.value
+      })
+    }), "円"), /*#__PURE__*/React.createElement(NexusAssetOwnerSelect, {
+      value: dc.owner,
+      onChange: v => updateMutualPension(dc.id, {
+        owner: v
+      })
+    })), dcPrincipal > 0 && dcCurrentValue > 0 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12,
+        marginBottom: 6
+      }
+    }, "評価損益：", /*#__PURE__*/React.createElement("b", {
+      style: {
+        color: dcGain >= 0 ? 'var(--success)' : 'var(--danger)'
+      }
+    }, dcGain >= 0 ? '+' : '', Math.round(dcGain).toLocaleString(), "円")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        flexWrap: 'wrap',
+        fontSize: 12
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        whiteSpace: 'nowrap'
+      }
+    }, "掛金月額", /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      className: "form-input",
+      style: {
+        width: 100
+      },
+      value: dc.monthlyContribution || '',
+      onChange: e => updateMutualPension(dc.id, {
+        monthlyContribution: e.target.value
+      })
+    }), "円")));
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline",
+    style: {
+      fontSize: 12,
+      padding: '8px 12px'
+    },
+    onClick: addMutualPension
+  }, "＋ 小規模企業共済・国民年金基金を追加")), /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement(NexusSimpleAssetList, {
     title: "債券",
