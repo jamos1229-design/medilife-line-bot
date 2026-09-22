@@ -25976,6 +25976,11 @@ function nexusPortfolioFundsStocksTotal(portfolioObj) {
 function nexusPortfolioListTotal(list) {
   return (list || []).reduce((s, r) => s + (parseFloat(r.value) || 0), 0);
 }
+// 企業型DC（確定拠出年金）は口座ごとに「原資（拠出累計額）」と「現評価額」を別々に持つため、
+// 資産クラス別集計・総資産には評価額（currentValue）を使う（原資はあくまで拠出実績の記録用）。
+function nexusPortfolioCorporateDcTotal(list) {
+  return (list || []).reduce((s, r) => s + (parseFloat(r.currentValue) || 0), 0);
+}
 
 // 契約1件のJPY換算額（外貨建てはレートがあれば換算、なければ換算不可として扱う）
 // 「現在の解約返戻金」は、外貨建て契約でも解約時は円で払い戻される実務に合わせて、
@@ -26159,6 +26164,7 @@ function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
     if ((ct.currency || '円') === '円') currencyJpyJpy += amount;else currencyForeignJpy += amount;
   });
   const manualFundsStocksJpy = parseFloat(portfolioInputs.fundsStocksJpy) || 0;
+  const corporateDcJpy = parseFloat(portfolioInputs.corporateDcJpy) || 0;
   const depositsJpy = parseFloat(portfolioInputs.depositsJpy) || 0;
   const bondsJpy = parseFloat(portfolioInputs.bondsJpy) || 0;
   const fxJpy = parseFloat(portfolioInputs.fxJpy) || 0;
@@ -26178,7 +26184,7 @@ function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
   const miscOtherJpy = golfMembershipJpy + carJpy + householdItemsJpy + artJpy + graveJpy + othersJpy;
   // 預貯金・債券・FX・不動産・退職金・相続・自社株・その他は、円建てはそのままの金額として扱う
   // （不動産等は評価額を円で入力する運用のため、外貨建てという概念を想定していない）。
-  const manualJpyAssetsTotal = depositsJpy + bondsJpy + fxJpy + cryptoJpy + realEstateJpy + retirementJpy + inheritanceJpy + corpOtherJpy + miscOtherJpy;
+  const manualJpyAssetsTotal = depositsJpy + bondsJpy + fxJpy + cryptoJpy + realEstateJpy + retirementJpy + inheritanceJpy + corpOtherJpy + miscOtherJpy + corporateDcJpy;
   const assetClassChart = [{
     label: '現金・預貯金',
     value: Math.round(depositsJpy),
@@ -26187,6 +26193,10 @@ function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
     label: '投資信託・株式等',
     value: Math.round(manualFundsStocksJpy),
     color: '#2563EB'
+  }, {
+    label: '企業型DC（確定拠出年金）',
+    value: Math.round(corporateDcJpy),
+    color: '#0D9488'
   }, {
     label: '債券',
     value: Math.round(bondsJpy),
@@ -29838,6 +29848,30 @@ function NexusPlanningSection({
   const removeFund = id => updateLpPortfolio({
     funds: (customer.lp && customer.lp.portfolio && customer.lp.portfolio.funds || []).filter(f => f.id !== id)
   });
+  // 企業型DC（確定拠出年金）：転職等で複数の口座を持つケースがあるため銘柄別と同じ配列形式で持つ。
+  // 株式・投資信託と違い口数×基準価額の自動評価はせず、原資・現評価額を直接入力してもらう
+  // （企業型DCは残高証明書等で原資・評価額が直接確認できるのが通常のため）。
+  const addCorporateDc = () => updateLpPortfolio({
+    corporateDc: [...(customer.lp && customer.lp.portfolio && customer.lp.portfolio.corporateDc || []), {
+      id: uid(),
+      name: '',
+      owner: '',
+      principal: '',
+      currentValue: '',
+      monthlyContribution: '',
+      employeeContribution: '',
+      funds: ''
+    }]
+  });
+  const updateCorporateDc = (id, patch) => updateLpPortfolio({
+    corporateDc: (customer.lp && customer.lp.portfolio && customer.lp.portfolio.corporateDc || []).map(d => d.id === id ? {
+      ...d,
+      ...patch
+    } : d)
+  });
+  const removeCorporateDc = id => updateLpPortfolio({
+    corporateDc: (customer.lp && customer.lp.portfolio && customer.lp.portfolio.corporateDc || []).filter(d => d.id !== id)
+  });
   // 預貯金・債券・FX・不動産は、株式・投資信託と違って数量×単価の評価損益計算が不要な
   // 「名称＋残高／評価額」だけのシンプルな銘柄別リストのため、共通の追加・更新・削除処理にまとめる。
   const makePortfolioListOps = key => ({
@@ -30130,6 +30164,7 @@ function NexusPlanningSection({
   // 本人・配偶者それぞれの値をこの単位で合算するため、共通のキー一覧をループで合算する。
   const portfolioInputsFor = p => ({
     fundsStocksJpy: nexusPortfolioFundsStocksTotal(p),
+    corporateDcJpy: nexusPortfolioCorporateDcTotal(p.corporateDc),
     depositsJpy: nexusPortfolioListTotal(p.deposits),
     bondsJpy: nexusPortfolioListTotal(p.bonds),
     fxJpy: nexusPortfolioListTotal(p.fx),
@@ -30482,6 +30517,22 @@ function NexusPlanningSection({
       <div class="print-section">
         <h3>保有投資信託一覧${isCoupleScope ? '｜夫婦合算' : ''}</h3>
         <table><tr><th>銘柄名</th><th>名義</th><th>区分</th><th>証券会社</th><th>保有口数</th><th>取得時基準価額</th><th>現在基準価額</th><th>評価額</th><th>評価損益</th><th>積立開始時期</th><th>積立累計額（元本）</th></tr>${fundRows || '<tr><td colspan="11">登録なし</td></tr>'}</table>
+      </div>`;
+    })()}
+      ${(() => {
+      const dcAll = isCoupleScope ? [...(portfolio.corporateDc || []), ...(spousePortfolioInputs.corporateDc || [])] : portfolio.corporateDc || [];
+      if (dcAll.length === 0) return '';
+      const dcRows = dcAll.map(dc => {
+        const principal = parseFloat(dc.principal) || 0;
+        const currentValue = parseFloat(dc.currentValue) || 0;
+        const gain = currentValue - principal;
+        const hasGain = principal > 0 && currentValue > 0;
+        return `<tr><td>${escapeHtmlForPrint(dc.name)}</td><td>${escapeHtmlForPrint(dc.owner || '—')}</td><td>${nexusHasValue(dc.principal) ? Number(dc.principal).toLocaleString() + '円' : '未入力'}</td><td>${nexusHasValue(dc.currentValue) ? Number(dc.currentValue).toLocaleString() + '円' : '未入力'}</td><td>${hasGain ? (gain >= 0 ? '+' : '') + Math.round(gain).toLocaleString() + '円' : '未算出'}</td><td>${nexusHasValue(dc.monthlyContribution) ? Number(dc.monthlyContribution).toLocaleString() + '円' : '未入力'}</td><td>${nexusHasValue(dc.employeeContribution) ? Number(dc.employeeContribution).toLocaleString() + '円' : '—'}</td><td>${escapeHtmlForPrint(dc.funds || '—')}</td></tr>`;
+      }).join('');
+      return `
+      <div class="print-section">
+        <h3>企業型DC（確定拠出年金）一覧${isCoupleScope ? '｜夫婦合算' : ''}</h3>
+        <table><tr><th>制度名・勤務先</th><th>名義</th><th>原資</th><th>現評価額</th><th>評価損益</th><th>月の積立金額</th><th>うち本人負担額</th><th>保有ファンド</th></tr>${dcRows || '<tr><td colspan="8">登録なし</td></tr>'}</table>
       </div>`;
     })()}
       ${(() => {
@@ -30961,6 +31012,18 @@ function NexusPlanningSection({
           const resolvedGain = nexusFundResolvedGain(fd, ev);
           return [fd.name || '', fd.owner || '', fd.accountType || '', fd.brokerage || '', nexusHasValue(fd.units) ? Number(fd.units) : '未入力', nexusHasValue(fd.costNav) ? Number(fd.costNav) : '未入力', nexusHasValue(fd.currentNav) ? Number(fd.currentNav) : '未入力', resolvedValue ? Math.round(resolvedValue.amount) : '未算出', resolvedGain ? Math.round(resolvedGain.gain) : '未算出', fd.startDate || '未入力', resolvedCost ? Math.round(resolvedCost.amount) : '未入力'];
         }), [5, 6, 7, 8, 9, 11]);
+        row += 1;
+      }
+      const dcAll = isCoupleScope ? [...(portfolio.corporateDc || []), ...(spousePortfolioInputs.corporateDc || [])] : portfolio.corporateDc || [];
+      if (dcAll.length > 0) {
+        row = nexusXlsxSubTitle(ws, row, `企業型DC（確定拠出年金）一覧${scopeNote}`, 8);
+        row = nexusXlsxHeaderRow(ws, row, ['制度名・勤務先', '名義', '原資', '現評価額', '評価損益', '月の積立金額', 'うち本人負担額', '保有ファンド']);
+        row = nexusXlsxDataRows(ws, row, dcAll.map(dc => {
+          const principal = parseFloat(dc.principal) || 0;
+          const currentValue = parseFloat(dc.currentValue) || 0;
+          const hasGain = principal > 0 && currentValue > 0;
+          return [dc.name || '', dc.owner || '', nexusHasValue(dc.principal) ? Number(dc.principal) : '未入力', nexusHasValue(dc.currentValue) ? Number(dc.currentValue) : '未入力', hasGain ? Math.round(currentValue - principal) : '未算出', nexusHasValue(dc.monthlyContribution) ? Number(dc.monthlyContribution) : '未入力', nexusHasValue(dc.employeeContribution) ? Number(dc.employeeContribution) : '', dc.funds || ''];
+        }), [3, 4, 5, 6, 7]);
         row += 1;
       }
       const catList = [['預貯金', portfolio.deposits, spousePortfolioInputs.deposits], ['債券', portfolio.bonds, spousePortfolioInputs.bonds], ['FX', portfolio.fx, spousePortfolioInputs.fx], ['仮想通貨', portfolio.crypto, spousePortfolioInputs.crypto], ['不動産', portfolio.realEstate, spousePortfolioInputs.realEstate], ['その他資産', portfolio.others, spousePortfolioInputs.others]];
@@ -32753,6 +32816,188 @@ function NexusPlanningSection({
     },
     onClick: addFund
   }, "＋ 投資信託を追加")), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 13,
+      color: 'var(--text)',
+      marginBottom: 10
+    }
+  }, "企業型DC（確定拠出年金）"), (portfolio.corporateDc || []).length === 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text-sub)',
+      marginBottom: 8
+    }
+  }, "登録なし"), (portfolio.corporateDc || []).map(dc => {
+    const dcPrincipal = parseFloat(dc.principal) || 0;
+    const dcCurrentValue = parseFloat(dc.currentValue) || 0;
+    const dcGain = dcCurrentValue - dcPrincipal;
+    return /*#__PURE__*/React.createElement("div", {
+      key: dc.id,
+      style: {
+        border: '1px solid var(--border)',
+        borderRadius: 8,
+        padding: 10,
+        marginBottom: 8,
+        background: 'var(--bg)'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 6,
+        alignItems: 'center',
+        marginBottom: 6
+      }
+    }, /*#__PURE__*/React.createElement("input", {
+      className: "form-input",
+      style: {
+        flex: 1
+      },
+      placeholder: "制度名・勤務先（例：現在の勤務先）",
+      value: dc.name || '',
+      onChange: e => updateCorporateDc(dc.id, {
+        name: e.target.value
+      })
+    }), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => removeCorporateDc(dc.id),
+      style: {
+        background: 'none',
+        border: 'none',
+        color: 'var(--danger)',
+        fontSize: 18,
+        cursor: 'pointer',
+        flexShrink: 0
+      }
+    }, "×")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        flexWrap: 'wrap',
+        fontSize: 12,
+        marginBottom: 6
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        whiteSpace: 'nowrap'
+      }
+    }, "原資（拠出累計額）", /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      className: "form-input",
+      style: {
+        width: 100
+      },
+      value: dc.principal || '',
+      onChange: e => updateCorporateDc(dc.id, {
+        principal: e.target.value
+      })
+    }), "円"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        whiteSpace: 'nowrap'
+      }
+    }, "現評価額", /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      className: "form-input",
+      style: {
+        width: 100
+      },
+      value: dc.currentValue || '',
+      onChange: e => updateCorporateDc(dc.id, {
+        currentValue: e.target.value
+      })
+    }), "円"), /*#__PURE__*/React.createElement(NexusAssetOwnerSelect, {
+      value: dc.owner,
+      onChange: v => updateCorporateDc(dc.id, {
+        owner: v
+      })
+    })), dcPrincipal > 0 && dcCurrentValue > 0 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12,
+        marginBottom: 6
+      }
+    }, "評価損益：", /*#__PURE__*/React.createElement("b", {
+      style: {
+        color: dcGain >= 0 ? 'var(--success)' : 'var(--danger)'
+      }
+    }, dcGain >= 0 ? '+' : '', Math.round(dcGain).toLocaleString(), "円")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        flexWrap: 'wrap',
+        fontSize: 12,
+        marginBottom: 6
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        whiteSpace: 'nowrap'
+      }
+    }, "月の積立金額（合計）", /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      className: "form-input",
+      style: {
+        width: 100
+      },
+      value: dc.monthlyContribution || '',
+      onChange: e => updateCorporateDc(dc.id, {
+        monthlyContribution: e.target.value
+      })
+    }), "円"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        whiteSpace: 'nowrap'
+      }
+    }, "うち本人負担額（マッチング拠出・任意）", /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      className: "form-input",
+      style: {
+        width: 100
+      },
+      value: dc.employeeContribution || '',
+      onChange: e => updateCorporateDc(dc.id, {
+        employeeContribution: e.target.value
+      })
+    }), "円")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: 'var(--text-sub)',
+        marginBottom: 3
+      }
+    }, "保有ファンド"), /*#__PURE__*/React.createElement("input", {
+      type: "text",
+      className: "form-input",
+      style: {
+        fontSize: 12
+      },
+      placeholder: "例：外国株式インデックス、国内債券 等",
+      value: dc.funds || '',
+      onChange: e => updateCorporateDc(dc.id, {
+        funds: e.target.value
+      })
+    }));
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline",
+    style: {
+      fontSize: 12,
+      padding: '8px 12px'
+    },
+    onClick: addCorporateDc
+  }, "＋ 企業型DCを追加")), /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement(NexusSimpleAssetList, {
     title: "債券",
