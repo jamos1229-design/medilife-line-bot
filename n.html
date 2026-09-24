@@ -7194,6 +7194,7 @@ function NexusFanFollowRecordForm({
   setTasks,
   onSave,
   onQuickSave,
+  onDelete,
   onClose
 }) {
   const blank = {
@@ -7233,6 +7234,13 @@ function NexusFanFollowRecordForm({
       createdAt: form.createdAt || now,
       updatedAt: now
     });
+  };
+  // 既存の活動履歴（ActivityLogForm）と同じ「確認ダイアログ→ソフトデリート（deletedAtを立てる）」の
+  // パターンを踏襲する。新規作成中（form.idがまだ無い）は削除ボタン自体を出さない。
+  const handleDelete = () => {
+    if (!window.confirm('このフォロー記録を削除しますか？')) return;
+    onDelete(form.id);
+    onClose();
   };
   const attributeChips = React.createElement("div", {
     style: { display: 'flex', flexWrap: 'wrap', gap: 8 }
@@ -7458,7 +7466,12 @@ function NexusFanFollowRecordForm({
     className: "btn btn-primary btn-full",
     disabled: !form.customerId && !(form.customerNameText || '').trim(),
     onClick: () => { save(); onClose(); }
-  }, "保存"))));
+  }, "保存")), form.id && onDelete && React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: { color: 'var(--danger)', borderColor: 'var(--danger)', marginTop: 8 },
+    onClick: handleDelete
+  }, "削除する")));
 }
 // ── ファン化フォロー：ホーム画面用の「今日のファン化フォロー」サマリーカード（NexusTodayOpportunityCardの
 // 見た目を踏襲しつつ、NexusSalesKpiCardのaiAnalysisBtnと同じパターンで全画面を開く） ──
@@ -7532,6 +7545,12 @@ function NexusFanFollowRecordList({
       return idx >= 0 ? prev.map((x, i) => i === idx ? r : x) : [r, ...prev];
     });
   };
+  // 活動履歴（NexusActivityHistoryList）と同じソフトデリート（deletedAtを立てるだけで
+  // レコード自体は残す）方式。誤って作成した記録を、確認ダイアログを経て削除できるようにする。
+  const deleteRecord = id => setFollows(prev => prev.map(x => x.id === id ? {
+    ...x,
+    deletedAt: new Date().toISOString()
+  } : x));
   const badgeStyle = { fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 10, background: '#E3F2FD', color: '#1565C0' };
   const row = f => {
     const stage = nexusFanFollowDownstreamStage(f, activityLogs, customers);
@@ -7599,6 +7618,7 @@ function NexusFanFollowRecordList({
     setTasks: setTasks,
     onSave: r => { saveRecord(r); setEditingRecord(null); },
     onQuickSave: r => saveRecord(r),
+    onDelete: id => { deleteRecord(id); setEditingRecord(null); },
     onClose: () => setEditingRecord(null)
   });
   const addSheet = adding && React.createElement(NexusFanFollowRecordForm, {
