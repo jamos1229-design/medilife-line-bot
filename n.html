@@ -11095,6 +11095,11 @@ function NexusAiIdMigrationScreen({ customers, setCustomers, aiIdCounter, setAiI
 // 既存のNexusContractImportScreen等と同じ「phase文字列stateを条件分岐で出し分ける」規約に合わせる。
 function NexusCustomerAiExportScreen({ customers, activityLogs, nexusFanFollows, onClose }) {
   const [phase, setPhase] = useState('select');
+  // 「条件で絞り込む」（従来の年代・LINE登録等の条件フィルタ）に加えて、
+  // 「顧客を選んで指定する」（1名〜任意の複数名を直接チェックして指定）を選べるようにする。
+  // 既存の顧客選択ピッカー（CustomerSelect、名前・AI分析用IDでの検索に対応済み）をそのまま流用する。
+  const [selectionMode, setSelectionMode] = useState('filter'); // 'filter' | 'manual'
+  const [manualSelectedIds, setManualSelectedIds] = useState([]);
   const [segment, setSegment] = useState('all');
   const [ageBands, setAgeBands] = useState([]);
   const [lineRegistered, setLineRegistered] = useState(null);
@@ -11126,7 +11131,7 @@ function NexusCustomerAiExportScreen({ customers, activityLogs, nexusFanFollows,
     inheritanceHolder,
     ranks
   };
-  const filteredCustomers = (customers || []).filter(c => nexusCustomerAnalysisFilterPredicate(c, filters, ctx));
+  const filteredCustomers = selectionMode === 'manual' ? (customers || []).filter(c => manualSelectedIds.includes(c.id)) : (customers || []).filter(c => nexusCustomerAnalysisFilterPredicate(c, filters, ctx));
   const toggleInArray = (arr, setArr, value) => setArr(arr.includes(value) ? arr.filter(x => x !== value) : [...arr, value]);
   const AGE_BAND_OPTIONS = ['10代以下', '20代', '30代', '40代', '50代', '60代', '70代以上'];
   const RANK_OPTIONS = ['S', 'A', 'B', 'C', 'D'];
@@ -11154,6 +11159,22 @@ function NexusCustomerAiExportScreen({ customers, activityLogs, nexusFanFollows,
   }, chip(!includeCity, '都道府県まで', () => setIncludeCity(false)), chip(includeCity, '市区町村まで含める', () => setIncludeCity(true))), React.createElement("div", {
     style: { fontSize: 11.5, color: 'var(--text-sub)', marginTop: 4 }
   }, "番地・建物名はどちらを選んでも絶対に出力されません。"));
+  const modeRow = filterGroup("抽出方法", [chip(selectionMode === 'filter', '条件で絞り込む', () => setSelectionMode('filter')), chip(selectionMode === 'manual', '顧客を選んで指定する', () => setSelectionMode('manual'))]);
+  // 「顧客を選んで指定する」は、既存の顧客選択ピッカー（名前・AI分析用IDでの検索、複数選択対応済み）
+  // をそのまま流用する。1名だけを選ぶ（単体）場合もこのピッカーで1件だけチェックすればよい。
+  const manualPickerBlock = selectionMode === 'manual' && React.createElement("div", {
+    className: "form-group"
+  }, React.createElement(CustomerSelect, {
+    label: "対象の顧客（1名でも複数でも選択可）",
+    value: manualSelectedIds,
+    onChange: setManualSelectedIds,
+    customers: customers,
+    multi: true
+  }), manualSelectedIds.length > 0 && React.createElement("button", {
+    type: "button",
+    onClick: () => setManualSelectedIds([]),
+    style: { marginTop: 8, background: 'none', border: 'none', color: 'var(--text-sub)', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', textDecoration: 'underline' }
+  }, "選択をすべて解除"));
   const runAnonymize = () => {
     const anonRows = filteredCustomers.map((c, i) => nexusAnonymizeCustomerForAnalysis(c, i, { includeCity }, ctx));
     const scan = nexusScanForResidualPii(anonRows, customers);
@@ -11166,7 +11187,7 @@ function NexusCustomerAiExportScreen({ customers, activityLogs, nexusFanFollows,
   }, React.createElement("div", {
     className: "card",
     style: { marginBottom: 12, fontSize: 12.5, color: 'var(--text-sub)', lineHeight: 1.6 }
-  }, "氏名・電話番号・メールアドレス・詳細住所・証券番号など、個人を特定できる情報は一切出力されません。自由記述（メモ）も出力しません。外部のAI（ChatGPT・Claude・Gemini等）へ自動送信することもありません。"), segmentRow, ageBandRow, lineRow, lastContactRow, flagsRow, rankRow, cityToggleRow, React.createElement("div", {
+  }, "氏名・電話番号・メールアドレス・詳細住所・証券番号など、個人を特定できる情報は一切出力されません。自由記述（メモ）も出力しません。外部のAI（ChatGPT・Claude・Gemini等）へ自動送信することもありません。"), modeRow, selectionMode === 'manual' ? manualPickerBlock : React.createElement(React.Fragment, null, segmentRow, ageBandRow, lineRow, lastContactRow, flagsRow, rankRow), cityToggleRow, React.createElement("div", {
     className: "card",
     style: { marginTop: 12, textAlign: 'center' }
   }, React.createElement("div", {
