@@ -828,6 +828,236 @@ function NexusSimpleAssetList({
     onClick: ops.add
   }, "＋ ", title, "を追加"));
 }
+// ── 不動産：他の資産カテゴリと異なり「所在地（国内／海外）」と「利用区分（居住用／投資用／
+// 事業用／その他）」を別軸で持ち、海外なら通貨・為替換算、投資用なら収益情報（利回り等）が
+// 追加で必要になるため、専用のカード・専用のエントリ編集コンポーネントを用意する。
+// 基本項目（名前・所在地・利用区分・評価額・持分・ローン）は常に表示し、評価日・評価方法・
+// 相続税評価額など頻度の低い項目だけ「＋ 詳細情報」の折りたたみに収める。
+function NexusRealEstateEntryCard({
+  item,
+  onUpdate,
+  onRemove,
+  loans
+}) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const isForeign = nexusRealEstateIsForeign(item);
+  const isInvestment = item.usageType === '投資用';
+  const linkedLoan = nexusRealEstateFindLinkedLoan(item, loans);
+  const yenValue = nexusRealEstateYenValue(item);
+  const ownershipPct = nexusRealEstateOwnershipPct(item);
+  const ownerShareValue = nexusRealEstateOwnerShareValue(item);
+  const yenLoanBalance = nexusRealEstateYenLoanBalance(item, loans);
+  const ownerShareLoan = nexusRealEstateOwnerShareLoan(item, loans);
+  const netEquity = nexusRealEstateNetEquity(item, loans);
+  const summaryIcon = isForeign ? '🏢' : '🏠';
+  const summaryTag = (isForeign ? `海外${item.country ? '・' + item.country : ''}` : '国内') + ' ｜ ' + (item.usageType || '利用区分未設定');
+  const header = React.createElement("div", {
+    style: { display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }
+  }, React.createElement("span", { style: { fontSize: 18, flexShrink: 0 } }, summaryIcon), React.createElement("input", {
+    className: "form-input",
+    style: { flex: 1 },
+    placeholder: "不動産名（例：自宅、○○マンション101号室）",
+    value: item.name || '',
+    onChange: e => onUpdate(item.id, { name: e.target.value })
+  }), React.createElement("button", {
+    type: "button",
+    onClick: () => onRemove(item.id),
+    style: { background: 'none', border: 'none', color: 'var(--danger)', fontSize: 18, cursor: 'pointer', flexShrink: 0 }
+  }, "×"));
+  const summaryLine = React.createElement("div", {
+    style: { fontSize: 11.5, color: 'var(--text-sub)', marginBottom: 8 }
+  }, summaryTag);
+  const fieldLabel = text => React.createElement("div", {
+    style: { fontSize: 11, color: 'var(--text-sub)', marginBottom: 3, marginTop: 8 }
+  }, text);
+  const locationRow = React.createElement(React.Fragment, null, fieldLabel("所在地"), React.createElement("div", {
+    className: "toggle-group", style: { marginBottom: 4 }
+  }, NEXUS_REAL_ESTATE_LOCATION_TYPES.map(t => React.createElement("button", {
+    key: t, type: "button",
+    className: `toggle-btn ${(item.locationType || '国内') === t ? 'sel' : ''}`,
+    onClick: () => onUpdate(item.id, { locationType: t, currency: t === '国内' ? '' : item.currency })
+  }, t))));
+  const usageRow = React.createElement(React.Fragment, null, fieldLabel("利用区分"), React.createElement("div", {
+    style: { display: 'flex', flexWrap: 'wrap', gap: 8 }
+  }, NEXUS_REAL_ESTATE_USAGE_TYPES.map(t => React.createElement("button", {
+    key: t, type: "button",
+    className: `chip ${item.usageType === t ? 'active' : ''}`,
+    onClick: () => onUpdate(item.id, { usageType: item.usageType === t ? '' : t })
+  }, t))));
+  // 海外の場合のみ、国・通貨・為替レートを表示する（国内では為替の概念自体が無いため出さない）。
+  const foreignRow = isForeign && React.createElement(React.Fragment, null, React.createElement("div", {
+    style: { display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }
+  }, React.createElement("input", {
+    className: "form-input",
+    style: { flex: 1, minWidth: 100 },
+    placeholder: "国（例：アメリカ）",
+    value: item.country || '',
+    onChange: e => onUpdate(item.id, { country: e.target.value })
+  }), React.createElement("select", {
+    className: "form-select",
+    style: { width: 'auto' },
+    value: item.currency || '',
+    onChange: e => onUpdate(item.id, { currency: e.target.value })
+  }, React.createElement("option", { value: "" }, "通貨を選択"), NEXUS_REAL_ESTATE_CURRENCIES.map(c => React.createElement("option", { key: c, value: c }, c)))), fieldLabel("現地通貨での現在評価額"), React.createElement("div", {
+    style: { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }
+  }, React.createElement("input", {
+    type: "number", min: "0", className: "form-input", style: { flex: 1, minWidth: 100 },
+    placeholder: "例：300000",
+    value: item.marketValue || '',
+    onChange: e => onUpdate(item.id, { marketValue: e.target.value })
+  }), React.createElement("span", { style: { fontSize: 12, color: 'var(--text-sub)' } }, item.currency || '外貨')), fieldLabel("為替レート（1" + (item.currency || '外貨') + "＝◯円）"), React.createElement("input", {
+    type: "number", min: "0", step: "0.01", className: "form-input", style: { width: 120 },
+    placeholder: "例：150",
+    value: item.fxRate || '',
+    onChange: e => onUpdate(item.id, { fxRate: e.target.value })
+  }), React.createElement("div", {
+    style: { fontSize: 12.5, marginTop: 4, color: 'var(--text-sub)' }
+  }, "円換算評価額：約", React.createElement("b", { style: { color: 'var(--text)' } }, nexusRealEstateYenDisplay(yenValue))));
+  const domesticRow = !isForeign && React.createElement(React.Fragment, null, fieldLabel("現在評価額"), React.createElement(AmountInput, {
+    prefix: "¥",
+    value: item.marketValue !== undefined && item.marketValue !== '' ? item.marketValue : item.value || '',
+    placeholder: "例：45000000",
+    onChange: e => onUpdate(item.id, { marketValue: e.target.value })
+  }));
+  const ownerRow = React.createElement("div", {
+    style: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }
+  }, React.createElement("span", {
+    style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, whiteSpace: 'nowrap' }
+  }, "持分", React.createElement("input", {
+    type: "number", min: "0", max: "100", className: "form-input", style: { width: 70 },
+    placeholder: "100",
+    value: item.ownershipPercentage || '',
+    onChange: e => onUpdate(item.id, { ownershipPercentage: e.target.value })
+  }), "％"), React.createElement(NexusAssetOwnerSelect, {
+    value: item.owner,
+    onChange: v => onUpdate(item.id, { owner: v })
+  }));
+  // ローン明細（customer.lp.loans）に既に登録済みのローンがあれば、それを選んでリンクするだけにして
+  // 不動産側に同じ金額を重複入力しない（二重計上防止）。リンクしなければ不動産側で直接入力する。
+  const loanLinkSelect = React.createElement("select", {
+    className: "form-select",
+    style: { width: '100%', marginTop: 6 },
+    value: item.linkedLoanId || '',
+    onChange: e => onUpdate(item.id, { linkedLoanId: e.target.value })
+  }, React.createElement("option", { value: "" }, "— 手入力する —"), (loans || []).map(l => React.createElement("option", {
+    key: l.id, value: l.id
+  }, l.name || l.category || 'ローン', "（残高", (parseFloat(l.balance) || 0).toLocaleString(), "円）")));
+  const loanRow = item.hasLoan && React.createElement(React.Fragment, null, React.createElement("div", {
+    style: { fontSize: 11, color: 'var(--text-sub)', marginTop: 8 }
+  }, "「ローン明細」に登録済みなら、二重入力を避けるためこちらから選択してください"), loanLinkSelect, linkedLoan ? React.createElement("div", {
+    style: { fontSize: 12.5, marginTop: 6 }
+  }, "ローン明細「", linkedLoan.name || linkedLoan.category, "」から取得：残高 ", React.createElement("b", null, (parseFloat(linkedLoan.balance) || 0).toLocaleString(), "円")) : React.createElement(React.Fragment, null, React.createElement("div", {
+    style: { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }
+  }, React.createElement("span", { style: { fontSize: 12, whiteSpace: 'nowrap' } }, "ローン残高（", isForeign ? (item.currency || '外貨') : '円', "）"), React.createElement("input", {
+    type: "number", min: "0", className: "form-input", style: { width: 130 },
+    placeholder: "例：10000000",
+    value: item.loanBalance || '',
+    onChange: e => onUpdate(item.id, { loanBalance: e.target.value })
+  })), isForeign && React.createElement("div", {
+    style: { fontSize: 12, color: 'var(--text-sub)', marginTop: 2 }
+  }, "円換算ローン残高：約", nexusRealEstateYenDisplay(yenLoanBalance))));
+  const loanToggle = React.createElement(React.Fragment, null, fieldLabel("ローン"), React.createElement("div", {
+    className: "toggle-group"
+  }, React.createElement("button", {
+    type: "button",
+    className: `toggle-btn ${item.hasLoan ? 'sel' : ''}`,
+    onClick: () => onUpdate(item.id, { hasLoan: true })
+  }, "ローンあり"), React.createElement("button", {
+    type: "button",
+    className: `toggle-btn ${!item.hasLoan ? 'sel' : ''}`,
+    onClick: () => onUpdate(item.id, { hasLoan: false, linkedLoanId: '' })
+  }, "ローンなし")), loanRow);
+  const summaryBox = React.createElement("div", {
+    style: { background: 'var(--bg)', borderRadius: 8, padding: 10, marginTop: 10, fontSize: 12.5, lineHeight: 1.9 }
+  }, React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "総資産額（円換算）"), React.createElement("b", null, nexusRealEstateYenDisplay(yenValue))), React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "本人持分評価額（", ownershipPct, "％）"), React.createElement("b", null, nexusRealEstateYenDisplay(ownerShareValue))), item.hasLoan && React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "ローン残高（持分対応）"), React.createElement("b", { style: { color: 'var(--danger)' } }, nexusRealEstateYenDisplay(ownerShareLoan))), React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between', borderTop: '1px dashed var(--border)', marginTop: 4, paddingTop: 4 } }, React.createElement("span", { style: { fontWeight: 700 } }, "不動産純資産"), React.createElement("b", { style: { color: 'var(--accent)' } }, nexusRealEstateYenDisplay(netEquity))));
+  const detailsToggleBtn = React.createElement("button", {
+    type: "button",
+    onClick: () => setDetailsOpen(o => !o),
+    style: { background: 'none', border: 'none', color: 'var(--accent)', fontSize: 11.5, fontWeight: 700, cursor: 'pointer', padding: '8px 0 0' }
+  }, detailsOpen ? '▲ 詳細情報を閉じる' : '▼ ＋ 詳細情報（評価日・評価方法・相続税評価額・借入先など）');
+  const detailsBlock = detailsOpen && React.createElement("div", {
+    style: { marginTop: 6, paddingTop: 8, borderTop: '1px dashed var(--border)' }
+  }, fieldLabel("評価日時点"), React.createElement("input", {
+    type: "date", className: "form-input", style: { width: 160 },
+    value: item.valuationDate || '',
+    onChange: e => onUpdate(item.id, { valuationDate: e.target.value })
+  }), fieldLabel("評価方法"), React.createElement("div", {
+    style: { display: 'flex', flexWrap: 'wrap', gap: 8 }
+  }, NEXUS_REAL_ESTATE_VALUATION_METHODS.map(m => React.createElement("button", {
+    key: m, type: "button",
+    className: `chip ${item.valuationMethod === m ? 'active' : ''}`,
+    onClick: () => onUpdate(item.id, { valuationMethod: item.valuationMethod === m ? '' : m })
+  }, m))), fieldLabel("相続税評価額（任意・現在評価額とは別に保持します）"), React.createElement(AmountInput, {
+    prefix: "¥",
+    value: item.inheritanceTaxValue || '',
+    placeholder: "未入力可",
+    onChange: e => onUpdate(item.id, { inheritanceTaxValue: e.target.value })
+  }), item.hasLoan && !item.linkedLoanId && React.createElement(React.Fragment, null, fieldLabel("借入先（金融機関名）"), React.createElement("input", {
+    className: "form-input",
+    value: item.lender || '',
+    onChange: e => onUpdate(item.id, { lender: e.target.value })
+  })));
+  // 「投資用」のときだけ収益情報を表示する（居住用・事業用・その他では家賃収入等の概念が
+  // 無い、または不動産の主目的ではないため出さない）。
+  const incomeSection = isInvestment && React.createElement("div", {
+    style: { background: '#EFF6FF', borderRadius: 8, padding: 10, marginTop: 10 }
+  }, React.createElement("div", { style: { fontWeight: 700, fontSize: 12.5, marginBottom: 6 } }, "収益情報（任意）"), fieldLabel("月額家賃収入"), React.createElement(AmountInput, {
+    prefix: "¥",
+    value: item.monthlyRent || '',
+    placeholder: "例：120000",
+    onChange: e => onUpdate(item.id, { monthlyRent: e.target.value })
+  }), React.createElement("div", {
+    style: { display: 'flex', gap: 10, flexWrap: 'wrap' }
+  }, React.createElement("div", { style: { flex: 1, minWidth: 110 } }, fieldLabel("管理費（年額）"), React.createElement("input", {
+    type: "number", min: "0", className: "form-input",
+    value: item.managementFee || '',
+    onChange: e => onUpdate(item.id, { managementFee: e.target.value })
+  })), React.createElement("div", { style: { flex: 1, minWidth: 110 } }, fieldLabel("修繕積立金（年額）"), React.createElement("input", {
+    type: "number", min: "0", className: "form-input",
+    value: item.repairReserve || '',
+    onChange: e => onUpdate(item.id, { repairReserve: e.target.value })
+  }))), fieldLabel("その他経費（年額）"), React.createElement("input", {
+    type: "number", min: "0", className: "form-input",
+    value: item.otherExpenses || '',
+    onChange: e => onUpdate(item.id, { otherExpenses: e.target.value })
+  }), fieldLabel("年間ローン返済額"), React.createElement("input", {
+    type: "number", min: "0", className: "form-input",
+    value: item.annualLoanPayment || '',
+    onChange: e => onUpdate(item.id, { annualLoanPayment: e.target.value })
+  }), React.createElement("div", {
+    style: { marginTop: 8, paddingTop: 8, borderTop: '1px dashed #BFDBFE', fontSize: 12.5, lineHeight: 1.9 }
+  }, React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "年間家賃収入"), React.createElement("b", null, nexusRealEstateYenDisplay(nexusRealEstateAnnualRent(item)))), React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "表面利回り"), React.createElement("b", null, nexusRealEstatePercentDisplay(nexusRealEstateGrossYield(item)))), React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "実質収益"), React.createElement("b", null, nexusRealEstateYenDisplay(nexusRealEstateNetIncome(item)))), React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "実質利回り"), React.createElement("b", null, nexusRealEstatePercentDisplay(nexusRealEstateNetYield(item)))), React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "年間キャッシュフロー"), React.createElement("b", null, nexusRealEstateYenDisplay(nexusRealEstateAnnualCashFlow(item))))));
+  return React.createElement("div", {
+    key: item.id,
+    className: "real-estate-entry-card",
+    style: { border: '1px solid var(--border)', borderRadius: 8, padding: 10, marginBottom: 10, background: '#fff' }
+  }, header, summaryLine, locationRow, usageRow, isForeign ? foreignRow : domesticRow, ownerRow, loanToggle, summaryBox, incomeSection, detailsToggleBtn, detailsBlock);
+}
+function NexusRealEstateList({
+  list,
+  loans,
+  onAdd,
+  onUpdate,
+  onRemove
+}) {
+  const items = list || [];
+  return React.createElement(React.Fragment, null, React.createElement("div", {
+    style: { fontWeight: 700, fontSize: 13, color: 'var(--text)', marginBottom: 10 }
+  }, "不動産"), items.length === 0 && React.createElement("div", {
+    style: { fontSize: 12, color: 'var(--text-sub)', marginBottom: 8 }
+  }, "登録なし"), items.map(item => React.createElement(NexusRealEstateEntryCard, {
+    key: item.id,
+    item: item,
+    onUpdate: onUpdate,
+    onRemove: onRemove,
+    loans: loans
+  })), React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline",
+    style: { fontSize: 12, padding: '8px 12px' },
+    onClick: onAdd
+  }, "＋ 不動産を追加"));
+}
 // ── 診断レポートの「FPの所見」欄：セクションごとに評価・所見・今後の確認ポイントを入力できる ──
 const NEXUS_FINDING_TOPICS = [{
   key: 'deathCoverage',
@@ -26042,6 +26272,106 @@ function nexusPortfolioMutualPensionTotal(list) {
     return s + (currentValue > 0 ? currentValue : principal);
   }, 0);
 }
+// ── 不動産：「所在地（国内／海外）」と「利用区分（居住用／投資用／事業用／その他）」を
+// 独立した軸として持つ。旧データ（{id,name,value,owner}のみ）は破損させず、
+// 未設定の新フィールドは安全な初期値（所在地＝国内、通貨＝JPY、持分＝100%）で読み替える。
+// ただし利用区分だけは、判断できない情報を推測しないという方針により空欄（未設定）のまま扱う。
+const NEXUS_REAL_ESTATE_LOCATION_TYPES = ['国内', '海外'];
+const NEXUS_REAL_ESTATE_USAGE_TYPES = ['居住用', '投資用', '事業用', 'その他'];
+const NEXUS_REAL_ESTATE_VALUATION_METHODS = ['不動産会社査定', '市場価格', '固定資産税評価額', '相続税評価額', '購入価格', 'その他'];
+const NEXUS_REAL_ESTATE_CURRENCIES = ['USD', 'EUR', 'GBP', 'AUD', 'その他'];
+function nexusRealEstateIsForeign(item) {
+  return (item && item.locationType) === '海外';
+}
+// 持分割合：未入力は100%（デフォルト）、0〜100の範囲にクランプする（マイナス値・100%超の入力対策）。
+function nexusRealEstateOwnershipPct(item) {
+  const raw = item && item.ownershipPercentage;
+  if (raw === undefined || raw === null || raw === '') return 100;
+  const n = parseFloat(raw);
+  if (!isFinite(n)) return 100;
+  return Math.min(100, Math.max(0, n));
+}
+// 現在評価額の円換算。国内は入力額＝円としてそのまま扱う（為替レート＝1相当）。
+// 海外は現地通貨額×為替レート。旧データ（marketValueが無く、旧valueのみ持つ）も読み替える。
+function nexusRealEstateYenValue(item) {
+  if (!item) return 0;
+  const rawAmount = item.marketValue !== undefined && item.marketValue !== '' ? item.marketValue : item.value;
+  const amount = Math.max(0, parseFloat(rawAmount) || 0);
+  if (!nexusRealEstateIsForeign(item)) return amount;
+  const rate = Math.max(0, parseFloat(item.fxRate) || 0);
+  return amount * rate;
+}
+// 既存の「ローン明細」（customer.lp.loans）にリンクされている場合は、そちらの残高をそのまま使い、
+// 不動産側に重複した金額を持たせない（二重計上防止）。リンクが無い場合のみ、不動産側の手入力欄を使う。
+function nexusRealEstateFindLinkedLoan(item, loans) {
+  if (!item || !item.linkedLoanId) return null;
+  return (loans || []).find(l => l.id === item.linkedLoanId) || null;
+}
+function nexusRealEstateYenLoanBalance(item, loans) {
+  if (!item || !item.hasLoan) return 0;
+  const linked = nexusRealEstateFindLinkedLoan(item, loans);
+  if (linked) return Math.max(0, parseFloat(linked.balance) || 0);
+  const raw = Math.max(0, parseFloat(item.loanBalance) || 0);
+  if (!nexusRealEstateIsForeign(item)) return raw;
+  const rate = Math.max(0, parseFloat(item.fxRate) || 0);
+  return raw * rate;
+}
+function nexusRealEstateOwnerShareValue(item) {
+  return nexusRealEstateYenValue(item) * (nexusRealEstateOwnershipPct(item) / 100);
+}
+function nexusRealEstateOwnerShareLoan(item, loans) {
+  return nexusRealEstateYenLoanBalance(item, loans) * (nexusRealEstateOwnershipPct(item) / 100);
+}
+function nexusRealEstateNetEquity(item, loans) {
+  return nexusRealEstateOwnerShareValue(item) - nexusRealEstateOwnerShareLoan(item, loans);
+}
+// 資産クラス別集計・総資産には、この物件単位の持分ではなく評価額全体（円換算）を使う
+// （他の資産カテゴリ（投資信託・企業型DC等）もすべて持分控除前の評価額で集計しているため、
+// 不動産だけ扱いを変えると合計の意味がぶれる）。持分・純資産は物件カードごとの参考情報として別途表示する。
+function nexusPortfolioRealEstateTotal(list) {
+  return (list || []).reduce((s, r) => s + nexusRealEstateYenValue(r), 0);
+}
+// 投資用のみで使う収益計算。「入力値が足りない場合はNaN/Infinityを出さず未計算（null）にする」という
+// 方針のため、家賃収入が入力されていない（0円）場合はどの指標もnullを返す。
+function nexusRealEstateAnnualRent(item) {
+  return Math.max(0, parseFloat(item && item.monthlyRent) || 0) * 12;
+}
+function nexusRealEstateAnnualExpenses(item) {
+  if (!item) return 0;
+  return Math.max(0, parseFloat(item.managementFee) || 0) + Math.max(0, parseFloat(item.repairReserve) || 0) + Math.max(0, parseFloat(item.otherExpenses) || 0);
+}
+function nexusRealEstateGrossYield(item) {
+  const annualRent = nexusRealEstateAnnualRent(item);
+  const value = nexusRealEstateYenValue(item);
+  if (annualRent <= 0 || value <= 0) return null;
+  return annualRent / value * 100;
+}
+function nexusRealEstateNetIncome(item) {
+  const annualRent = nexusRealEstateAnnualRent(item);
+  if (annualRent <= 0) return null;
+  return annualRent - nexusRealEstateAnnualExpenses(item);
+}
+function nexusRealEstateNetYield(item) {
+  const netIncome = nexusRealEstateNetIncome(item);
+  const value = nexusRealEstateYenValue(item);
+  if (netIncome === null || value <= 0) return null;
+  return netIncome / value * 100;
+}
+function nexusRealEstateAnnualCashFlow(item) {
+  const netIncome = nexusRealEstateNetIncome(item);
+  if (netIncome === null) return null;
+  const loanPayment = Math.max(0, parseFloat(item && item.annualLoanPayment) || 0);
+  return netIncome - loanPayment;
+}
+// 画面表示用：NaN/Infinity/未計算(null)をそのまま出さず、自然な文言に丸める。
+function nexusRealEstatePercentDisplay(v) {
+  if (v === null || v === undefined || !isFinite(v)) return '未計算';
+  return (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
+}
+function nexusRealEstateYenDisplay(v) {
+  if (v === null || v === undefined || !isFinite(v)) return '—';
+  return Math.round(v).toLocaleString() + '円';
+}
 
 // 契約1件のJPY換算額（外貨建てはレートがあれば換算、なければ換算不可として扱う）
 // 「現在の解約返戻金」は、外貨建て契約でも解約時は円で払い戻される実務に合わせて、
@@ -30009,8 +30339,45 @@ function NexusPlanningSection({
   const bondOps = makePortfolioListOps('bonds');
   const fxOps = makePortfolioListOps('fx');
   const cryptoOps = makePortfolioListOps('crypto');
-  const realEstateOps = makePortfolioListOps('realEstate');
   const othersOps = makePortfolioListOps('others');
+  // 不動産：所在地（国内／海外）と利用区分（居住用／投資用／事業用／その他）を別軸で持つ、
+  // 他のシンプル銘柄リストより豊富な構造のため、専用の追加・更新・削除処理を持つ
+  // （ただし永続化キーは既存の'realEstate'のまま変えないため、旧データはそのまま読み込める）。
+  const addRealEstate = () => updateLpPortfolio({
+    realEstate: [...(customer.lp && customer.lp.portfolio && customer.lp.portfolio.realEstate || []), {
+      id: uid(),
+      name: '',
+      locationType: '国内',
+      country: '',
+      usageType: '',
+      owner: '',
+      ownershipPercentage: '',
+      currency: '',
+      marketValue: '',
+      fxRate: '',
+      valuationDate: '',
+      valuationMethod: '',
+      inheritanceTaxValue: '',
+      hasLoan: false,
+      linkedLoanId: '',
+      loanBalance: '',
+      lender: '',
+      monthlyRent: '',
+      managementFee: '',
+      repairReserve: '',
+      otherExpenses: '',
+      annualLoanPayment: ''
+    }]
+  });
+  const updateRealEstate = (id, patch) => updateLpPortfolio({
+    realEstate: (customer.lp && customer.lp.portfolio && customer.lp.portfolio.realEstate || []).map(r => r.id === id ? {
+      ...r,
+      ...patch
+    } : r)
+  });
+  const removeRealEstate = id => updateLpPortfolio({
+    realEstate: (customer.lp && customer.lp.portfolio && customer.lp.portfolio.realEstate || []).filter(r => r.id !== id)
+  });
   const addLoan = () => updateLp({
     loans: [...(customer.lp && customer.lp.loans || []), {
       id: uid(),
@@ -30284,7 +30651,7 @@ function NexusPlanningSection({
     bondsJpy: nexusPortfolioListTotal(p.bonds),
     fxJpy: nexusPortfolioListTotal(p.fx),
     cryptoJpy: nexusPortfolioListTotal(p.crypto),
-    realEstateJpy: nexusPortfolioListTotal(p.realEstate),
+    realEstateJpy: nexusPortfolioRealEstateTotal(p.realEstate),
     retirementJpy: p.retirementJpy,
     inheritanceJpy: p.inheritanceJpy,
     realEstateOtherJpy: p.realEstateOtherJpy,
@@ -30679,7 +31046,23 @@ function NexusPlanningSection({
       </div>`;
     })()}
       ${(() => {
-      const catList = [['預貯金', portfolio.deposits, spousePortfolioInputs.deposits], ['債券', portfolio.bonds, spousePortfolioInputs.bonds], ['FX', portfolio.fx, spousePortfolioInputs.fx], ['仮想通貨', portfolio.crypto, spousePortfolioInputs.crypto], ['不動産', portfolio.realEstate, spousePortfolioInputs.realEstate], ['その他資産', portfolio.others, spousePortfolioInputs.others]];
+      const reAll = isCoupleScope ? [...(portfolio.realEstate || []), ...(spousePortfolioInputs.realEstate || [])] : portfolio.realEstate || [];
+      if (reAll.length === 0) return '';
+      const reRows = reAll.map(re => {
+        const yenValue = nexusRealEstateYenValue(re);
+        const pct = nexusRealEstateOwnershipPct(re);
+        const netEquity = nexusRealEstateNetEquity(re, loans);
+        const location = nexusRealEstateIsForeign(re) ? `海外${re.country ? '・' + escapeHtmlForPrint(re.country) : ''}` : '国内';
+        return `<tr><td>${escapeHtmlForPrint(re.name || '')}</td><td>${location}</td><td>${escapeHtmlForPrint(re.usageType || '未設定')}</td><td>${escapeHtmlForPrint(re.owner || '—')}</td><td>${pct}％</td><td>${nexusHasValue(yenValue) ? Math.round(yenValue).toLocaleString() + '円' : '未入力'}</td><td>${re.hasLoan ? Math.round(nexusRealEstateYenLoanBalance(re, loans)).toLocaleString() + '円' : 'なし'}</td><td>${Math.round(netEquity).toLocaleString()}円</td></tr>`;
+      }).join('');
+      return `
+      <div class="print-section">
+        <h3>不動産一覧${isCoupleScope ? '｜夫婦合算' : ''}</h3>
+        <table><tr><th>不動産名</th><th>所在地</th><th>利用区分</th><th>名義</th><th>持分</th><th>評価額（円換算）</th><th>ローン残高（円換算）</th><th>純資産</th></tr>${reRows || '<tr><td colspan="8">登録なし</td></tr>'}</table>
+      </div>`;
+    })()}
+      ${(() => {
+      const catList = [['預貯金', portfolio.deposits, spousePortfolioInputs.deposits], ['債券', portfolio.bonds, spousePortfolioInputs.bonds], ['FX', portfolio.fx, spousePortfolioInputs.fx], ['仮想通貨', portfolio.crypto, spousePortfolioInputs.crypto], ['その他資産', portfolio.others, spousePortfolioInputs.others]];
       const allRows = [];
       catList.forEach(([label, own, sp]) => {
         const items = isCoupleScope ? [...(own || []), ...(sp || [])] : own || [];
@@ -30691,7 +31074,7 @@ function NexusPlanningSection({
       if (allRows.length === 0) return '';
       return `
       <div class="print-section">
-        <h3>預貯金・債券・FX・仮想通貨・不動産・その他資産（銘柄別）${isCoupleScope ? '｜夫婦合算' : ''}</h3>
+        <h3>預貯金・債券・FX・仮想通貨・その他資産（銘柄別）${isCoupleScope ? '｜夫婦合算' : ''}</h3>
         <table><tr><th>区分</th><th>名称</th><th>名義</th><th>評価額</th></tr>${allRows.join('')}</table>
       </div>`;
     })()}
@@ -31190,7 +31573,17 @@ function NexusPlanningSection({
         }), [3, 4, 5]);
         row += 1;
       }
-      const catList = [['預貯金', portfolio.deposits, spousePortfolioInputs.deposits], ['債券', portfolio.bonds, spousePortfolioInputs.bonds], ['FX', portfolio.fx, spousePortfolioInputs.fx], ['仮想通貨', portfolio.crypto, spousePortfolioInputs.crypto], ['不動産', portfolio.realEstate, spousePortfolioInputs.realEstate], ['その他資産', portfolio.others, spousePortfolioInputs.others]];
+      const reAllXlsx = isCoupleScope ? [...(portfolio.realEstate || []), ...(spousePortfolioInputs.realEstate || [])] : portfolio.realEstate || [];
+      if (reAllXlsx.length > 0) {
+        row = nexusXlsxSubTitle(ws, row, `不動産一覧${scopeNote}`, 8);
+        row = nexusXlsxHeaderRow(ws, row, ['不動産名', '所在地', '利用区分', '名義', '持分(%)', '評価額（円換算）', 'ローン残高（円換算）', '純資産']);
+        row = nexusXlsxDataRows(ws, row, reAllXlsx.map(re => {
+          const location = nexusRealEstateIsForeign(re) ? `海外${re.country ? '・' + re.country : ''}` : '国内';
+          return [re.name || '', location, re.usageType || '未設定', re.owner || '', nexusRealEstateOwnershipPct(re), Math.round(nexusRealEstateYenValue(re)), re.hasLoan ? Math.round(nexusRealEstateYenLoanBalance(re, loans)) : 0, Math.round(nexusRealEstateNetEquity(re, loans))];
+        }), [5, 6, 7, 8]);
+        row += 1;
+      }
+      const catList = [['預貯金', portfolio.deposits, spousePortfolioInputs.deposits], ['債券', portfolio.bonds, spousePortfolioInputs.bonds], ['FX', portfolio.fx, spousePortfolioInputs.fx], ['仮想通貨', portfolio.crypto, spousePortfolioInputs.crypto], ['その他資産', portfolio.others, spousePortfolioInputs.others]];
       const simpleAssetRows = [];
       catList.forEach(([label, own, sp]) => {
         const items = isCoupleScope ? [...(own || []), ...(sp || [])] : own || [];
@@ -31200,7 +31593,7 @@ function NexusPlanningSection({
         });
       });
       if (simpleAssetRows.length > 0) {
-        row = nexusXlsxSubTitle(ws, row, `預貯金・債券・FX・仮想通貨・不動産・その他資産（銘柄別）${scopeNote}`, 4);
+        row = nexusXlsxSubTitle(ws, row, `預貯金・債券・FX・仮想通貨・その他資産（銘柄別）${scopeNote}`, 4);
         row = nexusXlsxHeaderRow(ws, row, ['区分', '名称', '名義', '評価額']);
         row = nexusXlsxDataRows(ws, row, simpleAssetRows, [4]);
         row += 1;
@@ -33495,12 +33888,14 @@ function NexusPlanningSection({
     valuePlaceholder: "例：500000",
     showQuantity: true,
     quantityPlaceholder: "保有数"
-  }), /*#__PURE__*/React.createElement(NexusSimpleAssetList, {
-    title: "不動産",
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement(NexusRealEstateList, {
     list: portfolio.realEstate,
-    ops: realEstateOps,
-    namePlaceholder: "例：自宅マンション",
-    valuePlaceholder: "例：20000000"
+    loans: loans,
+    onAdd: addRealEstate,
+    onUpdate: updateRealEstate,
+    onRemove: removeRealEstate
   })), /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
