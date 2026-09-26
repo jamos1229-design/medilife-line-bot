@@ -226,10 +226,16 @@
     .customer-card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
     .customer-name { font-size: 17px; font-weight: 700; }
     .customer-meta { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
-    .customer-info-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-    .info-item { background: var(--bg); border-radius: 10px; padding: 9px 12px; }
+    .customer-info-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+    .info-item { background: var(--bg); border-radius: 10px; padding: 9px 12px; min-width: 0; }
     .info-label { font-size: 11px; font-weight: 700; color: var(--text-sub); margin-bottom: 3px; }
-    .info-value { font-size: 14px; font-weight: 600; word-break: keep-all; overflow-wrap: break-word; }
+    .info-value { font-size: 14px; font-weight: 600; word-break: keep-all; overflow-wrap: break-word; min-width: 0; }
+    /* スマホ縦向き（#rootの最大幅430pxより実際のビューポートが狭い場合）は、保険契約カード等の
+       2列表示（受取人／指定代理請求人、保険料／契約日 等）が画面幅を超えないよう1列表示に切り替える。
+       横向き・タブレット・PC（ビューポート430px以上）では従来通り2列のまま維持する。 */
+    @media (max-width: 430px) {
+      .customer-info-row { grid-template-columns: minmax(0, 1fr); }
+    }
 
     .badge {
       display: inline-flex; align-items: center;
