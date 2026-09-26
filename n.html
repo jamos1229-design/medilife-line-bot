@@ -858,6 +858,18 @@ function NexusRealEstateEntryCard({
   const netEquity = nexusRealEstateNetEquity(item, loans);
   const annualRent = nexusRealEstateAnnualRent(item);
   const grossYield = nexusRealEstateGrossYield(item);
+  // 「未入力」と「明示的に0円」を区別して表示するためのフラグ。
+  const hasPrice = nexusRealEstateHasPrice(item);
+  const hasLoanAmount = nexusRealEstateHasLoanAmount(item, loans);
+  const canComputeNetEquity = nexusRealEstateCanComputeNetEquity(item, loans);
+  const hasRent = nexusRealEstateHasRent(item);
+  const priceDisplay = item.marketValueUnknown ? '未評価' : (hasPrice ? nexusRealEstateYenDisplay(yenValue) : '未入力');
+  const priceManDisplay = item.marketValueUnknown ? '未評価' : (hasPrice ? nexusRealEstateManYenDisplay(yenValue) : '未入力');
+  const shareValueDisplay = (item.marketValueUnknown || !hasPrice) ? '未計算' : nexusRealEstateYenDisplay(ownerShareValue);
+  const netEquityDisplay = (item.marketValueUnknown || !canComputeNetEquity) ? '未計算' : nexusRealEstateYenDisplay(netEquity);
+  const netEquityManDisplay = (item.marketValueUnknown || !canComputeNetEquity) ? '未計算' : nexusRealEstateManYenDisplay(netEquity);
+  const loanBalanceDisplay = !item.hasLoan ? 'なし' : (hasLoanAmount ? nexusRealEstateYenDisplay(yenLoanBalance) : '未入力');
+  const loanBalanceManDisplay = !item.hasLoan ? 'なし' : (hasLoanAmount ? nexusRealEstateManYenDisplay(yenLoanBalance) : '未入力');
   const summaryIcon = isForeign ? '🏢' : '🏠';
   const summaryTag = (isForeign ? `海外${item.country ? '・' + item.country : ''}` : '国内') + ' ｜ ' + (item.usageType || '利用区分未設定');
   const cardOuterStyle = { border: '1px solid var(--border)', borderRadius: 8, padding: 10, marginBottom: 10, background: '#fff' };
@@ -888,7 +900,7 @@ function NexusRealEstateEntryCard({
       style: { fontSize: 11.5, color: 'var(--text-sub)', marginTop: 2, marginBottom: 6 }
     }, summaryTag), React.createElement("div", {
       style: { fontSize: 12.5, lineHeight: 1.8 }
-    }, React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "想定価格"), React.createElement("b", null, item.marketValueUnknown ? '未評価' : nexusRealEstateManYenDisplay(yenValue))), React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "ローン残高"), React.createElement("b", null, item.hasLoan ? nexusRealEstateManYenDisplay(yenLoanBalance) : 'なし')), React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "純資産"), React.createElement("b", { style: { color: 'var(--accent)' } }, item.marketValueUnknown ? '未計算' : nexusRealEstateManYenDisplay(netEquity))), isInvestment && React.createElement(React.Fragment, null, React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "年間家賃"), React.createElement("b", null, nexusRealEstateManYenDisplay(annualRent))), React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "表面利回り"), React.createElement("b", null, nexusRealEstatePercentDisplay(grossYield))))));
+    }, React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "想定価格"), React.createElement("b", null, priceManDisplay)), React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "ローン残高"), React.createElement("b", null, loanBalanceManDisplay)), React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "純資産"), React.createElement("b", { style: { color: 'var(--accent)' } }, netEquityManDisplay)), isInvestment && React.createElement(React.Fragment, null, React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "年間家賃"), React.createElement("b", null, hasRent ? nexusRealEstateManYenDisplay(annualRent) : '未入力')), React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "表面利回り"), React.createElement("b", null, nexusRealEstatePercentDisplay(grossYield))))));
   }
 
   // ── 展開時（編集画面）：ここから先は「基本項目」→「収益情報（投資用のみ・折りたたみ）」→
@@ -967,7 +979,7 @@ function NexusRealEstateEntryCard({
     onChange: e => onUpdate(item.id, { fxRate: e.target.value })
   }), React.createElement("div", {
     style: { fontSize: 12.5, marginTop: 4, color: 'var(--text-sub)' }
-  }, "円換算：約", React.createElement("b", { style: { color: 'var(--text)' } }, nexusRealEstateYenDisplay(yenValue)))));
+  }, "円換算：約", React.createElement("b", { style: { color: 'var(--text)' } }, hasPrice ? nexusRealEstateYenDisplay(yenValue) : '未入力'))));
   const domesticRow = !isForeign && React.createElement(React.Fragment, null, fieldLabel("現在の想定価格（概算）"), React.createElement("div", {
     style: { fontSize: 11, color: 'var(--text-sub)', marginTop: -2, marginBottom: 2 }
   }, "今売る場合のおおよその価格"), priceUnknownToggle, item.marketValueUnknown ? priceUnknownNote : React.createElement(AmountInput, {
@@ -1023,7 +1035,7 @@ function NexusRealEstateEntryCard({
     onChange: e => onUpdate(item.id, { loanBalance: e.target.value })
   })), isForeign && React.createElement("div", {
     style: { fontSize: 12, color: 'var(--text-sub)', marginTop: 2 }
-  }, "円換算ローン残高：約", nexusRealEstateYenDisplay(yenLoanBalance)), React.createElement("div", {
+  }, "円換算ローン残高：約", hasLoanAmount ? nexusRealEstateYenDisplay(yenLoanBalance) : '未入力'), React.createElement("div", {
     style: { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }
   }, React.createElement("span", { style: { fontSize: 12, whiteSpace: 'nowrap' } }, "借入先"), React.createElement("input", {
     className: "form-input", style: { flex: 1, minWidth: 120 },
@@ -1046,7 +1058,7 @@ function NexusRealEstateEntryCard({
   // 本人持分評価額は「金額」と「持分（％）」を別の行に分けて表示する。
   const summaryBox = React.createElement("div", {
     style: { background: 'var(--bg)', borderRadius: 8, padding: 10, marginTop: 10, fontSize: 12.5, lineHeight: 1.9 }
-  }, React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "現在の想定価格"), React.createElement("b", null, item.marketValueUnknown ? '未評価' : nexusRealEstateYenDisplay(yenValue))), React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "本人持分評価額"), React.createElement("b", null, item.marketValueUnknown ? '未計算' : nexusRealEstateYenDisplay(ownerShareValue))), React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: 'var(--text-sub)' } }, React.createElement("span", null, "持分"), React.createElement("span", null, ownershipPct, "％")), item.hasLoan && React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "ローン残高（持分対応）"), React.createElement("b", { style: { color: 'var(--danger)' } }, nexusRealEstateYenDisplay(ownerShareLoan))), React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between', borderTop: '1px dashed var(--border)', marginTop: 4, paddingTop: 4 } }, React.createElement("span", { style: { fontWeight: 700 } }, "不動産純資産"), React.createElement("b", { style: { color: 'var(--accent)' } }, item.marketValueUnknown ? '未計算' : nexusRealEstateYenDisplay(netEquity))));
+  }, React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "現在の想定価格"), React.createElement("b", null, priceDisplay)), React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "本人持分評価額"), React.createElement("b", null, shareValueDisplay)), React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: 'var(--text-sub)' } }, React.createElement("span", null, "持分"), React.createElement("span", null, ownershipPct, "％")), item.hasLoan && React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "ローン残高（持分対応）"), React.createElement("b", { style: { color: 'var(--danger)' } }, hasLoanAmount ? nexusRealEstateYenDisplay(ownerShareLoan) : '未入力')), React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between', borderTop: '1px dashed var(--border)', marginTop: 4, paddingTop: 4 } }, React.createElement("span", { style: { fontWeight: 700 } }, "不動産純資産"), React.createElement("b", { style: { color: 'var(--accent)' } }, netEquityDisplay)));
   // 「投資用」のときだけ「＋ 収益情報」の開閉セクションを表示する（居住用・事業用・その他では
   // 家賃収入等の概念が無い、または不動産の主目的ではないため出さない）。初期状態は閉じている。
   const incomeToggleBtn = isInvestment && React.createElement("button", {
@@ -1081,7 +1093,7 @@ function NexusRealEstateEntryCard({
     onChange: e => onUpdate(item.id, { annualLoanPayment: e.target.value })
   }), React.createElement("div", {
     style: { marginTop: 8, paddingTop: 8, borderTop: '1px dashed #BFDBFE', fontSize: 12.5, lineHeight: 1.9 }
-  }, React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "年間家賃収入"), React.createElement("b", null, nexusRealEstateYenDisplay(nexusRealEstateAnnualRent(item)))), React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "年間運営経費"), React.createElement("b", null, nexusRealEstateYenDisplay(nexusRealEstateAnnualExpenses(item)))), React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "表面利回り"), React.createElement("b", null, nexusRealEstatePercentDisplay(nexusRealEstateGrossYield(item)))), React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "実質収益"), React.createElement("b", null, nexusRealEstateYenDisplay(nexusRealEstateNetIncome(item)))), React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "実質利回り"), React.createElement("b", null, nexusRealEstatePercentDisplay(nexusRealEstateNetYield(item)))), React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "年間キャッシュフロー"), React.createElement("b", null, nexusRealEstateYenDisplay(nexusRealEstateAnnualCashFlow(item))))));
+  }, React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "年間家賃収入"), React.createElement("b", null, hasRent ? nexusRealEstateYenDisplay(nexusRealEstateAnnualRent(item)) : '未入力')), React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "年間運営経費"), React.createElement("b", null, nexusRealEstateYenDisplay(nexusRealEstateAnnualExpenses(item)))), React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "表面利回り"), React.createElement("b", null, nexusRealEstatePercentDisplay(nexusRealEstateGrossYield(item)))), React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "実質収益"), React.createElement("b", null, nexusRealEstateNetIncome(item) === null ? '未計算' : nexusRealEstateYenDisplay(nexusRealEstateNetIncome(item)))), React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "実質利回り"), React.createElement("b", null, nexusRealEstatePercentDisplay(nexusRealEstateNetYield(item)))), React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between' } }, React.createElement("span", { style: { color: 'var(--text-sub)' } }, "年間キャッシュフロー"), React.createElement("b", null, nexusRealEstateAnnualCashFlow(item) === null ? '未計算' : nexusRealEstateYenDisplay(nexusRealEstateAnnualCashFlow(item))))));
   // 「＋ 評価・相続情報」：現在評価額の根拠（評価方法）・固定資産税評価額・相続税評価額・
   // 所在地住所・物件種別をまとめる。固定資産税評価額・相続税評価額は、現在評価額（marketValue）
   // とは完全に別の項目として保持し、互いに上書き・混同しない。
@@ -1114,7 +1126,7 @@ function NexusRealEstateEntryCard({
     value: item.inheritanceTaxValue || '',
     placeholder: "未入力可",
     onChange: e => onUpdate(item.id, { inheritanceTaxValue: e.target.value })
-  }), fieldLabel("所在地住所"), React.createElement("input", {
+  }), fieldLabel("物件所在地（住所）"), React.createElement("input", {
     className: "form-input",
     placeholder: "例：東京都〇〇区〇〇1-2-3",
     value: item.propertyAddress || '',
@@ -26440,6 +26452,28 @@ function nexusRealEstateOwnerShareLoan(item, loans) {
 function nexusRealEstateNetEquity(item, loans) {
   return nexusRealEstateOwnerShareValue(item) - nexusRealEstateOwnerShareLoan(item, loans);
 }
+// ── 「未入力」と「明示的に0を入力した」を区別するための判定関数群 ──
+// 表示側はこれらを使って「未入力／未計算」と実際の金額（0円を含む）を出し分ける。
+// 集計用のnexusRealEstateYenValue等（未入力を0として扱う）は変更しない（合算処理を壊さないため）。
+function nexusRealEstateHasPrice(item) {
+  if (!item || item.marketValueUnknown) return false;
+  const raw = item.marketValue !== undefined && item.marketValue !== '' ? item.marketValue : item.value;
+  return nexusHasValue(raw);
+}
+// ローンが無い場合は「未入力」という概念自体が無い（残高0円が正しい状態）ため常にtrue。
+// ローンありの場合のみ、リンク先ローンの残高／手入力欄が実際に入力されているかを見る。
+function nexusRealEstateHasLoanAmount(item, loans) {
+  if (!item || !item.hasLoan) return true;
+  const linked = nexusRealEstateFindLinkedLoan(item, loans);
+  if (linked) return nexusHasValue(linked.balance);
+  return nexusHasValue(item.loanBalance);
+}
+function nexusRealEstateCanComputeNetEquity(item, loans) {
+  return nexusRealEstateHasPrice(item) && nexusRealEstateHasLoanAmount(item, loans);
+}
+function nexusRealEstateHasRent(item) {
+  return !!(item && nexusHasValue(item.monthlyRent));
+}
 // 資産クラス別集計・総資産には、この物件単位の持分ではなく評価額全体（円換算）を使う
 // （他の資産カテゴリ（投資信託・企業型DC等）もすべて持分控除前の評価額で集計しているため、
 // 不動産だけ扱いを変えると合計の意味がぶれる）。持分・純資産は物件カードごとの参考情報として別途表示する。
@@ -26464,24 +26498,28 @@ function nexusRealEstateAnnualExpenses(item) {
   if (!item) return 0;
   return nexusRealEstateAnnualManagementFee(item) + nexusRealEstateAnnualRepairReserve(item) + Math.max(0, parseFloat(item.otherExpenses) || 0);
 }
+// 「未入力」なら計算せずnull（未計算）を返す。一方、ユーザーが月額家賃収入に明示的に
+// 「0」を入力した場合はhasRent=trueとなるため、0円という実際の入力値として正しく計算する
+// （例：表面利回り0%は、家賃0円という実在する状態の正しい計算結果であり「未計算」ではない）。
 function nexusRealEstateGrossYield(item) {
-  const annualRent = nexusRealEstateAnnualRent(item);
+  if (!nexusRealEstateHasRent(item) || !nexusRealEstateHasPrice(item)) return null;
   const value = nexusRealEstateYenValue(item);
-  if (annualRent <= 0 || value <= 0) return null;
-  return annualRent / value * 100;
+  if (value <= 0) return null;
+  return nexusRealEstateAnnualRent(item) / value * 100;
 }
 function nexusRealEstateNetIncome(item) {
-  const annualRent = nexusRealEstateAnnualRent(item);
-  if (annualRent <= 0) return null;
-  return annualRent - nexusRealEstateAnnualExpenses(item);
+  if (!nexusRealEstateHasRent(item)) return null;
+  return nexusRealEstateAnnualRent(item) - nexusRealEstateAnnualExpenses(item);
 }
 function nexusRealEstateNetYield(item) {
+  if (!nexusRealEstateHasRent(item) || !nexusRealEstateHasPrice(item)) return null;
   const netIncome = nexusRealEstateNetIncome(item);
   const value = nexusRealEstateYenValue(item);
   if (netIncome === null || value <= 0) return null;
   return netIncome / value * 100;
 }
 function nexusRealEstateAnnualCashFlow(item) {
+  if (!nexusRealEstateHasRent(item)) return null;
   const netIncome = nexusRealEstateNetIncome(item);
   if (netIncome === null) return null;
   const loanPayment = Math.max(0, parseFloat(item && item.annualLoanPayment) || 0);
@@ -31182,15 +31220,19 @@ function NexusPlanningSection({
       const reAll = isCoupleScope ? [...(portfolio.realEstate || []), ...(spousePortfolioInputs.realEstate || [])] : portfolio.realEstate || [];
       if (reAll.length === 0) return '';
       const reRows = reAll.map(re => {
-        // 「分からない」（marketValueUnknown）の物件は、価格・持分評価額・純資産のいずれも
-        // 0円と表示せず「未評価」「未計算」にする（未入力を0円扱いと誤認させないため）。
+        // 「分からない」（marketValueUnknown）や単なる未入力の物件は、価格・ローン残高・純資産の
+        // いずれも0円と表示せず「未評価」「未入力」「未計算」にする（未入力を0円扱いと誤認させないため）。
         const yenValue = nexusRealEstateYenValue(re);
         const pct = nexusRealEstateOwnershipPct(re);
         const netEquity = nexusRealEstateNetEquity(re, loans);
+        const hasPrice = nexusRealEstateHasPrice(re);
+        const hasLoanAmount = nexusRealEstateHasLoanAmount(re, loans);
+        const canComputeNetEquity = nexusRealEstateCanComputeNetEquity(re, loans);
         const location = nexusRealEstateIsForeign(re) ? `海外${re.country ? '・' + escapeHtmlForPrint(re.country) : ''}` : '国内';
-        const valueCell = re.marketValueUnknown ? '未評価' : (nexusHasValue(yenValue) ? Math.round(yenValue).toLocaleString() + '円' : '未入力');
-        const netEquityCell = re.marketValueUnknown ? '未計算' : Math.round(netEquity).toLocaleString() + '円';
-        return `<tr><td>${escapeHtmlForPrint(re.name || '')}</td><td>${location}</td><td>${escapeHtmlForPrint(re.usageType || '未設定')}</td><td>${escapeHtmlForPrint(re.owner || '—')}</td><td>${pct}％</td><td>${valueCell}</td><td>${re.hasLoan ? Math.round(nexusRealEstateYenLoanBalance(re, loans)).toLocaleString() + '円' : 'なし'}</td><td>${netEquityCell}</td></tr>`;
+        const valueCell = re.marketValueUnknown ? '未評価' : (hasPrice ? Math.round(yenValue).toLocaleString() + '円' : '未入力');
+        const loanCell = !re.hasLoan ? 'なし' : (hasLoanAmount ? Math.round(nexusRealEstateYenLoanBalance(re, loans)).toLocaleString() + '円' : '未入力');
+        const netEquityCell = (re.marketValueUnknown || !canComputeNetEquity) ? '未計算' : Math.round(netEquity).toLocaleString() + '円';
+        return `<tr><td>${escapeHtmlForPrint(re.name || '')}</td><td>${location}</td><td>${escapeHtmlForPrint(re.usageType || '未設定')}</td><td>${escapeHtmlForPrint(re.owner || '—')}</td><td>${pct}％</td><td>${valueCell}</td><td>${loanCell}</td><td>${netEquityCell}</td></tr>`;
       }).join('');
       return `
       <div class="print-section">
@@ -31717,9 +31759,13 @@ function NexusPlanningSection({
         row = nexusXlsxDataRows(ws, row, reAllXlsx.map(re => {
           const location = nexusRealEstateIsForeign(re) ? `海外${re.country ? '・' + re.country : ''}` : '国内';
           // 「分からない」の物件は0円と表示せず「未評価」「未計算」の文字列にする（数値の桁と混同しないよう明示）。
-          const valueCell = re.marketValueUnknown ? '未評価' : Math.round(nexusRealEstateYenValue(re));
-          const netEquityCell = re.marketValueUnknown ? '未計算' : Math.round(nexusRealEstateNetEquity(re, loans));
-          return [re.name || '', location, re.usageType || '未設定', re.owner || '', nexusRealEstateOwnershipPct(re), valueCell, re.hasLoan ? Math.round(nexusRealEstateYenLoanBalance(re, loans)) : 0, netEquityCell];
+          const hasPrice = nexusRealEstateHasPrice(re);
+          const hasLoanAmount = nexusRealEstateHasLoanAmount(re, loans);
+          const canComputeNetEquity = nexusRealEstateCanComputeNetEquity(re, loans);
+          const valueCell = re.marketValueUnknown ? '未評価' : (hasPrice ? Math.round(nexusRealEstateYenValue(re)) : '未入力');
+          const loanCell = !re.hasLoan ? 0 : (hasLoanAmount ? Math.round(nexusRealEstateYenLoanBalance(re, loans)) : '未入力');
+          const netEquityCell = (re.marketValueUnknown || !canComputeNetEquity) ? '未計算' : Math.round(nexusRealEstateNetEquity(re, loans));
+          return [re.name || '', location, re.usageType || '未設定', re.owner || '', nexusRealEstateOwnershipPct(re), valueCell, loanCell, netEquityCell];
         }), [5, 6, 7, 8]);
         row += 1;
       }
