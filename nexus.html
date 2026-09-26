@@ -26333,7 +26333,10 @@ const FAMILY_INSURANCE_LABEL = {
 // 家計キャッシュフローに合わせた収入の種類（給与以外の定期収入も登録できるようにする）。
 // 旧仕様（確定申告の所得区分ベースの語彙）で保存済みの値は、選択肢に無くても
 // 表示側（NexusIncomeTypeSelect）で動的に選択肢へ追加して壊さないようにする。
-const LP_INCOME_TYPES = ['給与', '配偶者給与', '児童手当', '年金', '副業収入', '家賃収入', 'その他'];
+const LP_INCOME_TYPES = ['給与', '配偶者給与', '児童手当', '年金', '副業収入', '家賃収入', '贈与・援助', 'その他'];
+// 「給与」「配偶者給与」の場合のみ意味を持つ区分（手取り／額面）。項目単位で持たせることで、
+// 本人は手取り・配偶者は額面のように、世帯内で異なる基準の収入が混在していても正しく記録できる。
+const LP_INCOME_AMOUNT_TYPES = ['手取り', '額面'];
 // 貯蓄・資産形成の種類（家計支出とは別枠で「いくら積み立てているか」を管理する）
 const LP_SAVINGS_TYPES = ['普通預金', '定期預金', 'NISA', '投資信託', 'iDeCo', '保険', 'その他'];
 // 家計簿の支出費目。固定費／変動費／貯蓄・資産運用の3グループに分類（プルダウンはoptgroupで表示）
@@ -26904,14 +26907,21 @@ function nexusComputePortfolio(contractsForCharts, portfolioInputs) {
     value: Math.round(miscOtherJpy),
     color: '#A16207'
   }].filter(i => i.value > 0);
+  // 「お金の持ち方」：暗号資産は円換算で評価額を表示していても、日本円という資産ではないため、
+  // 日本円・外貨のどちらにも含めず、必ず独立した区分として扱う（manualJpyAssetsTotalには
+  // cryptoJpyが含まれているため、日本円の集計からはその分を差し引く）。
   const currencyChart = [{
-    label: '円建て',
-    value: Math.round(currencyJpyJpy) + Math.round(manualFundsStocksJpy) + Math.round(manualJpyAssetsTotal),
+    label: '日本円',
+    value: Math.round(currencyJpyJpy) + Math.round(manualFundsStocksJpy) + Math.round(manualJpyAssetsTotal - cryptoJpy),
     color: 'var(--accent)'
   }, {
-    label: '外貨建て',
+    label: '外国のお金（外貨）',
     value: Math.round(currencyForeignJpy),
     color: '#D97706'
+  }, {
+    label: '暗号資産',
+    value: Math.round(cryptoJpy),
+    color: '#F97316'
   }].filter(i => i.value > 0);
   const portfolioTotal = assetClassChart.reduce((s, i) => s + i.value, 0);
   // 自社株（非上場）は換金できる資産ではないため、老後資金等の「使えるお金」の
@@ -31230,13 +31240,13 @@ function NexusPlanningSection({
       </div>
       <div class="print-page-break print-page-title">4. 資産診断</div>
       <div class="print-section">
-        <h3>登録済み資産ポートフォリオ（資産クラス別）${isCoupleScope ? '｜夫婦合算' : ''}</h3>
+        <h3>持っているお金の内訳${isCoupleScope ? '｜夫婦合算' : ''}</h3>
         ${nexusPieChartBlockHtml(pAssetClassChart)}
         <table><tr><th>区分</th><th>金額</th><th>割合</th></tr>${assetClassRowsHtml}</table>
         <p style="font-size:11px;color:#999;">※本グラフはMEDiLIFE NEXUSに登録されている資産のみを集計しています。預貯金・株式・投資信託・不動産等が未入力の場合、実際の資産配分とは異なります。</p>
       </div>
       <div class="print-section">
-        <h3>登録済み資産ポートフォリオ（通貨別：円建て／外貨建て）${isCoupleScope ? '｜夫婦合算' : ''}</h3>
+        <h3>お金の持ち方${isCoupleScope ? '｜夫婦合算' : ''}</h3>
         ${nexusPieChartBlockHtml(pCurrencyChart)}
         <table><tr><th>区分</th><th>金額</th></tr>${currencyRowsHtml}</table>
         ${pInsuranceSavingsUnconvertible > 0 || pCurrencyUnconvertible > 0 ? '<p style="font-size:11px;color:#b98a3d;">※ 外貨建て契約のうち適用レート未入力のものは円換算できず、上記には含まれていません</p>' : ''}
@@ -31882,13 +31892,13 @@ function NexusPlanningSection({
         row += 1;
       }
     }
-    row = nexusXlsxSubTitle(ws, row, `登録済み資産ポートフォリオ（資産クラス別）${scopeNote}`, 3);
+    row = nexusXlsxSubTitle(ws, row, `持っているお金の内訳${scopeNote}`, 3);
     row = nexusXlsxHeaderRow(ws, row, ['区分', '金額', '割合']);
     row = nexusXlsxDataRows(ws, row, scopedPortfolio.assetClassChart.length ? scopedPortfolio.assetClassChart.map(i => [i.label, i.value, scopedPortfolio.portfolioTotal > 0 ? Math.round(i.value / scopedPortfolio.portfolioTotal * 100) + '%' : '']) : [['データなし', '', '']], [2]);
     row += 1;
     row = nexusXlsxDataRows(ws, row, [['※本表はMEDiLIFE NEXUSに登録されている資産のみを集計しています。預貯金・株式・投資信託・不動産等が未入力の場合、実際の資産配分とは異なります。']], []);
     row += 1;
-    row = nexusXlsxSubTitle(ws, row, `登録済み資産ポートフォリオ（通貨別：円建て／外貨建て）${scopeNote}`, 2);
+    row = nexusXlsxSubTitle(ws, row, `お金の持ち方${scopeNote}`, 2);
     row = nexusXlsxHeaderRow(ws, row, ['区分', '金額']);
     row = nexusXlsxDataRows(ws, row, scopedPortfolio.currencyChart.length ? scopedPortfolio.currencyChart.map(i => [i.label, i.value]) : [['データなし', '']], [2]);
     row += 1;
@@ -32619,10 +32629,21 @@ function NexusPlanningSection({
       fontSize: 12.5,
       marginBottom: 8
     }
-  }, "収入（種類別・給与以外の定期収入も登録できます）"), incomeItems.map(x => {
+  }, "収入（家計に入ってくるお金）"), incomeItems.map(x => {
     const incomeTypeOptions = LP_INCOME_TYPES.includes(x.type) ? LP_INCOME_TYPES : [x.type, ...LP_INCOME_TYPES];
+    const isSalaryType = x.type === '給与' || x.type === '配偶者給与';
+    const isGiftType = x.type === '贈与・援助';
+    const isOtherType = x.type === 'その他';
+    const amountNum = parseFloat(x.amount);
     return /*#__PURE__*/React.createElement("div", {
       key: x.id,
+      style: {
+        border: '1px solid var(--border)',
+        borderRadius: 8,
+        padding: 8,
+        marginBottom: 8
+      }
+    }, /*#__PURE__*/React.createElement("div", {
       style: {
         display: 'flex',
         alignItems: 'center',
@@ -32688,7 +32709,76 @@ function NexusPlanningSection({
         cursor: 'pointer',
         flexShrink: 0
       }
-    }, "×"));
+    }, "×")), !isNaN(amountNum) && x.amount !== '' ? /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--text-sub)',
+        marginBottom: isSalaryType || isGiftType || isOtherType ? 6 : 0
+      }
+    }, amountNum.toLocaleString() + '円' + (x.unit === 'monthly' ? '／月' : '／年')) : null, isSalaryType ? /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        flexWrap: 'wrap'
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 12
+      }
+    }, "金額区分："), /*#__PURE__*/React.createElement("div", {
+      className: "toggle-group"
+    }, LP_INCOME_AMOUNT_TYPES.map(t => /*#__PURE__*/React.createElement("button", {
+      key: t,
+      type: "button",
+      className: 'toggle-btn' + (x.amountType === t ? ' sel' : ''),
+      style: {
+        fontSize: 11,
+        padding: '4px 8px'
+      },
+      onClick: () => updateIncomeItem(x.id, {
+        amountType: t
+      })
+    }, t)))) : null, isGiftType ? /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6
+      }
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "text",
+      className: "form-input",
+      style: {
+        fontSize: 12.5
+      },
+      placeholder: "誰から（任意）例：親族・知人",
+      value: x.fromPerson || '',
+      onChange: e => updateIncomeItem(x.id, {
+        fromPerson: e.target.value
+      })
+    }), /*#__PURE__*/React.createElement("input", {
+      type: "text",
+      className: "form-input",
+      style: {
+        fontSize: 12.5
+      },
+      placeholder: "内容・メモ（任意）",
+      value: x.memo || '',
+      onChange: e => updateIncomeItem(x.id, {
+        memo: e.target.value
+      })
+    })) : null, isOtherType ? /*#__PURE__*/React.createElement("input", {
+      type: "text",
+      className: "form-input",
+      style: {
+        fontSize: 12.5
+      },
+      placeholder: "内容・メモ（任意）",
+      value: x.memo || '',
+      onChange: e => updateIncomeItem(x.id, {
+        memo: e.target.value
+      })
+    }) : null);
   }), /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "btn btn-outline",
@@ -32706,11 +32796,19 @@ function NexusPlanningSection({
     style: {
       color: 'var(--accent)'
     }
-  }, incomeItems.length ? totalIncome.toLocaleString() + '円／年' : '未入力'), /*#__PURE__*/React.createElement("span", {
+  }, incomeItems.length ? totalIncome.toLocaleString() + '円／年' : '未入力'), incomeItems.length ? /*#__PURE__*/React.createElement("span", {
     style: {
       marginLeft: 12
     }
-  }, "給与区分：", /*#__PURE__*/React.createElement("select", {
+  }, "月平均：", /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: 'var(--accent)'
+    }
+  }, Math.round(totalIncome / 12).toLocaleString() + '円／月')) : null, incomeItems.some(x => x.type === '給与' || x.type === '配偶者給与') ? /*#__PURE__*/React.createElement("span", {
+    style: {
+      marginLeft: 12
+    }
+  }, "金額区分：", /*#__PURE__*/React.createElement("select", {
     className: "form-input",
     style: {
       display: 'inline-block',
@@ -32728,7 +32826,7 @@ function NexusPlanningSection({
     value: "gross"
   }, "額面"), /*#__PURE__*/React.createElement("option", {
     value: "net"
-  }, "手取り")))), /*#__PURE__*/React.createElement("div", {
+  }, "手取り"))) : null), /*#__PURE__*/React.createElement("div", {
     style: {
       fontWeight: 700,
       fontSize: 12.5,
@@ -34336,7 +34434,7 @@ function NexusPlanningSection({
       fontSize: 12.5,
       marginBottom: 8
     }
-  }, "登録済み資産ポートフォリオ（資産クラス別）"), /*#__PURE__*/React.createElement(NexusPlanningBarChart, {
+  }, "持っているお金の内訳"), /*#__PURE__*/React.createElement(NexusPlanningBarChart, {
     items: assetClassChart,
     unit: "円"
   }), /*#__PURE__*/React.createElement("div", {
@@ -34353,7 +34451,7 @@ function NexusPlanningSection({
       fontSize: 12.5,
       marginBottom: 8
     }
-  }, "登録済み資産ポートフォリオ（通貨別：円建て／外貨建て）"), /*#__PURE__*/React.createElement(NexusPlanningBarChart, {
+  }, "お金の持ち方"), /*#__PURE__*/React.createElement(NexusPlanningBarChart, {
     items: currencyChart,
     unit: "円"
   }), /*#__PURE__*/React.createElement("div", {
