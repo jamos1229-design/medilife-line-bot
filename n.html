@@ -2809,6 +2809,181 @@ const nexusResolveMemberAge = (sp, customers) => {
   return sp.birthdate ? calcAge(sp.birthdate) : calcStoredAge(sp.age, sp.ageYear);
 };
 
+// ── AIプロンプトコピー用の個人情報匿名化（共通ロジック） ──────────────
+// 「コピーする瞬間だけ」文章を匿名化するための共通関数群。元の顧客データ・面談メモ自体は
+// 一切書き換えない。generatePrompt()（各画面のプロンプト生成）→ nexusAnonymizePersonalInfo()
+// （匿名化）→ copyToClipboard() の順で使い、新しいAIプロンプトコピーボタンが増えても
+// この関数群をそのまま再利用できるようにする。
+//
+// 単純に個人名を全部削除するのではなく、本人／配偶者／子ども／父／母／兄／姉／弟／妹／
+// 紹介者　等、「誰との関係か」をAIが分析しやすいように残す。続柄が構造化データから
+// 判定できない相手は「関係者A」「関係者B」のように区別する。
+function nexusFamilyRelationPlaceholder(sp, customer, customers) {
+  const linked = sp.linkedCustomerId ? (customers || []).find(x => x.id === sp.linkedCustomerId) : null;
+  const gender = linked ? linked.gender : '';
+  if (sp.relation === '元配偶者') return '元配偶者';
+  if (sp.relation === '親') {
+    if (gender === '男性') return '父';
+    if (gender === '女性') return '母';
+    return '親';
+  }
+  if (sp.relation === '祖父母') {
+    if (gender === '男性') return '祖父';
+    if (gender === '女性') return '祖母';
+    return '祖父母';
+  }
+  if (sp.relation === '兄弟姉妹') {
+    const selfAge = customer.birthdate ? calcAge(customer.birthdate) : calcStoredAge(customer.age, customer.ageYear);
+    const memberAge = nexusResolveMemberAge(sp, customers);
+    if (gender && selfAge !== null && selfAge !== undefined && memberAge !== null && memberAge !== undefined) {
+      const older = memberAge > selfAge;
+      if (gender === '男性') return older ? '兄' : '弟';
+      if (gender === '女性') return older ? '姉' : '妹';
+    }
+    return 'きょうだい';
+  }
+  if (sp.relation === '従兄弟') return 'いとこ';
+  if (sp.relation === '友人') return '友人';
+  if (sp.relation === '職場') return '職場の関係者';
+  if (sp.relation === '知人') return '知人';
+  return '関係者';
+}
+// 面談メモでは「山田花子さんと相談」ではなく「花子さんと相談」のように、姓を省略して
+// 名だけで書かれることが多い。文章だけから氏名らしき文字列を推測するのではなく、
+// 「本人の登録氏名」と「家族として登録済みの氏名」という、既に構造化データとして
+// 分かっている2つの氏名を比較し、共通する姓（先頭の一致部分、最大3文字）を除いた
+// 残りの部分を「名」とみなして匿名化対象に加える（世帯で姓を共有している場合のみ有効な、
+// 構造化データに基づく処理であり、文章内の未知の文字列を氏名と推測するものではない）。
+function nexusSharedSurnameGivenName(selfFullName, memberFullName) {
+  if (!selfFullName || !memberFullName) return '';
+  const maxLen = Math.min(3, selfFullName.length - 1, memberFullName.length - 1);
+  for (let len = maxLen; len >= 1; len--) {
+    if (selfFullName.slice(0, len) === memberFullName.slice(0, len)) {
+      const given = memberFullName.slice(len).trim();
+      if (given.length >= 2) return given;
+      break;
+    }
+  }
+  return '';
+}
+// 構造化データ（顧客本人・配偶者・お子様・ご家族・紹介者・連絡先情報）から
+// 「元の文字列 → 匿名化後の表示」の対応表を作る。日本人の氏名を文章だけから推測する
+// ような処理はせず、アプリが既に把握している登録済みの氏名・関係性のみを対象にする。
+function nexusBuildPersonalInfoAnonymizeMap(selfName, customer, customers) {
+  const map = [];
+  const push = (name, placeholder) => {
+    const trimmed = (name || '').trim();
+    if (trimmed) map.push({
+      name: trimmed,
+      placeholder
+    });
+  };
+  push(selfName, 'お客さまA');
+  if (!customer) return map;
+  push(customer.name, 'お客さまA');
+  push(customer.corporateName, 'お客さまA');
+  push(customer.representative, 'お客さまA');
+  push(customer.furigana, 'お客さまA');
+  push(customer.formerName, 'お客さまA');
+  const selfFullName = (customer.name || '').trim();
+  const pushFamilyMember = (memberName, placeholder) => {
+    push(memberName, placeholder);
+    const given = nexusSharedSurnameGivenName(selfFullName, (memberName || '').trim());
+    if (given) push(given, placeholder);
+  };
+  const suspects = customer.suspects || [];
+  let childIdx = 0;
+  let otherIdx = 0;
+  suspects.forEach(sp => {
+    const linked = sp.linkedCustomerId ? (customers || []).find(x => x.id === sp.linkedCustomerId) : null;
+    if (sp.relation === '配偶者') {
+      pushFamilyMember(linked ? linked.name : sp.name, '配偶者');
+      return;
+    }
+    if (sp.relation === '子供') {
+      const childName = nexusChildDisplayName(sp, customers);
+      if (childName) {
+        childIdx++;
+        pushFamilyMember(childName, `子ども${String.fromCharCode(64 + childIdx)}`);
+      }
+      return;
+    }
+    const memberName = ((linked ? linked.name : sp.name) || '').trim();
+    if (!memberName) return;
+    let placeholder = nexusFamilyRelationPlaceholder(sp, customer, customers);
+    if (placeholder === '関係者') {
+      otherIdx++;
+      placeholder = `関係者${String.fromCharCode(64 + otherIdx)}`;
+    }
+    pushFamilyMember(memberName, placeholder);
+  });
+  // 自分側には配偶者サスペクトが未登録でも、相手側の顧客レコードで自分が配偶者として
+  // 連携登録されている場合（夫婦どちらか片方にしか家族情報を入力していないケース）に対応する。
+  if (!suspects.some(sp => sp.relation === '配偶者')) {
+    const reverseSpouse = (customers || []).find(x => x.id !== customer.id && (x.suspects || []).some(sp => sp.relation === '配偶者' && sp.linkedCustomerId === customer.id));
+    if (reverseSpouse) pushFamilyMember(reverseSpouse.name, '配偶者');
+  }
+  if (customer.referredBy) {
+    const ref = (customers || []).find(x => x.id === customer.referredBy);
+    if (ref) push(ref.name, '紹介者A');
+  }
+  push(customer.referredByName, '紹介者A');
+  push(customer.phone, '[電話番号]');
+  push(customer.email, '[メールアドレス]');
+  push(customer.address, '[住所]');
+  push(customer.postalCode, '[住所]');
+  push(customer.workplace, '[勤務先]');
+  return map;
+}
+// パターンで判定しやすい個人情報（電話番号・メールアドレス・郵便番号）は、登録済みの値と
+// 完全一致しない書き方（表記ゆれ等）であっても念のため匿名化する。
+function nexusAnonymizePiiPatterns(text) {
+  if (!text) return text;
+  return text.replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, '[メールアドレス]').replace(/0\d{1,4}-?\d{1,4}-?\d{3,4}/g, '[電話番号]').replace(/\d{3}-\d{4}/g, '[住所]');
+}
+// 最終防衛ライン：構造化データによる置換後も、登録済みの顧客・ご家族の氏名が文章内に
+// 残っていないかを全顧客分チェックし、万一残っていた場合は安全側に倒して汎用の
+// 「[個人名]」に置き換える（コピー直前の最後のチェック）。
+function nexusRedactResidualNames(text, customers) {
+  if (!text) return text;
+  const names = new Set();
+  (customers || []).forEach(c => {
+    if (c.name) names.add(c.name.trim());
+    if (c.furigana) names.add(c.furigana.trim());
+    if (c.formerName) names.add(c.formerName.trim());
+    if (c.corporateName) names.add(c.corporateName.trim());
+    if (c.representative) names.add(c.representative.trim());
+    (c.suspects || []).forEach(sp => {
+      if (sp.name && !/^お子様\d+$/.test(sp.name.trim())) names.add(sp.name.trim());
+    });
+  });
+  let result = text;
+  Array.from(names).filter(n => n && n.length >= 2).sort((a, b) => b.length - a.length).forEach(name => {
+    if (result.includes(name)) {
+      result = result.replace(new RegExp(nexusEscapeRegExp(name), 'g'), '[個人名]');
+    }
+  });
+  return result;
+}
+// AIプロンプトへコピーする直前だけに適用する共通の匿名化エントリーポイント。
+// generatePrompt() → nexusAnonymizePersonalInfo()（この関数） → copyToClipboard() の順で使う。
+// ctx.selfName：画面に表示している本人の名前（未登録の見込客の場合はmemo.personName等）。
+// ctx.customer：構造化された顧客データ（未登録の場合はnull/undefinedでよい）。
+// ctx.customers：関係性解決（配偶者・紹介者の連携等）に使う全顧客配列。
+function nexusAnonymizePersonalInfo(text, ctx) {
+  if (!text) return text;
+  const {
+    selfName,
+    customer,
+    customers
+  } = ctx || {};
+  const nameMap = nexusBuildPersonalInfoAnonymizeMap(selfName, customer, customers);
+  let result = nexusAnonymizeNames(text, nameMap);
+  result = nexusAnonymizePiiPatterns(result);
+  result = nexusRedactResidualNames(result, customers);
+  return result;
+}
+
 // ── 世帯属性の自動分類ロジック ──────────────────────────────────
 // 入力: 年齢・婚姻状況・同居家族構成（サスペクトの「同居」フラグ付き）
 // 出力: 世帯カテゴリー1つ（優先順位に沿って上から判定し、最初に一致した
@@ -12371,13 +12546,25 @@ function NegotiationDetail({
 氏名: ${displayName}
 面談日: ${memo.date}
 ${memo.memo}`.trim();
-  const copyPrompt = type => {
+  // ①元データからコピー用の文章を生成する（この時点ではまだ匿名化していない）
+  const generatePrompt = type => {
     const prompts = {
       referral: `以下の商談記録をもとに、この顧客から紹介をもらうための具体的なアドバイスをください。タイミング・セリフ例・紹介してもらいやすいターゲット像を含めて日本語で出力してください。\n\n${summary}`,
       instagram: `以下の商談記録をもとに、FP・保険営業のInstagram投稿文を作成してください。顧客が特定されないよう配慮しつつ、フォロワーの共感を呼ぶ内容にしてください。ハッシュタグも含めてください。\n\n${summary}`,
       next: `以下の商談記録をもとに、次回商談の準備事項・確認すべきこと・提案内容のアドバイスを具体的に日本語で出力してください。\n\n${summary}`
     };
-    copyText(prompts[type], '📋 コピーしました！Claude.aiに貼り付けてください');
+    return prompts[type];
+  };
+  // ②生成した文章だけを匿名化する（元の顧客データ・商談メモ自体は書き換えない）
+  // ③匿名化済みの文章をクリップボードへコピーする
+  const copyPrompt = type => {
+    const rawPrompt = generatePrompt(type);
+    const anonymizedPrompt = nexusAnonymizePersonalInfo(rawPrompt, {
+      selfName: displayName,
+      customer,
+      customers
+    });
+    copyText(anonymizedPrompt, '📋 コピーしました！Claude.aiに貼り付けてください');
   };
   const copyToKeep = () => {
     nexusCopyToKeep(`【商談メモ】${memo.date} ${displayName}\n\n${memo.memo}`.trim(), () => showToast('📋 コピーしました！Google Keepに貼り付けてください'));
@@ -12545,9 +12732,15 @@ ${memo.memo}`.trim();
     style: {
       fontSize: 11,
       color: 'var(--text-sub)',
-      marginBottom: 10
+      marginBottom: 4
     }
   }, "💡 ボタンを押してコピー → Claude.aiに貼り付けて使う"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      marginBottom: 10
+    }
+  }, "🔒 個人情報を匿名化してコピーします"), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       flexDirection: 'column',
