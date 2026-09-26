@@ -229,7 +229,7 @@
     .customer-info-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
     .info-item { background: var(--bg); border-radius: 10px; padding: 9px 12px; }
     .info-label { font-size: 11px; font-weight: 700; color: var(--text-sub); margin-bottom: 3px; }
-    .info-value { font-size: 14px; font-weight: 600; }
+    .info-value { font-size: 14px; font-weight: 600; word-break: keep-all; overflow-wrap: break-word; }
 
     .badge {
       display: inline-flex; align-items: center;
@@ -600,6 +600,9 @@ function nexusPremiumJpyLabel(cycle) {
 }
 const CURRENCIES = ['円', 'ドル'];
 const INS_CATEGORIES = ['生保', '損保'];
+// 契約の担当区分：「当社担当」か「他代理店契約」かの区別のみ。既存データにこの項目が
+// 無い場合は空文字列（未設定）のまま扱い、勝手に「当社担当」と推測・振り分けしない。
+const NEXUS_CONTRACT_RESPONSIBLE_TYPES = ['当社担当', '他代理店契約'];
 
 // 金額入力ヘルパー
 function AmountInput({
@@ -1681,6 +1684,44 @@ function ContractBlock({
     } : {},
     onClick: () => sv('category')(c)
   }, c)))), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "担当区分"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, NEXUS_CONTRACT_RESPONSIBLE_TYPES.map(rt => /*#__PURE__*/React.createElement("button", {
+    key: rt,
+    type: "button",
+    className: `toggle-btn ${contract.responsibleType === rt ? 'sel' : ''}`,
+    style: contract.responsibleType === rt ? {
+      borderColor: rt === '他代理店契約' ? '#6B7280' : 'var(--accent)',
+      background: rt === '他代理店契約' ? '#F3F4F6' : 'var(--accent-light)',
+      color: rt === '他代理店契約' ? '#4B5563' : 'var(--accent)'
+    } : {},
+    onClick: () => onChange({
+      ...contract,
+      responsibleType: rt,
+      agencyName: rt === '他代理店契約' ? contract.agencyName : ''
+    })
+  }, rt))), !contract.responsibleType && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      marginTop: 4
+    }
+  }, "未設定（既存データを保護するため、自動では振り分けていません）"), contract.responsibleType === '他代理店契約' && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    placeholder: "担当代理店名（任意）",
+    value: contract.agencyName || '',
+    onChange: s('agencyName')
+  }))), /*#__PURE__*/React.createElement("div", {
     className: "form-row",
     style: {
       marginBottom: 8
@@ -4716,6 +4757,8 @@ function CustomerDetail({
   setOpportunities
 }) {
   const [confirmDel, setConfirmDel] = useState(false);
+  // 契約一覧の担当区分による絞り込み（すべて／当社担当／他代理店契約）。初期表示は「すべて」。
+  const [contractResponsibleFilter, setContractResponsibleFilter] = useState('すべて');
   const c = customer;
   const rank = calcCustomerRank(c, customers);
   const ri = RANK_INFO[rank];
@@ -5336,6 +5379,11 @@ function CustomerDetail({
       lumpUsd = 0;
     let recvJpy = 0,
       recvUsd = 0; // 定期支払金 年間合計
+    // 担当区分別の年間保険料内訳（当社担当＋他代理店契約＋未設定＝全体合計になるようにする）。
+    // 担当区分が未設定の契約がある場合のみ「未設定」行も表示し、当社担当／他代理店契約の
+    // 2項目だけで合計と食い違って見えることが無いようにする。
+    const annualJpyByType = { 当社担当: 0, 他代理店契約: 0, 未設定: 0 };
+    const annualUsdByType = { 当社担当: 0, 他代理店契約: 0, 未設定: 0 };
     activeContracts.forEach(ct => {
       const amt = Number(ct.contractStatus === '減額' && ct.reducedPremium ? ct.reducedPremium : ct.premium) || 0;
       const jpy = Number(ct.premiumJpy) || 0;
@@ -5353,11 +5401,15 @@ function CustomerDetail({
           lumpJpy += amt;
         }
       } else {
+        const rt = ct.responsibleType === '当社担当' || ct.responsibleType === '他代理店契約' ? ct.responsibleType : '未設定';
         if (cur === 'ドル') {
           annualUsd += annualAmt;
           annualJpy += annualJpyAmt || annualAmt * rate;
+          annualUsdByType[rt] += annualAmt;
+          annualJpyByType[rt] += annualJpyAmt || annualAmt * rate;
         } else {
           annualJpy += annualAmt;
+          annualJpyByType[rt] += annualAmt;
         }
       }
       // 定期支払金
@@ -5377,6 +5429,22 @@ function CustomerDetail({
     const hasAnnual = annualJpy > 0 || annualUsd > 0;
     const hasLump = lumpJpy > 0 || lumpUsd > 0;
     const hasRecv = recvJpy > 0 || recvUsd > 0;
+    // 担当区分による絞り込み。このシステムは当社担当契約だけを管理するのではなく、他代理店契約も
+    // 含めて一元管理することが目的のため、絞り込みは「除外」ではなくあくまで表示の切り替え。
+    const filteredContracts = contractResponsibleFilter === 'すべて' ? c.contracts : c.contracts.filter(ct => ct.responsibleType === contractResponsibleFilter);
+    const responsibleFilterRow = /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 6,
+        flexWrap: 'wrap',
+        marginBottom: 10
+      }
+    }, ['すべて', ...NEXUS_CONTRACT_RESPONSIBLE_TYPES].map(f => /*#__PURE__*/React.createElement("button", {
+      key: f,
+      type: "button",
+      className: `chip ${contractResponsibleFilter === f ? 'active' : ''}`,
+      onClick: () => setContractResponsibleFilter(f)
+    }, f)));
     return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
       className: "section-header",
       style: {
@@ -5393,7 +5461,7 @@ function CustomerDetail({
         background: '#FEE2E2',
         color: '#DC2626'
       }
-    }, "解約・失効 ", inactiveCount, "件")), (hasAnnual || hasLump || hasRecv) && /*#__PURE__*/React.createElement("div", {
+    }, "解約・失効 ", inactiveCount, "件")), responsibleFilterRow, (hasAnnual || hasLump || hasRecv) && /*#__PURE__*/React.createElement("div", {
       className: "card",
       style: {
         marginBottom: 10,
@@ -5407,7 +5475,7 @@ function CustomerDetail({
         color: 'var(--accent)',
         marginBottom: 8
       }
-    }, "💰 保険料・受取金 合計"), hasAnnual && /*#__PURE__*/React.createElement("div", {
+    }, "💰 保険料・受取金 合計（全契約）"), hasAnnual && /*#__PURE__*/React.createElement("div", {
       style: {
         marginBottom: hasLump ? 10 : 0
       }
@@ -5447,7 +5515,18 @@ function CustomerDetail({
         fontSize: 13,
         color: 'var(--text-sub)'
       }
-    }, "（月割 ¥", Math.round(annualJpy / 12).toLocaleString(), "）"))), hasLump && /*#__PURE__*/React.createElement("div", {
+    }, "（月割 ¥", Math.round(annualJpy / 12).toLocaleString(), "）")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: '2px 14px',
+        marginTop: 4,
+        fontSize: 11.5,
+        color: 'var(--text-sub)'
+      }
+    }, NEXUS_CONTRACT_RESPONSIBLE_TYPES.concat(annualJpyByType.未設定 > 0 || annualUsdByType.未設定 > 0 ? ['未設定'] : []).map(rt => /*#__PURE__*/React.createElement("span", {
+      key: rt
+    }, rt, "　¥", Math.round(annualJpyByType[rt] || 0).toLocaleString(), annualUsdByType[rt] > 0 ? ` ＋$${annualUsdByType[rt].toLocaleString()}` : '')))), hasLump && /*#__PURE__*/React.createElement("div", {
       style: {
         paddingTop: hasAnnual ? 10 : 0,
         borderTop: hasAnnual ? '1px solid rgba(91,91,214,0.2)' : 'none'
@@ -5514,7 +5593,8 @@ function CustomerDetail({
         fontSize: 12,
         color: 'var(--text-sub)'
       }
-    }, "/ 年")))), c.contracts.map((ct, i) => {
+    }, "/ 年")))), filteredContracts.map(ct => {
+      const i = c.contracts.indexOf(ct);
       const isSonpo = ct.category === '損保';
       const expiryDays = daysUntil(ct.expiryDate);
       const cstView = ct.contractStatus || '有効';
@@ -5532,6 +5612,7 @@ function CustomerDetail({
         style: {
           display: 'flex',
           alignItems: 'center',
+          flexWrap: 'wrap',
           gap: 8,
           marginBottom: 10
         }
@@ -5550,7 +5631,16 @@ function CustomerDetail({
           background: isSonpo ? '#FFFBEB' : 'var(--accent-light)',
           color: isSonpo ? '#D97706' : 'var(--accent)'
         }
-      }, isSonpo ? '損保' : '生保'), (() => {
+      }, isSonpo ? '損保' : '生保'), ct.responsibleType && /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontSize: 10.5,
+          fontWeight: 700,
+          padding: '2px 8px',
+          borderRadius: 6,
+          background: ct.responsibleType === '他代理店契約' ? '#F3F4F6' : 'var(--accent-light)',
+          color: ct.responsibleType === '他代理店契約' ? '#6B7280' : 'var(--accent)'
+        }
+      }, `［${ct.responsibleType}］`), (() => {
         const cst2 = ct.contractStatus || '有効';
         if (cst2 === '有効') return null;
         const cs2 = {
@@ -5570,7 +5660,14 @@ function CustomerDetail({
         return /*#__PURE__*/React.createElement("span", {
           className: `cs-badge cs-${cst2}`
         }, cst2);
-      })()), ct.contractStatus && ct.contractStatus !== '有効' && /*#__PURE__*/React.createElement("div", {
+      })()), ct.responsibleType === '他代理店契約' && /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 11,
+          color: 'var(--text-sub)',
+          marginTop: -6,
+          marginBottom: 10
+        }
+      }, "この契約は当社の担当契約ではありません"), ct.contractStatus && ct.contractStatus !== '有効' && /*#__PURE__*/React.createElement("div", {
         style: {
           background: {
             解約: '#FEE2E2',
