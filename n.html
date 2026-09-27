@@ -16686,7 +16686,11 @@ function nexusCoverageDetailRecordForContract(ct, categoryKeys) {
   });
   const allCatsSet = new Set(mainCats);
   riderMatchMap.forEach(cats => cats.forEach(k => allCatsSet.add(k)));
-  if (allCatsSet.size === 0) return null;
+  // 選択したカテゴリーのどれにも該当しない契約でも、ここでは行を落とさない（nullを返さない）。
+  // NEXUSに実在する契約を「保障区分が判定できない」という理由だけで契約詳細CSVから消してしまうと、
+  // 顧客概要の契約数（解約含む）と契約詳細CSVの契約数が食い違ってしまう。該当カテゴリーが無い
+  // 場合はcategories:[]のまま返し、呼び出し側（nexusCoverageDetailRecordsForContracts）で
+  // 生保契約のみ「未確認」として残す（損保契約は従来通りBブロックの対象外のまま）。
   const mainCatSet = new Set(mainCats);
   const rec = { categories: orderedKeys.filter(k => allCatsSet.has(k)) };
   // 証券番号は出さず、代わりに固定のAI分析用契約ID（P0001形式）だけを出す。未割当の場合のみ
@@ -16700,18 +16704,38 @@ function nexusCoverageDetailRecordForContract(ct, categoryKeys) {
   if (ct.responsibleType === '他代理店契約' && nexusHasValue(ct.agencyName)) rec.agencyName = ct.agencyName;
   if (mainCats.length > 0) {
     if (nexusHasValue(ct.currency)) rec.currency = ct.currency;
-    if (nexusHasValue(ct.coverageAmount)) rec.coverageAmount = nexusNumOrRaw(ct.coverageAmount);
     if (nexusHasValue(ct.coverageAmountJpy)) rec.coverageAmountJpy = nexusNumOrRaw(ct.coverageAmountJpy);
     if (nexusHasValue(ct.amountUnit)) rec.amountUnit = ct.amountUnit;
-    // 登録された為替レート・円換算額はそのまま独立して出す（上書き・自動補正はしない）。
-    // 「参考円換算額」は外貨額×登録為替レートによる参考計算値であり、登録済みのcoverageAmountJpyを
-    // 置き換えるものではない。exchangeRateが無い場合は参考円換算額も空欄のままにする。
+    // 外貨額（coverageAmount）を、登録済みの円換算額・為替レートと突き合わせて出力する。
+    // 一部の外貨建契約で、外貨額だけが小数点を欠いた「100倍の整数」で保存されている
+    // （例：本来43003.85ドルのところ4300385と保存）ケースが見つかったため、
+    // 「登録円換算額÷登録為替レート」で逆算した金額とcoverageAmountの比率が100倍に
+    // 近い場合（95〜105倍）だけ、AI出力時にcoverageAmountを100で割って補正する。
+    // 比率が1倍に近い（通常の小数のまま保存されている）場合や、100倍・1倍のどちらとも
+    // 判定できない場合は一切補正しない（登録円換算額そのものは常に登録値のまま出力し、
+    // 書き換えない）。
+    let coverageAmountNum = nexusHasValue(ct.coverageAmount) ? Number(ct.coverageAmount) : null;
+    if (ct.currency === 'ドル' && coverageAmountNum !== null && Number.isFinite(coverageAmountNum) &&
+        nexusHasValue(ct.coverageAmountJpy) && nexusHasValue(ct.exchangeRate)) {
+      const jpyNum = Number(ct.coverageAmountJpy);
+      const rateNum = Number(ct.exchangeRate);
+      if (Number.isFinite(jpyNum) && Number.isFinite(rateNum) && rateNum !== 0) {
+        const derived = jpyNum / rateNum;
+        if (derived > 0) {
+          const ratio = coverageAmountNum / derived;
+          if (ratio > 95 && ratio < 105) coverageAmountNum = coverageAmountNum / 100;
+        }
+      }
+    }
+    if (coverageAmountNum !== null) rec.coverageAmount = Number.isFinite(coverageAmountNum) ? coverageAmountNum : ct.coverageAmount;
+    // 登録された為替レートはそのまま独立して出す（上書き・自動補正はしない）。
+    // 「参考円換算額」は（上記で補正した場合はその）外貨額×登録為替レートによる参考計算値であり、
+    // 登録済みのcoverageAmountJpyを置き換えるものではない。exchangeRateが無い場合は空欄のままにする。
     if (nexusHasValue(ct.exchangeRate)) {
       rec.exchangeRate = nexusNumOrRaw(ct.exchangeRate);
-      const amtNum = Number(ct.coverageAmount);
       const rateNum = Number(ct.exchangeRate);
-      if (nexusHasValue(ct.coverageAmount) && Number.isFinite(amtNum) && Number.isFinite(rateNum)) {
-        rec.referenceCoverageAmountJpy = Math.round(amtNum * rateNum);
+      if (coverageAmountNum !== null && Number.isFinite(coverageAmountNum) && Number.isFinite(rateNum)) {
+        rec.referenceCoverageAmountJpy = Math.round(coverageAmountNum * rateNum);
       }
     }
   }
@@ -16745,7 +16769,19 @@ function nexusCoverageDetailRecordForContract(ct, categoryKeys) {
 }
 function nexusCoverageDetailRecordsForContracts(customer, categoryKeys) {
   const contracts = (customer.contracts || []).filter(ct => ct.contractStatus !== '解約' && ct.contractStatus !== '失効');
-  return contracts.map(ct => nexusCoverageDetailRecordForContract(ct, categoryKeys)).filter(Boolean);
+  const allCategoryKeys = NEXUS_COVERAGE_TYPE_OPTIONS.map(o => o.key);
+  return contracts
+    .map(ct => ({ ct, rec: nexusCoverageDetailRecordForContract(ct, categoryKeys) }))
+    .filter(({ ct, rec }) => {
+      if (rec.categories.length > 0) return true;
+      // 選択したカテゴリーには該当しないが、全7カテゴリーのどれにも該当しない
+      // （真に未分類・判定不能な）生保契約だけを「未確認」として残す。単に今回
+      // 選択していないカテゴリーにしか該当しない契約（ユーザーが見たいと思っていない
+      // 情報）は、従来通り契約詳細CSVの対象外のままにする。損保契約も対象外のまま。
+      const matchesAnyCategoryAtAll = nexusCoverageDetailRecordForContract(ct, allCategoryKeys).categories.length > 0;
+      return !matchesAnyCategoryAtAll && nexusIsLifeInsuranceContract(ct);
+    })
+    .map(({ rec }) => rec);
 }
 // 自分担当／他代理店契約の件数内訳。契約が1件も無い顧客はnull（「0件」と「未登録」を混同しない）。
 function nexusResponsibleSplitForCustomer(customer) {
@@ -16774,7 +16810,9 @@ function nexusAiExportCsvBlockB(rows) {
   const body = [];
   rows.forEach(r => {
     (r.coverageDetails || []).forEach(rec => {
-      const categoriesText = (rec.categories || []).map(catLabel).join('・');
+      // 該当カテゴリーが1つも無い契約（保障区分が判定できない・未分類の契約）は「未確認」と
+      // 明示する。「保障なし」（確認済み：なし）と混同しないよう、空欄ではなく明示的な文言にする。
+      const categoriesText = (rec.categories || []).length > 0 ? rec.categories.map(catLabel).join('・') : '未確認';
       const ridersText = (rec.riders || []).map(rr => {
         const parts = [];
         if (rr.name) parts.push(rr.name);
