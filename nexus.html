@@ -11699,11 +11699,12 @@ function nexusCustomerAnalysisPromptTemplate(opts) {
 // customer.aiAnalysisIdを持たない顧客に、nexusAssignAiAnalysisIdsで新しい固定IDを割り当てる。
 // 「バックアップ→確認→実行」の順に進める、明示的なユーザー操作を必要とする画面
 // （既存データへの一括変更のため、自動では実行しない）。
-function NexusAiIdMigrationScreen({ customers, setCustomers, aiIdCounter, setAiIdCounter, backupState, onClose, onComplete }) {
+function NexusAiIdMigrationScreen({ customers, setCustomers, aiIdCounter, setAiIdCounter, contractIdCounter, setContractIdCounter, backupState, onClose, onComplete }) {
   const [result, setResult] = useState(null);
   const [toast, setToast] = useState('');
   const showToast = msg => { setToast(msg); setTimeout(() => setToast(''), 3000); };
   const targetCount = (customers || []).filter(c => !c.aiAnalysisId).length;
+  const contractTargetCount = (customers || []).reduce((sum, c) => sum + (c.contracts || []).filter(ct => !ct.aiContractId).length, 0);
   const downloadBackup = () => {
     try {
       exportJSON(backupState);
@@ -11712,13 +11713,18 @@ function NexusAiIdMigrationScreen({ customers, setCustomers, aiIdCounter, setAiI
       showToast('バックアップに失敗しました：' + (e && e.message || e));
     }
   };
+  // 顧客ID・契約IDの一括付与は同じ「バックアップ→確認→実行」の1操作としてまとめて行う
+  // （どちらも既存データへの一括変更のため、個別に確認を挟むより1回で完結する方がシンプルなため）。
   const runAssignment = () => {
-    const r = nexusAssignAiAnalysisIds(customers, aiIdCounter);
-    setCustomers(r.customers);
-    setAiIdCounter(r.nextCounter);
-    setResult(r);
+    const r1 = nexusAssignAiAnalysisIds(customers, aiIdCounter);
+    const r2 = nexusAssignAiContractIds(r1.customers, contractIdCounter);
+    setCustomers(r2.customers);
+    setAiIdCounter(r1.nextCounter);
+    setContractIdCounter(r2.nextCounter);
+    setResult({ customerAssignedCount: r1.assignedCount, contractAssignedCount: r2.assignedCount, previewCustomers: r1.assignedCustomers.slice(0, 5) });
   };
-  const previewRows = result ? result.assignedCustomers.slice(0, 5) : [];
+  const previewRows = result ? result.previewCustomers : [];
+  const totalTarget = targetCount + contractTargetCount;
   const toastEl = toast && React.createElement("div", {
     style: { position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', background: 'rgba(0,0,0,0.8)', color: '#fff', padding: '10px 18px', borderRadius: 20, fontSize: 13, zIndex: 200 }
   }, toast);
@@ -11734,13 +11740,13 @@ function NexusAiIdMigrationScreen({ customers, setCustomers, aiIdCounter, setAiI
       React.createElement("div", {
         className: "card", style: { marginBottom: 12, fontSize: 12.5, color: 'var(--text-sub)', lineHeight: 1.7 }
       },
-        "各お客様に固定のAI分析用ID（例：C0331）を割り当てます。一度割り当てたIDは、並び替え・絞り込み・CSVの再出力・他の顧客の追加や削除によって変わりません。",
+        "各お客様に固定のAI分析用ID（例：C0331）、各契約に固定のAI分析用契約ID（例：P0001）を割り当てます。一度割り当てたIDは、並び替え・絞り込み・CSVの再出力・他の顧客や契約の追加や削除によって変わりません。証券番号はIDの作成には一切使用しません。",
         React.createElement("div", { style: { marginTop: 8, fontWeight: 700, color: 'var(--text)' } }, "⚠️ 過去に出力したCSV（C0001〜C0330）との対応について"),
-        "過去のCSVのID（C0001〜C0330）は、その時点の出力順から一時的に作られていた番号で、顧客レコードには保存されていませんでした。そのため、どの顧客が過去のどの番号だったかを確実に復元することはできません（対応未確認）。今回新しく割り当てるIDは、過去の番号と混同しないよう、C0331以降の新しい番号になります。"
+        "過去のCSVのID（C0001〜C0330）は、その時点の出力順から一時的に作られていた番号で、顧客レコードには保存されていませんでした。そのため、どの顧客が過去のどの番号だったかを確実に復元することはできません（対応未確認）。今回新しく割り当てるIDは、過去の番号と混同しないよう、C0331以降の新しい番号になります。契約IDはこれまで公開していなかったため、P0001から新規に採番します。"
       ),
       React.createElement("div", { className: "card", style: { marginBottom: 12, textAlign: 'center' } },
-        React.createElement("div", { style: { fontSize: 13, color: 'var(--text-sub)' } }, "ID未設定の顧客"),
-        React.createElement("div", { style: { fontSize: 28, fontWeight: 800, color: 'var(--accent)' } }, targetCount, "名")
+        React.createElement("div", { style: { fontSize: 13, color: 'var(--text-sub)' } }, "ID未設定の顧客／契約"),
+        React.createElement("div", { style: { fontSize: 28, fontWeight: 800, color: 'var(--accent)' } }, targetCount, "名／", contractTargetCount, "件")
       ),
       !result && React.createElement(React.Fragment, null,
         React.createElement("button", {
@@ -11749,14 +11755,14 @@ function NexusAiIdMigrationScreen({ customers, setCustomers, aiIdCounter, setAiI
         }, "① 💾 念のため、バックアップをダウンロード"),
         React.createElement("button", {
           type: "button", className: "btn btn-primary btn-full",
-          disabled: targetCount === 0,
+          disabled: totalTarget === 0,
           onClick: runAssignment
-        }, targetCount === 0 ? "設定するIDはありません" : `② IDを設定する（${targetCount}名）`)
+        }, totalTarget === 0 ? "設定するIDはありません" : `② IDを設定する（顧客${targetCount}名／契約${contractTargetCount}件）`)
       ),
       result && React.createElement(React.Fragment, null,
         React.createElement("div", {
           className: "card", style: { marginBottom: 10, background: '#E8F5E9', color: '#2E7D32', fontWeight: 700, fontSize: 13 }
-        }, "✅ ", result.assignedCount, "件に新しいAI分析用IDを割り当てました"),
+        }, "✅ 顧客", result.customerAssignedCount, "件・契約", result.contractAssignedCount, "件に新しいAI分析用IDを割り当てました"),
         previewRows.length > 0 && React.createElement("div", { className: "card", style: { marginBottom: 10, fontSize: 12.5 } },
           React.createElement("div", { style: { fontWeight: 700, marginBottom: 6 } }, "割り当て例（先頭", previewRows.length, "件）"),
           previewRows.map(c => React.createElement("div", {
@@ -12038,7 +12044,7 @@ function NexusCustomerAiExportScreen({ customers, activityLogs, nexusFanFollows,
     key: c.analysisId,
     className: "card",
     style: { marginBottom: 8, fontSize: 12.5, lineHeight: 1.8 }
-  }, React.createElement("div", { style: { fontWeight: 700, marginBottom: 4 } }, "AI ID：", c.analysisId), selectedFieldDefs.map(d => React.createElement("div", { key: d.key }, d.label, "：", d.csv(c) === '' || d.csv(c) === null || d.csv(c) === undefined ? '—' : String(d.csv(c)))), selectedCategoryKeys.length > 0 && React.createElement("div", { style: { marginTop: 4, paddingTop: 4, borderTop: '1px dashed var(--border)' } }, selectedCategoryKeys.map(k => React.createElement("div", { key: k }, (NEXUS_COVERAGE_TYPE_OPTIONS.find(o => o.key === k) || {}).label, "：", c.coverageStates && c.coverageStates[k] || '未確認', c.coverageDetails && c.coverageDetails[k] ? `（明細${c.coverageDetails[k].length}件）` : ''))));
+  }, React.createElement("div", { style: { fontWeight: 700, marginBottom: 4 } }, "AI ID：", c.analysisId), selectedFieldDefs.map(d => React.createElement("div", { key: d.key }, d.label, "：", d.csv(c) === '' || d.csv(c) === null || d.csv(c) === undefined ? '—' : String(d.csv(c)))), selectedCategoryKeys.length > 0 && React.createElement("div", { style: { marginTop: 4, paddingTop: 4, borderTop: '1px dashed var(--border)' } }, selectedCategoryKeys.map(k => React.createElement("div", { key: k }, (NEXUS_COVERAGE_TYPE_OPTIONS.find(o => o.key === k) || {}).label, "：", c.coverageStates && c.coverageStates[k] || '未確認')), (c.coverageDetails || []).length > 0 && React.createElement("div", { style: { marginTop: 2, color: 'var(--text-sub)' } }, "契約明細：", c.coverageDetails.length, "件（1契約＝1件）")));
   const previewScreen = phase === 'preview' && React.createElement("div", {
     style: { padding: 16 }
   }, scanBox, React.createElement("div", {
@@ -16431,6 +16437,7 @@ function nexusAnonymizeCustomerForAnalysis(customer, index, opts, ctx) {
   const rollup = nexusContractCoverageRollup(customer, today);
   const activity = nexusActivityCountsForAnalysis(customer.id, context.activityLogs);
   const fanFollow = nexusFanFollowSummaryForCustomer(customer.id, context.fanFollows);
+  const premiumBreakdown = nexusPremiumCycleBreakdownForCustomer(customer);
   const out = { analysisId: customer.aiAnalysisId || 'C-UNASSIGNED' };
   if (want('ageBand')) out.ageBand = nexusAgeBand(age);
   if (want('prefecture')) out.prefecture = nexusExtractPrefecture(customer.address);
@@ -16449,9 +16456,14 @@ function nexusAnonymizeCustomerForAnalysis(customer, index, opts, ctx) {
   if (want('activeContractCount')) out.activeContractCount = rollup.activeContractCount;
   if (want('totalContractCount')) out.totalContractCount = rollup.totalContractCount;
   if (want('companies')) out.companies = rollup.companies;
-  if (want('totalMonthlyPremiumJpy')) out.totalMonthlyPremiumJpy = rollup.totalMonthlyPremiumJpy;
-  if (want('totalAnnualPremiumJpy')) out.totalAnnualPremiumJpy = rollup.totalAnnualPremiumJpy;
-  if (want('hasLumpSumPayment')) out.lumpSumState = nexusLumpSumConfirmedState(customer, rollup);
+  // 支払方法別の保険料合計。月払×12・年払÷12のような換算はせず、登録されている支払方法の
+  // 金額をそのまま合算するだけ（paymentCycle未設定はどの合計にも含めず、件数のみ計上する）。
+  if (want('monthlyPremiumTotalJpy')) out.monthlyPremiumTotalJpy = premiumBreakdown.monthlyPremiumTotalJpy;
+  if (want('annualPremiumTotalJpy')) out.annualPremiumTotalJpy = premiumBreakdown.annualPremiumTotalJpy;
+  if (want('lumpSumPremiumTotalJpy')) out.lumpSumPremiumTotalJpy = premiumBreakdown.lumpSumPremiumTotalJpy;
+  if (want('earlyPrepayPremiumTotalJpy')) out.earlyPrepayPremiumTotalJpy = premiumBreakdown.earlyPrepayPremiumTotalJpy;
+  if (want('fullPrepayPremiumTotalJpy')) out.fullPrepayPremiumTotalJpy = premiumBreakdown.fullPrepayPremiumTotalJpy;
+  if (want('paymentCycleUnsetCount')) out.paymentCycleUnsetCount = premiumBreakdown.paymentCycleUnsetCount;
   if (want('earliestContractYearMonth')) out.earliestContractYearMonth = rollup.earliestContractYearMonth;
   if (want('elapsedYearsSinceFirstContract')) out.elapsedYearsSinceFirstContract = rollup.elapsedYearsSinceFirstContract;
   if (want('responsibleSplit')) out.responsibleSplit = nexusResponsibleSplitForCustomer(customer);
@@ -16465,18 +16477,16 @@ function nexusAnonymizeCustomerForAnalysis(customer, index, opts, ctx) {
   if (categoryKeys.length) {
     out.coverageStates = {};
     categoryKeys.forEach(key => {
-      out.coverageStates[key] = nexusCoverageConfirmedState(customer, key, rollup);
+      out.coverageStates[key] = nexusCoverageConfirmedState(customer, key);
     });
   }
   // 保障詳細：個別または「保障詳細を含める」がONのカテゴリーだけ、実データに基づく契約明細を積む
-  // （契約詳細CSVブロック用。該当契約が無いカテゴリーはキー自体を作らない＝空欄と未登録を混同しない）。
+  // （契約詳細CSVブロック用）。NEXUS内部の1契約レコード＝1件として出力し、複数カテゴリーに
+  // 該当しても行を複製しない（各レコードのcategoriesに該当カテゴリーをすべて列挙する）。
   const detailKeys = options.coverageDetailKeys || [];
   if (detailKeys.length) {
-    out.coverageDetails = {};
-    detailKeys.forEach(key => {
-      const records = nexusCoverageDetailRecordsForCategory(customer, key);
-      if (records.length) out.coverageDetails[key] = records;
-    });
+    const records = nexusCoverageDetailRecordsForContracts(customer, detailKeys);
+    if (records.length) out.coverageDetails = records;
   }
   return out;
 }
@@ -16586,9 +16596,14 @@ const NEXUS_AI_EXPORT_FIELD_DEFS = [
   { key: 'activeContractCount', group: 'contractSummary', label: '有効契約数', csv: r => r.activeContractCount },
   { key: 'totalContractCount', group: 'contractSummary', label: '契約数(解約含む)', csv: r => r.totalContractCount },
   { key: 'companies', group: 'contractSummary', label: '契約保険会社', csv: r => (r.companies || []).join('・') },
-  { key: 'totalMonthlyPremiumJpy', group: 'contractSummary', label: '月額保険料(円)', csv: r => r.totalMonthlyPremiumJpy },
-  { key: 'totalAnnualPremiumJpy', group: 'contractSummary', label: '年払保険料(円)', csv: r => r.totalAnnualPremiumJpy },
-  { key: 'hasLumpSumPayment', group: 'contractSummary', label: '一時払等', csv: r => r.lumpSumState || '' },
+  // 支払方法（月払・年払・一時払・前期前納・全期前納）ごとの合計を完全に分離して出力する。
+  // 月払×12・年払÷12のような換算は一切行わない（登録されている支払方法の金額をそのまま合算するだけ）。
+  { key: 'monthlyPremiumTotalJpy', group: 'contractSummary', label: '月払保険料合計(円)', csv: r => r.monthlyPremiumTotalJpy },
+  { key: 'annualPremiumTotalJpy', group: 'contractSummary', label: '年払保険料合計(円)', csv: r => r.annualPremiumTotalJpy },
+  { key: 'lumpSumPremiumTotalJpy', group: 'contractSummary', label: '一時払保険料合計(円)', csv: r => r.lumpSumPremiumTotalJpy },
+  { key: 'earlyPrepayPremiumTotalJpy', group: 'contractSummary', label: '前期前納総額(円)', csv: r => r.earlyPrepayPremiumTotalJpy },
+  { key: 'fullPrepayPremiumTotalJpy', group: 'contractSummary', label: '全期前納総額(円)', csv: r => r.fullPrepayPremiumTotalJpy },
+  { key: 'paymentCycleUnsetCount', group: 'contractSummary', label: '支払方法未設定件数', csv: r => r.paymentCycleUnsetCount },
   { key: 'earliestContractYearMonth', group: 'contractSummary', label: '最古契約年月', csv: r => r.earliestContractYearMonth || '' },
   { key: 'elapsedYearsSinceFirstContract', group: 'contractSummary', label: '契約経過年数', csv: r => r.elapsedYearsSinceFirstContract === null || r.elapsedYearsSinceFirstContract === undefined ? '' : r.elapsedYearsSinceFirstContract },
   { key: 'responsibleSplit', group: 'contractSummary', label: '自分担当／他代理店の内訳', csv: r => r.responsibleSplit ? `当社担当${r.responsibleSplit.own}件・他代理店${r.responsibleSplit.other}件${r.responsibleSplit.unset ? '・未設定' + r.responsibleSplit.unset + '件' : ''}` : '', newField: true }
@@ -16604,7 +16619,7 @@ const NEXUS_AI_EXPORT_PRESETS = {
   },
   insurance: {
     label: '② 保険分析',
-    fields: ['ageBand', 'householdLabel', 'rank', 'existingOrNew', 'lineRegistered', 'lastContactBand', 'contactCount', 'dealCount', 'inquiryCount', 'referralHasAny', 'referralCount', 'activeContractCount', 'fanFollowSentCount', 'fanFollowReadCount', 'fanFollowRepliedCount', 'companies', 'earliestContractYearMonth', 'elapsedYearsSinceFirstContract', 'totalMonthlyPremiumJpy', 'totalAnnualPremiumJpy', 'hasLumpSumPayment'],
+    fields: ['ageBand', 'householdLabel', 'rank', 'existingOrNew', 'lineRegistered', 'lastContactBand', 'contactCount', 'dealCount', 'inquiryCount', 'referralHasAny', 'referralCount', 'activeContractCount', 'fanFollowSentCount', 'fanFollowReadCount', 'fanFollowRepliedCount', 'companies', 'earliestContractYearMonth', 'elapsedYearsSinceFirstContract', 'monthlyPremiumTotalJpy', 'annualPremiumTotalJpy', 'lumpSumPremiumTotalJpy', 'earlyPrepayPremiumTotalJpy', 'fullPrepayPremiumTotalJpy', 'paymentCycleUnsetCount'],
     categories: ['death', 'medical', 'cancer', 'care', 'annuity', 'variable', 'foreignCurrency'],
     coverageDetailMode: 'on'
   },
@@ -16656,57 +16671,81 @@ function nexusRiderDetailRecord(r) {
   if (nexusHasValue(r.paymentTermNote)) rec.paymentTermNote = r.paymentTermNote;
   return rec;
 }
-// 保障カテゴリー別の契約詳細を、実際に存在するフィールドだけで組み立てる（存在しない項目を
-// 計算・推測で埋めない）。解約・失効した契約は既存のnexusContractCoverageRollupと同じ基準で除外する。
-function nexusCoverageDetailRecordsForCategory(customer, key) {
-  const contracts = (customer.contracts || []).filter(ct => ct.contractStatus !== '解約' && ct.contractStatus !== '失効');
-  const records = [];
-  contracts.forEach(ct => {
-    const mainMatches = nexusContractMatchesCoverageCategory(ct, key);
-    const matchingRiders = (ct.riders || []).filter(r => nexusRiderMatchesCoverageCategory(r, key));
-    if (!mainMatches && matchingRiders.length === 0) return;
-    const rec = { category: key };
-    if (nexusHasValue(ct.company)) rec.company = ct.company;
-    if (nexusHasValue(ct.type)) rec.type = ct.type;
-    if (nexusHasValue(ct.date)) rec.contractDate = ct.date;
-    if (nexusHasValue(ct.contractStatus)) rec.status = ct.contractStatus;
-    if (nexusHasValue(ct.responsibleType)) rec.responsibleType = ct.responsibleType;
-    if (ct.responsibleType === '他代理店契約' && nexusHasValue(ct.agencyName)) rec.agencyName = ct.agencyName;
-    if (mainMatches) {
-      if (nexusHasValue(ct.currency)) rec.currency = ct.currency;
-      if (nexusHasValue(ct.coverageAmount)) rec.coverageAmount = nexusNumOrRaw(ct.coverageAmount);
-      if (nexusHasValue(ct.coverageAmountJpy)) rec.coverageAmountJpy = nexusNumOrRaw(ct.coverageAmountJpy);
-      if (nexusHasValue(ct.amountUnit)) rec.amountUnit = ct.amountUnit;
-    }
-    if (nexusHasValue(ct.termNote)) rec.termNote = ct.termNote;
-    if (nexusHasValue(ct.termEnd)) rec.termEnd = ct.termEnd;
-    if (nexusHasValue(ct.paymentTermNote)) rec.paymentTermNote = ct.paymentTermNote;
-    if (nexusHasValue(ct.paymentTermEnd)) rec.paymentTermEnd = ct.paymentTermEnd;
-    if (nexusHasValue(ct.paymentCycle)) rec.paymentCycle = ct.paymentCycle;
-    if (nexusHasValue(ct.premium)) rec.premium = nexusNumOrRaw(ct.premium);
-    if (nexusHasValue(ct.premiumJpy)) rec.premiumJpy = nexusNumOrRaw(ct.premiumJpy);
-    if (nexusHasValue(ct.premiumPerPayment)) rec.premiumPerPayment = nexusNumOrRaw(ct.premiumPerPayment);
-    if (nexusHasValue(ct.prepaidCount)) rec.prepaidCount = nexusNumOrRaw(ct.prepaidCount);
-    if (mainMatches && (key === 'variable' || key === 'foreignCurrency')) {
-      if (nexusHasValue(ct.currentSurrenderValue)) rec.currentSurrenderValue = nexusNumOrRaw(ct.currentSurrenderValue);
-      if (nexusHasValue(ct.generalAccountValueJpy)) rec.generalAccountValueJpy = nexusNumOrRaw(ct.generalAccountValueJpy);
-      if (nexusHasValue(ct.generalAccountValueForeign)) rec.generalAccountValueForeign = nexusNumOrRaw(ct.generalAccountValueForeign);
-    }
-    if (mainMatches && key === 'variable') {
-      if (nexusHasValue(ct.separateAccountValueJpy)) rec.separateAccountValueJpy = nexusNumOrRaw(ct.separateAccountValueJpy);
-      if (nexusHasValue(ct.separateAccountValueForeign)) rec.separateAccountValueForeign = nexusNumOrRaw(ct.separateAccountValueForeign);
-      if (nexusHasValue(ct.separateAccountRatio)) rec.separateAccountRatio = nexusNumOrRaw(ct.separateAccountRatio);
-    }
-    if (mainMatches && key === 'annuity') {
-      if (nexusHasValue(ct.periodicFreq)) rec.periodicFreq = ct.periodicFreq;
-      if (nexusHasValue(ct.periodicAmt)) rec.periodicAmt = nexusNumOrRaw(ct.periodicAmt);
-      if (nexusHasValue(ct.periodicAmtJpy)) rec.periodicAmtJpy = nexusNumOrRaw(ct.periodicAmtJpy);
-      if (nexusHasValue(ct.periodicStart)) rec.periodicStart = ct.periodicStart;
-    }
-    if (matchingRiders.length) rec.riders = matchingRiders.map(nexusRiderDetailRecord);
-    records.push(rec);
+// 契約詳細は「NEXUS内部の1契約レコード＝1行」を基準に組み立てる。1契約が複数の保障カテゴリーに
+// 該当しても行を複製せず、rec.categoriesに該当カテゴリーをすべて列挙する（表示側で「死亡保障・
+// 介護保障・個人年金」のように1セルへまとめる）。実際に存在するフィールドだけを使い、
+// 存在しない項目を計算・推測で埋めない。解約・失効した契約は既存のnexusContractCoverageRollupと
+// 同じ基準で除外する。
+function nexusCoverageDetailRecordForContract(ct, categoryKeys) {
+  const orderedKeys = NEXUS_COVERAGE_TYPE_OPTIONS.map(o => o.key).filter(k => categoryKeys.includes(k));
+  const mainCats = orderedKeys.filter(key => nexusContractMatchesCoverageCategory(ct, key));
+  const riderMatchMap = new Map();
+  (ct.riders || []).forEach(r => {
+    const cats = orderedKeys.filter(key => nexusRiderMatchesCoverageCategory(r, key));
+    if (cats.length) riderMatchMap.set(r, cats);
   });
-  return records;
+  const allCatsSet = new Set(mainCats);
+  riderMatchMap.forEach(cats => cats.forEach(k => allCatsSet.add(k)));
+  if (allCatsSet.size === 0) return null;
+  const mainCatSet = new Set(mainCats);
+  const rec = { categories: orderedKeys.filter(k => allCatsSet.has(k)) };
+  // 証券番号は出さず、代わりに固定のAI分析用契約ID（P0001形式）だけを出す。未割当の場合のみ
+  // 明示的に「P-UNASSIGNED」とし、証券番号をハッシュ化するような代替手段は使わない。
+  rec.contractId = ct.aiContractId || 'P-UNASSIGNED';
+  if (nexusHasValue(ct.company)) rec.company = ct.company;
+  if (nexusHasValue(ct.type)) rec.type = ct.type;
+  if (nexusHasValue(ct.date)) rec.contractDate = ct.date;
+  if (nexusHasValue(ct.contractStatus)) rec.status = ct.contractStatus;
+  if (nexusHasValue(ct.responsibleType)) rec.responsibleType = ct.responsibleType;
+  if (ct.responsibleType === '他代理店契約' && nexusHasValue(ct.agencyName)) rec.agencyName = ct.agencyName;
+  if (mainCats.length > 0) {
+    if (nexusHasValue(ct.currency)) rec.currency = ct.currency;
+    if (nexusHasValue(ct.coverageAmount)) rec.coverageAmount = nexusNumOrRaw(ct.coverageAmount);
+    if (nexusHasValue(ct.coverageAmountJpy)) rec.coverageAmountJpy = nexusNumOrRaw(ct.coverageAmountJpy);
+    if (nexusHasValue(ct.amountUnit)) rec.amountUnit = ct.amountUnit;
+    // 登録された為替レート・円換算額はそのまま独立して出す（上書き・自動補正はしない）。
+    // 「参考円換算額」は外貨額×登録為替レートによる参考計算値であり、登録済みのcoverageAmountJpyを
+    // 置き換えるものではない。exchangeRateが無い場合は参考円換算額も空欄のままにする。
+    if (nexusHasValue(ct.exchangeRate)) {
+      rec.exchangeRate = nexusNumOrRaw(ct.exchangeRate);
+      const amtNum = Number(ct.coverageAmount);
+      const rateNum = Number(ct.exchangeRate);
+      if (nexusHasValue(ct.coverageAmount) && Number.isFinite(amtNum) && Number.isFinite(rateNum)) {
+        rec.referenceCoverageAmountJpy = Math.round(amtNum * rateNum);
+      }
+    }
+  }
+  if (nexusHasValue(ct.termNote)) rec.termNote = ct.termNote;
+  if (nexusHasValue(ct.termEnd)) rec.termEnd = ct.termEnd;
+  if (nexusHasValue(ct.paymentTermNote)) rec.paymentTermNote = ct.paymentTermNote;
+  if (nexusHasValue(ct.paymentTermEnd)) rec.paymentTermEnd = ct.paymentTermEnd;
+  if (nexusHasValue(ct.paymentCycle)) rec.paymentCycle = ct.paymentCycle;
+  if (nexusHasValue(ct.premium)) rec.premium = nexusNumOrRaw(ct.premium);
+  if (nexusHasValue(ct.premiumJpy)) rec.premiumJpy = nexusNumOrRaw(ct.premiumJpy);
+  if (nexusHasValue(ct.premiumPerPayment)) rec.premiumPerPayment = nexusNumOrRaw(ct.premiumPerPayment);
+  if (nexusHasValue(ct.prepaidCount)) rec.prepaidCount = nexusNumOrRaw(ct.prepaidCount);
+  if (mainCatSet.has('variable') || mainCatSet.has('foreignCurrency')) {
+    if (nexusHasValue(ct.currentSurrenderValue)) rec.currentSurrenderValue = nexusNumOrRaw(ct.currentSurrenderValue);
+    if (nexusHasValue(ct.generalAccountValueJpy)) rec.generalAccountValueJpy = nexusNumOrRaw(ct.generalAccountValueJpy);
+    if (nexusHasValue(ct.generalAccountValueForeign)) rec.generalAccountValueForeign = nexusNumOrRaw(ct.generalAccountValueForeign);
+  }
+  if (mainCatSet.has('variable')) {
+    if (nexusHasValue(ct.separateAccountValueJpy)) rec.separateAccountValueJpy = nexusNumOrRaw(ct.separateAccountValueJpy);
+    if (nexusHasValue(ct.separateAccountValueForeign)) rec.separateAccountValueForeign = nexusNumOrRaw(ct.separateAccountValueForeign);
+    if (nexusHasValue(ct.separateAccountRatio)) rec.separateAccountRatio = nexusNumOrRaw(ct.separateAccountRatio);
+  }
+  if (mainCatSet.has('annuity')) {
+    if (nexusHasValue(ct.periodicFreq)) rec.periodicFreq = ct.periodicFreq;
+    if (nexusHasValue(ct.periodicAmt)) rec.periodicAmt = nexusNumOrRaw(ct.periodicAmt);
+    if (nexusHasValue(ct.periodicAmtJpy)) rec.periodicAmtJpy = nexusNumOrRaw(ct.periodicAmtJpy);
+    if (nexusHasValue(ct.periodicStart)) rec.periodicStart = ct.periodicStart;
+  }
+  if (riderMatchMap.size) rec.riders = [...riderMatchMap.keys()].map(nexusRiderDetailRecord);
+  return rec;
+}
+function nexusCoverageDetailRecordsForContracts(customer, categoryKeys) {
+  const contracts = (customer.contracts || []).filter(ct => ct.contractStatus !== '解約' && ct.contractStatus !== '失効');
+  return contracts.map(ct => nexusCoverageDetailRecordForContract(ct, categoryKeys)).filter(Boolean);
 }
 // 自分担当／他代理店契約の件数内訳。契約が1件も無い顧客はnull（「0件」と「未登録」を混同しない）。
 function nexusResponsibleSplitForCustomer(customer) {
@@ -16726,24 +16765,24 @@ function nexusAiExportCsvBlockA(rows, fieldDefs, categoryKeys) {
   const body = rows.map(r => [r.analysisId, ...defs.map(d => d.csv(r)), ...cats.map(k => r.coverageStates && r.coverageStates[k] || '未確認')]);
   return [header, ...body];
 }
-// 契約詳細CSV（Bブロック）：1行＝1顧客の1契約×1保障カテゴリー。複数契約があっても1セルに
-// 詰め込まず行を分けて出力する（外部AIが読み取りやすいことを優先し、複雑なJSON化はしない）。
-const NEXUS_AI_EXPORT_DETAIL_HEADER = ['AI分析用ID', '保障区分', '保険会社', '保険種類', '契約年月', '契約状況', '担当区分', '代理店名', '通貨', '保障額', '保障額(円換算)', '単位', '保険期間', '保険期間終了日', '払込方法', '保険料', '保険料(円換算)', '1回あたり保険料(前納時)', '前納回数', '払込期間', '払込期間終了日', '解約返戻金', '一般勘定(円)', '一般勘定(外貨)', '特別勘定(円)', '特別勘定(外貨)', '特別勘定比率', '年金支払頻度', '年金額', '年金額(円換算)', '年金受取開始日', '特約情報'];
+// 契約詳細CSV（Bブロック）：1行＝1顧客の1契約（NEXUS内部の契約レコード基準）。複数の保障
+// カテゴリーに該当する契約も行を複製せず、「保障区分」列に該当カテゴリーをまとめて出す
+// （外部AIが読み取りやすいことを優先し、複雑なJSON化はしない）。
+const NEXUS_AI_EXPORT_DETAIL_HEADER = ['AI分析用ID', 'AI分析用契約ID', '保障区分', '保険会社', '保険種類', '契約年月', '契約状況', '担当区分', '代理店名', '通貨', '外貨額（保障額）', '登録為替レート', '登録円換算額（保障額）', '参考円換算額（外貨額×登録為替レート）', '単位', '保険期間', '保険期間終了日', '払込方法', '保険料', '保険料(円換算)', '1回あたり保険料(前納時)', '前納回数', '払込期間', '払込期間終了日', '解約返戻金', '一般勘定(円)', '一般勘定(外貨)', '特別勘定(円)', '特別勘定(外貨)', '特別勘定比率', '年金支払頻度', '年金額', '年金額(円換算)', '年金受取開始日', '特約情報'];
 function nexusAiExportCsvBlockB(rows) {
+  const catLabel = k => (NEXUS_COVERAGE_TYPE_OPTIONS.find(o => o.key === k) || {}).label || k;
   const body = [];
   rows.forEach(r => {
-    Object.keys(r.coverageDetails || {}).forEach(key => {
-      const label = (NEXUS_COVERAGE_TYPE_OPTIONS.find(o => o.key === key) || {}).label || key;
-      (r.coverageDetails[key] || []).forEach(rec => {
-        const ridersText = (rec.riders || []).map(rr => {
-          const parts = [];
-          if (rr.name) parts.push(rr.name);
-          if (nexusHasValue(rr.amount)) parts.push(`${rr.amount}${rr.amountUnit || ''}`);
-          if (nexusHasValue(rr.premium)) parts.push(`保険料${rr.premium}`);
-          return parts.join(' ');
-        }).join('；');
-        body.push([r.analysisId, label, rec.company || '', rec.type || '', rec.contractDate || '', rec.status || '', rec.responsibleType || '', rec.agencyName || '', rec.currency || '', nexusHasValue(rec.coverageAmount) ? rec.coverageAmount : '', nexusHasValue(rec.coverageAmountJpy) ? rec.coverageAmountJpy : '', rec.amountUnit || '', rec.termNote || '', rec.termEnd || '', rec.paymentCycle || '', nexusHasValue(rec.premium) ? rec.premium : '', nexusHasValue(rec.premiumJpy) ? rec.premiumJpy : '', nexusHasValue(rec.premiumPerPayment) ? rec.premiumPerPayment : '', nexusHasValue(rec.prepaidCount) ? rec.prepaidCount : '', rec.paymentTermNote || '', rec.paymentTermEnd || '', nexusHasValue(rec.currentSurrenderValue) ? rec.currentSurrenderValue : '', nexusHasValue(rec.generalAccountValueJpy) ? rec.generalAccountValueJpy : '', nexusHasValue(rec.generalAccountValueForeign) ? rec.generalAccountValueForeign : '', nexusHasValue(rec.separateAccountValueJpy) ? rec.separateAccountValueJpy : '', nexusHasValue(rec.separateAccountValueForeign) ? rec.separateAccountValueForeign : '', nexusHasValue(rec.separateAccountRatio) ? rec.separateAccountRatio : '', rec.periodicFreq || '', nexusHasValue(rec.periodicAmt) ? rec.periodicAmt : '', nexusHasValue(rec.periodicAmtJpy) ? rec.periodicAmtJpy : '', rec.periodicStart || '', ridersText]);
-      });
+    (r.coverageDetails || []).forEach(rec => {
+      const categoriesText = (rec.categories || []).map(catLabel).join('・');
+      const ridersText = (rec.riders || []).map(rr => {
+        const parts = [];
+        if (rr.name) parts.push(rr.name);
+        if (nexusHasValue(rr.amount)) parts.push(`${rr.amount}${rr.amountUnit || ''}`);
+        if (nexusHasValue(rr.premium)) parts.push(`保険料${rr.premium}`);
+        return parts.join(' ');
+      }).join('；');
+      body.push([r.analysisId, rec.contractId || 'P-UNASSIGNED', categoriesText, rec.company || '', rec.type || '', rec.contractDate || '', rec.status || '', rec.responsibleType || '', rec.agencyName || '', rec.currency || '', nexusHasValue(rec.coverageAmount) ? rec.coverageAmount : '', nexusHasValue(rec.exchangeRate) ? rec.exchangeRate : '', nexusHasValue(rec.coverageAmountJpy) ? rec.coverageAmountJpy : '', nexusHasValue(rec.referenceCoverageAmountJpy) ? rec.referenceCoverageAmountJpy : '', rec.amountUnit || '', rec.termNote || '', rec.termEnd || '', rec.paymentCycle || '', nexusHasValue(rec.premium) ? rec.premium : '', nexusHasValue(rec.premiumJpy) ? rec.premiumJpy : '', nexusHasValue(rec.premiumPerPayment) ? rec.premiumPerPayment : '', nexusHasValue(rec.prepaidCount) ? rec.prepaidCount : '', rec.paymentTermNote || '', rec.paymentTermEnd || '', nexusHasValue(rec.currentSurrenderValue) ? rec.currentSurrenderValue : '', nexusHasValue(rec.generalAccountValueJpy) ? rec.generalAccountValueJpy : '', nexusHasValue(rec.generalAccountValueForeign) ? rec.generalAccountValueForeign : '', nexusHasValue(rec.separateAccountValueJpy) ? rec.separateAccountValueJpy : '', nexusHasValue(rec.separateAccountValueForeign) ? rec.separateAccountValueForeign : '', nexusHasValue(rec.separateAccountRatio) ? rec.separateAccountRatio : '', rec.periodicFreq || '', nexusHasValue(rec.periodicAmt) ? rec.periodicAmt : '', nexusHasValue(rec.periodicAmtJpy) ? rec.periodicAmtJpy : '', rec.periodicStart || '', ridersText]);
     });
   });
   return body.length ? [NEXUS_AI_EXPORT_DETAIL_HEADER, ...body] : null;
@@ -16757,18 +16796,117 @@ const NEXUS_PREFERRED_CONTACT_METHODS = ['LINE', 'SMS', '電話', 'メール', '
 const NEXUS_CONTACT_POLICY_OPTIONS = ['通常フォロー可', '情報提供のみ', '必要時のみ', '営業連絡NG', 'しばらく連絡を控える', '本人ではなく家族経由', 'その他', '未確認'];
 const NEXUS_COVERAGE_TYPE_OPTIONS = [{ key: 'death', label: '死亡保障' }, { key: 'medical', label: '医療保障' }, { key: 'cancer', label: 'がん保障' }, { key: 'care', label: '介護保障' }, { key: 'annuity', label: '個人年金' }, { key: 'variable', label: '変額保険' }, { key: 'foreignCurrency', label: '外貨建保険' }];
 
-// 保障種類・一時払い等の「確認済み：あり／確認済み：なし／未確認」の三値判定。
-// 契約が1件も登録されていない顧客は必ず「未確認」とし、「なし」と混同しない
-// （空欄＝該当なしと判定しないという既存の絶対条件に合わせる）。
-function nexusCoverageConfirmedState(customer, key, rollup) {
-  const contracts = customer.contracts || [];
-  if (contracts.length === 0) return '未確認';
-  return rollup.coverageCategories[key] ? '確認済み：あり' : '確認済み：なし';
+// 生保／損保の判定：contract.categoryが設定されていればそれを使い、未設定の場合だけ
+// 既存のnexusGuessCategory()（Excel取込等で既に使われている、保険種類の文字列からの推測）を使う。
+// 自動車保険・火災保険等（損保）を死亡・医療・がん・介護・年金の未分類判定に含めないための区別。
+function nexusIsLifeInsuranceContract(ct) {
+  const cat = ct.category || nexusGuessCategory(ct.type || '', '');
+  return cat !== '損保';
 }
-function nexusLumpSumConfirmedState(customer, rollup) {
-  const contracts = customer.contracts || [];
-  if (contracts.length === 0) return '未確認';
-  return rollup.hasLumpSumPayment ? '確認済み：あり' : '確認済み：なし';
+// 保障の「未確認／確認済み」判定対象契約：解約・失効を除く、生保契約のみ。
+function nexusCoverageJudgmentContracts(customer) {
+  return (customer.contracts || []).filter(ct => ct.contractStatus !== '解約' && ct.contractStatus !== '失効' && nexusIsLifeInsuranceContract(ct));
+}
+// 契約が「分類済み」かどうか＝主契約または特約のいずれかにpurposesが1つ以上設定されているか。
+// 主契約・特約ともpurposesが空欄（未選択）のままの契約は「未分類」として扱う（保険証券通知書取込等、
+// purposesを空のまま保存する既存経路があるため。「保障なし」と誤判定しないための区別）。
+function nexusContractIsClassified(ct) {
+  if (nexusContractPurposes(ct).length > 0) return true;
+  return (ct.riders || []).some(r => nexusRiderPurposes(r).length > 0);
+}
+// 保障種類の「確認済み：あり／確認済み：なし／未確認」の三値判定。
+// ①該当カテゴリーを持つ判定対象契約が1件以上ある → 確認済み：あり
+// ②該当カテゴリーは無いが、判定対象契約の中に未分類の契約が1件でもある → 未確認
+// ③判定対象契約がすべて分類済みで、そのどれにも該当カテゴリーが無い → 確認済み：なし
+// 判定対象契約が0件（契約が無い、または生保契約が無い＝損保のみ）の場合も必ず未確認とし、
+// 「データが無いこと」を「保障が無いこと」として扱わない。
+function nexusCoverageConfirmedState(customer, key) {
+  const targets = nexusCoverageJudgmentContracts(customer);
+  if (targets.length === 0) return '未確認';
+  const hasCategory = targets.some(ct => nexusContractMatchesCoverageCategory(ct, key) || (ct.riders || []).some(r => nexusRiderMatchesCoverageCategory(r, key)));
+  if (hasCategory) return '確認済み：あり';
+  const hasUnclassified = targets.some(ct => !nexusContractIsClassified(ct));
+  if (hasUnclassified) return '未確認';
+  return '確認済み：なし';
+}
+// 支払方法（月払・年払・一時払・前期前納・全期前納）別の保険料合計。月払×12・年払÷12のような
+// 換算は一切行わず、登録されている支払方法の金額をそのまま合算するだけにする。
+// paymentCycleが空欄・未設定の契約は「月払」として補完せず、別途件数のみ計上する
+// （既存のnexusContractCoverageRollupは他機能でも使われているため変更せず、この関数はAI分析用
+// データ専用の新規関数とする）。
+function nexusPremiumCycleBreakdownForCustomer(customer) {
+  const contracts = (customer.contracts || []).filter(ct => ct.contractStatus !== '解約' && ct.contractStatus !== '失効');
+  const totals = { '月払': 0, '年払': 0, '一時払': 0, '前期前納': 0, '全期前納': 0 };
+  let unsetCount = 0;
+  contracts.forEach(ct => {
+    const cyc = ct.paymentCycle;
+    if (!cyc || !PAYMENT_CYCLES.includes(cyc)) {
+      unsetCount++;
+      return;
+    }
+    const cur = ct.currency || '円';
+    const amt = Number(ct.premium) || 0;
+    const jpy = Number(ct.premiumJpy) || 0;
+    const rate = Number(ct.exchangeRate) || 0;
+    const jpyAmt = cur === 'ドル' ? jpy || (rate ? amt * rate : 0) : amt;
+    totals[cyc] += jpyAmt;
+  });
+  return {
+    monthlyPremiumTotalJpy: Math.round(totals['月払']),
+    annualPremiumTotalJpy: Math.round(totals['年払']),
+    lumpSumPremiumTotalJpy: Math.round(totals['一時払']),
+    earlyPrepayPremiumTotalJpy: Math.round(totals['前期前納']),
+    fullPrepayPremiumTotalJpy: Math.round(totals['全期前納']),
+    paymentCycleUnsetCount: unsetCount
+  };
+}
+// AI分析用契約ID（固定・永続）：既存のcustomer.aiAnalysisIdと同じ設計方針。
+// 証券番号（policyNum）は直接ハッシュ化・照合には使わず、NEXUS内部の契約レコードそのもの
+// （contract.id、uid()で発行される安定したランダムID）を基準に、一度割り当てたら変わらない
+// 固定ID（P0001形式）をcontract.aiContractIdへ保存する。
+function nexusFormatAiContractId(n) {
+  return `P${String(n).padStart(4, '0')}`;
+}
+// customersの全契約に対し、contract.id（欠落している古い契約のみ新規発行）と
+// contract.aiContractId（既存の有効なものはそのまま、未設定または不正・重複のみ新規採番）を
+// 同時に整える。既存の有効なIDには一切触れない。
+function nexusAssignAiContractIds(customers, counter) {
+  const list = customers || [];
+  const idPattern = /^P(\d{4,})$/;
+  let floor = Number(counter) || 0;
+  list.forEach(c => (c.contracts || []).forEach(ct => {
+    const m = ct && typeof ct.aiContractId === 'string' && ct.aiContractId.match(idPattern);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n > floor) floor = n;
+    }
+  }));
+  const seen = new Set();
+  let assignedCount = 0;
+  const resultCustomers = list.map(c => {
+    const contracts = c.contracts || [];
+    let changed = false;
+    const newContracts = contracts.map(ct => {
+      let next = ct;
+      if (!next.id) {
+        next = { ...next, id: uid() };
+        changed = true;
+      }
+      const m = next && typeof next.aiContractId === 'string' && next.aiContractId.match(idPattern);
+      if (m && !seen.has(next.aiContractId)) {
+        seen.add(next.aiContractId);
+        return next;
+      }
+      floor += 1;
+      const newId = nexusFormatAiContractId(floor);
+      seen.add(newId);
+      assignedCount++;
+      changed = true;
+      return { ...next, aiContractId: newId };
+    });
+    return changed ? { ...c, contracts: newContracts } : c;
+  });
+  return { customers: resultCustomers, nextCounter: floor, assignedCount };
 }
 
 // 顧客詳細検索のメイン判定関数（既存のAI分析用データ機能のnexusCustomerAnalysisFilterPredicateとは
@@ -18943,6 +19081,8 @@ function importJSON(file, handlers) {
         if (data.nexusSavedSearches && handlers.setNexusSavedSearches) handlers.setNexusSavedSearches(data.nexusSavedSearches);
         if (data.nexusAiIdCounter !== undefined && handlers.setNexusAiIdCounter) handlers.setNexusAiIdCounter(data.nexusAiIdCounter);
         if (data.nexusAiIdMigrationDone !== undefined && handlers.setNexusAiIdMigrationDone) handlers.setNexusAiIdMigrationDone(data.nexusAiIdMigrationDone);
+        if (data.nexusAiContractIdCounter !== undefined && handlers.setNexusAiContractIdCounter) handlers.setNexusAiContractIdCounter(data.nexusAiContractIdCounter);
+        if (data.nexusAiContractIdMigrationDone !== undefined && handlers.setNexusAiContractIdMigrationDone) handlers.setNexusAiContractIdMigrationDone(data.nexusAiContractIdMigrationDone);
         alert('✅ 全データを復元しました');
         return;
       }
@@ -21210,7 +21350,9 @@ function exportJSON(state) {
     nexusMission: state.nexusMission,
     nexusSavedSearches: state.nexusSavedSearches,
     nexusAiIdCounter: state.nexusAiIdCounter,
-    nexusAiIdMigrationDone: state.nexusAiIdMigrationDone
+    nexusAiIdMigrationDone: state.nexusAiIdMigrationDone,
+    nexusAiContractIdCounter: state.nexusAiContractIdCounter,
+    nexusAiContractIdMigrationDone: state.nexusAiContractIdMigrationDone
   }, null, 2);
   const blob = new Blob([data], {
     type: 'application/json'
@@ -38128,6 +38270,14 @@ function App() {
   const [nexusAiIdMigrationDone, setNexusAiIdMigrationDone] = useLS('nexus_ai_id_migration_done_v1', false);
   const [showAiIdMigration, setShowAiIdMigration] = useState(false);
   const needsAiIdMigration = customers.some(c => !c.aiAnalysisId);
+  // AI分析用契約ID（固定・永続）の採番カウンター。契約の証券番号は外部へ一切出さず、
+  // NEXUS内部の契約レコード（contract.id）を基準にP0001形式の固定IDを割り当てる。
+  // 顧客IDと違い、過去に公開した番号の履歴が存在しないため0から採番を始める。
+  const [nexusAiContractIdCounter, setNexusAiContractIdCounter] = useLS('nexus_ai_contract_id_counter_v1', 0);
+  // 契約IDの「最初の一括付与」も、顧客IDと同じくバックアップ→確認→実行の明示的な操作を
+  // 経て初めてtrueになる（既存の大量の契約データへの一括変更を確認なしに行わないため）。
+  const [nexusAiContractIdMigrationDone, setNexusAiContractIdMigrationDone] = useLS('nexus_ai_contract_id_migration_done_v1', false);
+  const needsAiContractIdMigration = customers.some(c => (c.contracts || []).some(ct => !ct.aiContractId));
   // ★意図的に「不要なら自動でmigrationDone扱いにする」処理は置かない：
   // 一時的に顧客が0件の状態（例：全顧客削除直後）を経由しただけでmigrationDoneがtrueになってしまうと、
   // その後にバックアップ復元等で一括インポートされた大量の顧客が確認なしに自動採番されてしまう
@@ -38135,16 +38285,25 @@ function App() {
   // 一括付与が完了した後は、新規顧客の登録・インポート・ファン化フォロー経由の顧客登録など、
   // customersが更新されるあらゆる経路で、IDが未設定の顧客（1件程度の増分）が残っていれば
   // 自動的に補完する。一括付与が完了する前は、ここでは何もしない
-  // （既存データへの大きな変更をユーザーの確認なしに行わないため）。
+  // （既存データへの大きな変更をユーザーの確認なしに行わないため）。同じ考え方を契約IDにも適用する。
   React.useEffect(() => {
-    if (!nexusAiIdMigrationDone || !needsAiIdMigration) return;
-    const r = nexusAssignAiAnalysisIds(customers, nexusAiIdCounter);
-    if (r.assignedCount > 0) {
-      setCustomers(r.customers);
-      setNexusAiIdCounter(r.nextCounter);
+    if (nexusAiIdMigrationDone && needsAiIdMigration) {
+      const r = nexusAssignAiAnalysisIds(customers, nexusAiIdCounter);
+      if (r.assignedCount > 0) {
+        setCustomers(r.customers);
+        setNexusAiIdCounter(r.nextCounter);
+        return; // customersの更新は1回のeffect実行につき1種類に留め、次のeffectサイクルで残りを処理する
+      }
+    }
+    if (nexusAiContractIdMigrationDone && needsAiContractIdMigration) {
+      const r = nexusAssignAiContractIds(customers, nexusAiContractIdCounter);
+      if (r.assignedCount > 0) {
+        setCustomers(r.customers);
+        setNexusAiContractIdCounter(r.nextCounter);
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customers, nexusAiIdMigrationDone]);
+  }, [customers, nexusAiIdMigrationDone, nexusAiContractIdMigrationDone]);
   const [tab, setTab] = useState('dashboard');
   const [corpPlanningTargetId, setCorpPlanningTargetId] = useState('');
   const [showAiExport, setShowAiExport] = useState(false);
@@ -38415,7 +38574,9 @@ function App() {
           setNexusMission,
           setNexusSavedSearches,
           setNexusAiIdCounter,
-          setNexusAiIdMigrationDone
+          setNexusAiIdMigrationDone,
+          setNexusAiContractIdCounter,
+          setNexusAiContractIdMigrationDone
         });
         e.target.value = '';
       }
@@ -38440,7 +38601,9 @@ function App() {
       nexusMission,
       nexusSavedSearches,
       nexusAiIdCounter,
-      nexusAiIdMigrationDone
+      nexusAiIdMigrationDone,
+      nexusAiContractIdCounter,
+      nexusAiContractIdMigrationDone
     }),
     style: {
       fontSize: 11,
@@ -38485,12 +38648,14 @@ function App() {
     onOpenAiExport: () => setShowAiExport(true),
     onOpenSearch: () => setShowCustomerSearch(true),
     onOpenAiIdMigration: () => setShowAiIdMigration(true),
-    needsAiIdMigration: needsAiIdMigration
+    needsAiIdMigration: needsAiIdMigration || needsAiContractIdMigration
   }), showAiIdMigration && /*#__PURE__*/React.createElement(NexusAiIdMigrationScreen, {
     customers: customers,
     setCustomers: setCustomers,
     aiIdCounter: nexusAiIdCounter,
     setAiIdCounter: setNexusAiIdCounter,
+    contractIdCounter: nexusAiContractIdCounter,
+    setContractIdCounter: setNexusAiContractIdCounter,
     backupState: {
       customers,
       memos,
@@ -38510,11 +38675,14 @@ function App() {
       nexusMission,
       nexusSavedSearches,
       nexusAiIdCounter,
-      nexusAiIdMigrationDone
+      nexusAiIdMigrationDone,
+      nexusAiContractIdCounter,
+      nexusAiContractIdMigrationDone
     },
     onClose: () => setShowAiIdMigration(false),
     onComplete: () => {
       setNexusAiIdMigrationDone(true);
+      setNexusAiContractIdMigrationDone(true);
       setShowAiIdMigration(false);
     }
   }), showAiExport && /*#__PURE__*/React.createElement(NexusCustomerAiExportScreen, {
