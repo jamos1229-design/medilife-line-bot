@@ -35971,7 +35971,1762 @@ function NexusTab({
 
 
 
+// ══════════════════════════════════════════════════════════════
+// ── Second Brain / Memory機能 ──────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+// 顧客・契約・タスク・商談メモ等の既存データ（localStorage・useLS）とは完全に独立した
+// 新規機能。Memoryは将来数千〜数万件になりうるため、既存NEXUSの保存方式（useLS／
+// localStorage）は一切変更せず、Memory機能だけをネイティブIndexedDBで実装する。
+// UIコンポーネントはIndexedDBを直接操作せず、必ずMemoryService経由でアクセスする
+// （UI → MemoryService → Storage。将来ストレージをIndexedDBの外へ差し替える場合も
+// UI側の変更を最小限にするため）。
+
+// ── IndexedDB 低レベルアクセス（このブロックの外からは直接呼ばない）──
+const NEXUS_MEMORY_DB_NAME = 'nexus_second_brain_db';
+const NEXUS_MEMORY_DB_VERSION = 1;
+const NEXUS_MEMORY_STORE = 'memories';
+const NEXUS_PSEUDONYM_STORE = 'pseudonymMap';
+const NEXUS_PSEUDONYM_KEY = 'main';
+let nexusMemoryDBPromise = null;
+function nexusMemoryOpenDB() {
+  return new Promise((resolve, reject) => {
+    if (!window.indexedDB) {
+      reject(new Error('このブラウザ・モードはIndexedDBに対応していません'));
+      return;
+    }
+    const req = indexedDB.open(NEXUS_MEMORY_DB_NAME, NEXUS_MEMORY_DB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(NEXUS_MEMORY_STORE)) {
+        const store = db.createObjectStore(NEXUS_MEMORY_STORE, {
+          keyPath: 'id'
+        });
+        store.createIndex('createdAt', 'createdAt', {
+          unique: false
+        });
+        store.createIndex('source', 'source', {
+          unique: false
+        });
+      }
+      if (!db.objectStoreNames.contains(NEXUS_PSEUDONYM_STORE)) {
+        db.createObjectStore(NEXUS_PSEUDONYM_STORE, {
+          keyPath: 'key'
+        });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error || new Error('IndexedDBを開けませんでした'));
+  });
+}
+function nexusMemoryGetDB() {
+  if (!nexusMemoryDBPromise) nexusMemoryDBPromise = nexusMemoryOpenDB();
+  return nexusMemoryDBPromise;
+}
+function nexusMemoryGetAllRaw() {
+  return nexusMemoryGetDB().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(NEXUS_MEMORY_STORE, 'readonly');
+    const req = tx.objectStore(NEXUS_MEMORY_STORE).getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  }));
+}
+function nexusMemoryGetOneRaw(id) {
+  return nexusMemoryGetDB().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(NEXUS_MEMORY_STORE, 'readonly');
+    const req = tx.objectStore(NEXUS_MEMORY_STORE).get(id);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error);
+  }));
+}
+function nexusMemoryPutRaw(memory) {
+  return nexusMemoryGetDB().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(NEXUS_MEMORY_STORE, 'readwrite');
+    tx.objectStore(NEXUS_MEMORY_STORE).put(memory);
+    tx.oncomplete = () => resolve(memory);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  }));
+}
+function nexusMemoryBulkPutRaw(memories) {
+  return nexusMemoryGetDB().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(NEXUS_MEMORY_STORE, 'readwrite');
+    const store = tx.objectStore(NEXUS_MEMORY_STORE);
+    (memories || []).forEach(m => store.put(m));
+    tx.oncomplete = () => resolve(memories);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  }));
+}
+function nexusMemoryDeleteRaw(id) {
+  return nexusMemoryGetDB().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(NEXUS_MEMORY_STORE, 'readwrite');
+    tx.objectStore(NEXUS_MEMORY_STORE).delete(id);
+    tx.oncomplete = () => resolve(id);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  }));
+}
+function nexusMemoryClearAllRaw() {
+  return nexusMemoryGetDB().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(NEXUS_MEMORY_STORE, 'readwrite');
+    tx.objectStore(NEXUS_MEMORY_STORE).clear();
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  }));
+}
+function nexusEmptyPseudonymMap() {
+  return {
+    key: NEXUS_PSEUDONYM_KEY,
+    persons: {},
+    companies: {},
+    policies: {},
+    idnums: {},
+    counters: {
+      person: 0,
+      company: 0,
+      policy: 0,
+      idnum: 0
+    }
+  };
+}
+function nexusPseudonymMapGetRaw() {
+  return nexusMemoryGetDB().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(NEXUS_PSEUDONYM_STORE, 'readonly');
+    const req = tx.objectStore(NEXUS_PSEUDONYM_STORE).get(NEXUS_PSEUDONYM_KEY);
+    req.onsuccess = () => resolve(req.result || nexusEmptyPseudonymMap());
+    req.onerror = () => reject(req.error);
+  }));
+}
+function nexusPseudonymMapPutRaw(map) {
+  const toStore = {
+    ...map,
+    key: NEXUS_PSEUDONYM_KEY
+  };
+  return nexusMemoryGetDB().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(NEXUS_PSEUDONYM_STORE, 'readwrite');
+    tx.objectStore(NEXUS_PSEUDONYM_STORE).put(toStore);
+    tx.oncomplete = () => resolve(map);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  }));
+}
+
+// ── MemoryService（UIが実際に呼ぶのはここだけ）──────────────────
+// 新規Memoryの初期値・並び替え・更新時刻の付与など、業務ロジックをここに集約する。
+// 将来IndexedDB以外のストレージへ差し替える場合も、この関数群のシグネチャを保てば
+// UI側（useMemoryStore以降）は変更不要にする。
+const MemoryService = {
+  getAll() {
+    return nexusMemoryGetAllRaw().then(list => list.slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')));
+  },
+  getById(id) {
+    return nexusMemoryGetOneRaw(id);
+  },
+  create(partial) {
+    const now = new Date().toISOString();
+    const p = partial || {};
+    const memory = {
+      id: uid(),
+      content: p.content || '',
+      createdAt: now,
+      updatedAt: now,
+      category: p.category || '',
+      tags: p.tags || [],
+      relatedEntityIds: p.relatedEntityIds || [],
+      relatedMemoryIds: p.relatedMemoryIds || [],
+      source: p.source || 'manual',
+      isPrivate: !!p.isPrivate,
+      analysisHistoryIds: p.analysisHistoryIds || [],
+      parentMemoryId: p.parentMemoryId || null
+    };
+    return nexusMemoryPutRaw(memory).then(() => memory);
+  },
+  update(id, patch) {
+    return nexusMemoryGetOneRaw(id).then(existing => {
+      if (!existing) throw new Error('指定されたMemoryが見つかりません');
+      const updated = {
+        ...existing,
+        ...patch,
+        id,
+        updatedAt: new Date().toISOString()
+      };
+      return nexusMemoryPutRaw(updated).then(() => updated);
+    });
+  },
+  remove(id) {
+    return nexusMemoryDeleteRaw(id);
+  },
+  exportBackup() {
+    return nexusMemoryGetAllRaw().then(list => ({
+      __nexusMemoryBackup: true,
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      memories: list
+    }));
+  },
+  importBackup(data, mode) {
+    if (!data || !Array.isArray(data.memories)) return Promise.reject(new Error('Memoryバックアップの形式ではありません'));
+    const run = mode === 'replace' ? nexusMemoryClearAllRaw() : Promise.resolve();
+    return run.then(() => nexusMemoryBulkPutRaw(data.memories)).then(() => data.memories.length);
+  },
+  getPseudonymMap() {
+    return nexusPseudonymMapGetRaw();
+  },
+  savePseudonymMap(map) {
+    return nexusPseudonymMapPutRaw(map);
+  }
+};
+
+// ── 関連する記憶を見つけるサービス層 ──────────────────────────────
+// AIは使用しない。タグ・カテゴリ・共通する単語・relatedEntityIds・手動関連付けから
+// スコアリングする。UIにはロジックを書かず、この関数だけを差し替えれば将来
+// Embedding／ベクトル検索へ移行できるようにする。
+const NEXUS_MEMORY_STOPWORDS = new Set(['こと', 'これ', 'それ', 'ため', 'よう', 'もの', 'さん', '思う', 'した', 'する', 'いる', 'ある', 'なる', 'です', 'ます', 'その', 'この', 'あの', 'いう', 'など', 'かも', 'しれ', 'ない', 'という', 'とき', 'ながら', 'まで', 'から', 'だけ', 'ので', 'けど', 'けれど', 'しか']);
+function nexusMemoryTokenize(text) {
+  if (!text) return [];
+  const raw = String(text).slice(0, 500);
+  const tokens = new Set();
+  const asciiMatches = raw.match(/[A-Za-z0-9]{2,}/g) || [];
+  asciiMatches.forEach(t => tokens.add(t.toLowerCase()));
+  const cleaned = raw.replace(/[\s、。！？「」『』（）().,!?]/g, ' ');
+  for (let len = 4; len >= 2; len--) {
+    for (let i = 0; i + len <= cleaned.length; i++) {
+      const gram = cleaned.slice(i, i + len);
+      if (/^[一-鿿぀-ゟ゠-ヿー]+$/.test(gram) && !NEXUS_MEMORY_STOPWORDS.has(gram)) {
+        tokens.add(gram);
+      }
+    }
+  }
+  return Array.from(tokens);
+}
+function nexusRelatedEntityKey(e) {
+  return `${e && e.type || ''}:${e && e.id || ''}`;
+}
+function nexusMemoryRelationScore(a, b) {
+  if (a.id === b.id) return 0;
+  let score = 0;
+  if ((a.relatedMemoryIds || []).includes(b.id) || (b.relatedMemoryIds || []).includes(a.id)) score += 100;
+  const aEntities = new Set((a.relatedEntityIds || []).map(nexusRelatedEntityKey));
+  const bEntities = (b.relatedEntityIds || []).map(nexusRelatedEntityKey);
+  score += bEntities.filter(k => aEntities.has(k)).length * 20;
+  if (a.category && a.category === b.category) score += 5;
+  const aTags = new Set(a.tags || []);
+  score += (b.tags || []).filter(t => aTags.has(t)).length * 8;
+  const aTokens = new Set(nexusMemoryTokenize(a.content));
+  const bTokens = nexusMemoryTokenize(b.content);
+  score += Math.min(bTokens.filter(t => aTokens.has(t)).length, 10) * 2;
+  return score;
+}
+function nexusFindRelatedMemories(memory, allMemories, opts) {
+  const limit = opts && opts.limit || 10;
+  return (allMemories || []).filter(m => m.id !== memory.id).map(m => ({
+    memory: m,
+    score: nexusMemoryRelationScore(memory, m)
+  })).filter(r => r.score > 0).sort((a, b) => b.score - a.score).slice(0, limit).map(r => r.memory);
+}
+
+// ── 匿名化・仮名化サービス層 ────────────────────────────────────
+// 仮名対応表（PERSON_001＝山田太郎、等）はNEXUS内部（IndexedDBのpseudonymMapストア）
+// だけで保持し、AI分析用プロンプトにも通常のバックアップにも絶対に含めない。
+// この関数群は純粋関数とし、pseudonymMapを直接書き換えず、更新後の新しいマップを
+// 返す（呼び出し側がMemoryService.savePseudonymMapで永続化する）。
+// AIによる自動匿名化ではなく、ローカルのルールベース処理のみを行う。
+function nexusMemoryPseudonymFor(map, bucket, prefix, realValue) {
+  const key = String(realValue).trim();
+  if (!key) return {
+    token: null,
+    map
+  };
+  const bucketMap = map[bucket] || {};
+  if (bucketMap[key]) return {
+    token: bucketMap[key],
+    map
+  };
+  const counters = {
+    ...map.counters
+  };
+  counters[bucket] = (counters[bucket] || 0) + 1;
+  const token = `${prefix}_${String(counters[bucket]).padStart(3, '0')}`;
+  return {
+    token,
+    map: {
+      ...map,
+      [bucket]: {
+        ...bucketMap,
+        [key]: token
+      },
+      counters
+    }
+  };
+}
+// 構造化データ（登録済み顧客・契約）から、匿名化の対象になりうる文字列を集める。
+// 日本人の氏名を文章だけから推測するような処理はせず、アプリが既に把握している
+// 登録済みの氏名・連絡先・証券番号のみを対象にする（既存のAIプロンプト匿名化機能と
+// 同じ設計思想）。
+function nexusMemoryBuildStructuredTerms(customers) {
+  const persons = [];
+  const companies = [];
+  const policies = [];
+  const contacts = [];
+  const birthdates = [];
+  (customers || []).forEach(c => {
+    if (c.customerType === '法人') {
+      if (c.corporateName) companies.push(c.corporateName.trim());
+      if (c.representative) persons.push(c.representative.trim());
+      if (c.name) persons.push(c.name.trim());
+    } else {
+      if (c.name) persons.push(c.name.trim());
+      if (c.furigana) persons.push(c.furigana.trim());
+      if (c.formerName) persons.push(c.formerName.trim());
+      if (c.workplace) companies.push(c.workplace.trim());
+    }
+    if (c.phone) contacts.push({
+      value: c.phone.trim(),
+      kind: 'phone'
+    });
+    if (c.email) contacts.push({
+      value: c.email.trim(),
+      kind: 'email'
+    });
+    if (c.postalCode) contacts.push({
+      value: c.postalCode.trim(),
+      kind: 'postalCode'
+    });
+    if (c.address) contacts.push({
+      value: c.address.trim(),
+      kind: 'address'
+    });
+    if (c.birthdate) birthdates.push(c.birthdate.trim());
+    (c.contracts || []).forEach(ct => {
+      if (ct.policyNum) policies.push(String(ct.policyNum).trim());
+    });
+  });
+  return {
+    persons: Array.from(new Set(persons)).filter(v => v && v.length >= 2),
+    companies: Array.from(new Set(companies)).filter(v => v && v.length >= 2),
+    policies: Array.from(new Set(policies)).filter(Boolean),
+    contacts,
+    birthdates: Array.from(new Set(birthdates))
+  };
+}
+function nexusMemoryAgeBandLabel(birthdateStr) {
+  const age = calcAge(birthdateStr);
+  if (age === null || age === undefined || isNaN(age)) return null;
+  return `${Math.floor(age / 10) * 10}代`;
+}
+function nexusMemoryAnonymize(text, ctx) {
+  const emptyMap = nexusEmptyPseudonymMap();
+  if (!text) return {
+    result: text || '',
+    map: ctx && ctx.pseudonymMap || emptyMap,
+    matches: []
+  };
+  const customers = ctx && ctx.customers || [];
+  let map = ctx && ctx.pseudonymMap || emptyMap;
+  let result = text;
+  const matches = [];
+  const structured = nexusMemoryBuildStructuredTerms(customers);
+  const replaceAll = (value, replacement, type) => {
+    if (!value || !result.includes(value)) return;
+    result = result.split(value).join(replacement);
+    matches.push({
+      type,
+      original: value,
+      replacement
+    });
+  };
+  structured.persons.sort((a, b) => b.length - a.length).forEach(name => {
+    if (!result.includes(name)) return;
+    const r = nexusMemoryPseudonymFor(map, 'persons', 'PERSON', name);
+    if (!r.token) return;
+    map = r.map;
+    replaceAll(name, r.token, 'person');
+  });
+  structured.companies.sort((a, b) => b.length - a.length).forEach(name => {
+    if (!result.includes(name)) return;
+    const r = nexusMemoryPseudonymFor(map, 'companies', 'COMPANY', name);
+    if (!r.token) return;
+    map = r.map;
+    replaceAll(name, r.token, 'company');
+  });
+  structured.policies.sort((a, b) => b.length - a.length).forEach(num => {
+    if (!result.includes(num)) return;
+    const r = nexusMemoryPseudonymFor(map, 'policies', 'POLICY', num);
+    if (!r.token) return;
+    map = r.map;
+    replaceAll(num, r.token, 'policy');
+  });
+  structured.birthdates.forEach(bd => {
+    if (!result.includes(bd)) return;
+    replaceAll(bd, nexusMemoryAgeBandLabel(bd) || '[BIRTHDATE_REMOVED]', 'birthdate');
+  });
+  structured.contacts.filter(c => c.kind === 'address').forEach(c => {
+    if (!result.includes(c.value)) return;
+    replaceAll(c.value, nexusExtractPrefecture(c.value) || '[ADDRESS_REMOVED]', 'address');
+  });
+  structured.contacts.filter(c => c.kind === 'postalCode').forEach(c => replaceAll(c.value, '[ADDRESS_REMOVED]', 'postalCode'));
+  structured.contacts.filter(c => c.kind === 'phone').forEach(c => replaceAll(c.value, '[PHONE_REMOVED]', 'phone'));
+  structured.contacts.filter(c => c.kind === 'email').forEach(c => replaceAll(c.value, '[EMAIL_REMOVED]', 'email'));
+  result = result.replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, m => {
+    matches.push({
+      type: 'email',
+      original: m,
+      replacement: '[EMAIL_REMOVED]'
+    });
+    return '[EMAIL_REMOVED]';
+  });
+  result = result.replace(/0\d{1,4}-?\d{1,4}-?\d{3,4}/g, m => {
+    matches.push({
+      type: 'phone',
+      original: m,
+      replacement: '[PHONE_REMOVED]'
+    });
+    return '[PHONE_REMOVED]';
+  });
+  result = result.replace(/\d{3}-\d{4}/g, m => {
+    matches.push({
+      type: 'postalCode',
+      original: m,
+      replacement: '[ADDRESS_REMOVED]'
+    });
+    return '[ADDRESS_REMOVED]';
+  });
+  const longDigits = Array.from(new Set(result.match(/\d{7,}/g) || []));
+  longDigits.forEach(num => {
+    const r = nexusMemoryPseudonymFor(map, 'idnums', 'IDNUM', num);
+    if (!r.token) return;
+    map = r.map;
+    replaceAll(num, r.token, 'idnum');
+  });
+  return {
+    result,
+    map,
+    matches
+  };
+}
+
+// ── AI分析用プロンプト生成サービス層 ────────────────────────────
+const NEXUS_AI_PACK_PURPOSES = [{
+  key: 'habit',
+  label: '思考の癖を分析'
+}, {
+  key: 'work',
+  label: '仕事・営業を分析'
+}, {
+  key: 'idea',
+  label: 'アイデアを生み出す'
+}, {
+  key: 'organize',
+  label: '過去の記録を整理'
+}, {
+  key: 'decision',
+  label: '意思決定を助ける'
+}, {
+  key: 'change',
+  label: '自分の変化を見る'
+}, {
+  key: 'free',
+  label: '自由分析'
+}];
+const NEXUS_AI_PACK_PURPOSE_FOCUS = {
+  habit: '特に、繰り返し出てくる考え方や判断の傾向（思考の癖）に注目してください。',
+  work: '特に、仕事・営業活動における成功パターン・失敗パターン・顧客対応の傾向に注目してください。',
+  idea: '特に、新しい事業アイデアやサービスの種になりそうな要素に注目してください。',
+  organize: '特に、記録全体を時系列や関連性で整理し、テーマごとに要約してください。',
+  decision: '特に、今後の意思決定に役立つ材料（判断基準・過去の選択とその結果）に注目してください。',
+  change: '特に、過去と現在で考え方や状況がどう変化したかに注目してください。',
+  free: ''
+};
+function nexusBuildAiPackPrompt(anonymizedMemories, purposeKey) {
+  const purpose = NEXUS_AI_PACK_PURPOSES.find(p => p.key === purposeKey) || NEXUS_AI_PACK_PURPOSES[NEXUS_AI_PACK_PURPOSES.length - 1];
+  const focusLine = NEXUS_AI_PACK_PURPOSE_FOCUS[purpose.key] || '';
+  const headerLines = ['⸻', '', 'AI分析依頼', '', '以下は匿名化済みの記録です。', '複数の記録を横断して分析してください。', '', '特に以下を確認してください。', '', '・情報同士のつながり', '・繰り返している思考パターン', '・行動パターン', '・矛盾している考え', '・本人がまだ気づいていない可能性がある点', '・過去と現在の変化', '・新しい仮説', '・新しいアイデア', '・次に考えるべき問い'];
+  if (focusLine) headerLines.push('', focusLine);
+  headerLines.push('', '事実として確認できる内容と、AIによる仮説は分けてください。', '断定できないことは断定しないでください。', '', '⸻');
+  const body = (anonymizedMemories || []).map((m, i) => `記録${i + 1}\n\n日付：${(m.createdAt || '').slice(0, 10)}\nカテゴリ：${m.category || '未分類'}\n内容：${m.content}`).join('\n\n');
+  return `${headerLines.join('\n')}\n\n${body}`;
+}
+
+// ── Memory UI用の定数 ────────────────────────────────────────────
+const NEXUS_MEMORY_CATEGORIES = [{
+  key: 'work',
+  label: '仕事'
+}, {
+  key: 'customer',
+  label: '顧客対応'
+}, {
+  key: 'knowledge',
+  label: '学び'
+}, {
+  key: 'idea',
+  label: 'アイデア'
+}, {
+  key: 'private',
+  label: 'プライベート'
+}, {
+  key: 'family',
+  label: '家族'
+}, {
+  key: 'reflection',
+  label: '振り返り'
+}, {
+  key: 'learning',
+  label: '読書・学習'
+}, {
+  key: 'other',
+  label: 'その他'
+}];
+function nexusMemoryCategoryLabel(key) {
+  const found = NEXUS_MEMORY_CATEGORIES.find(c => c.key === key);
+  return found ? found.label : key || '';
+}
+function nexusFormatMemoryDateTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+// ── useMemoryStore：UIとMemoryServiceを繋ぐ唯一のフック ────────────
+// コンポーネントはこのフックが返す関数を通じてのみMemoryを読み書きする
+// （IndexedDBやMemoryServiceを直接参照しない）。
+function useMemoryStore() {
+  const [memories, setMemories] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [dbError, setDbError] = useState(null);
+  React.useEffect(() => {
+    let cancelled = false;
+    MemoryService.getAll().then(list => {
+      if (cancelled) return;
+      setMemories(list);
+      setLoading(false);
+    }).catch(err => {
+      if (cancelled) return;
+      setDbError(err);
+      setLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const create = useCallback(partial => MemoryService.create(partial).then(m => {
+    setMemories(prev => [m, ...prev]);
+    return m;
+  }), []);
+  const update = useCallback((id, patch) => MemoryService.update(id, patch).then(m => {
+    setMemories(prev => prev.map(x => x.id === id ? m : x));
+    return m;
+  }), []);
+  const remove = useCallback(id => MemoryService.remove(id).then(() => {
+    setMemories(prev => prev.filter(x => x.id !== id));
+  }), []);
+  const reload = useCallback(() => MemoryService.getAll().then(list => {
+    setMemories(list);
+    return list;
+  }), []);
+  return {
+    memories,
+    loading,
+    dbError,
+    create,
+    update,
+    remove,
+    reload
+  };
+}
+
+// ── Memoryカード（一覧表示用）──────────────────────────────────
+function MemoryCard({
+  memory,
+  onClick
+}) {
+  const excerpt = (memory.content || '').replace(/\n/g, ' ').slice(0, 80);
+  const isLong = (memory.content || '').length > 80;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "customer-card",
+    onClick: () => onClick(memory)
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "customer-card-top"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      alignItems: 'center',
+      flexWrap: 'wrap'
+    }
+  }, memory.source === 'ai-insight' && /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    style: {
+      background: '#EDE9FE',
+      color: '#7C3AED'
+    }
+  }, "🤖 AI Insight"), memory.category && /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    style: {
+      background: 'var(--accent-light)',
+      color: 'var(--accent)'
+    }
+  }, nexusMemoryCategoryLabel(memory.category)), memory.isPrivate && /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    style: {
+      background: '#FEF2F2',
+      color: 'var(--danger)'
+    }
+  }, "🔒 PRIVATE")), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      whiteSpace: 'nowrap'
+    }
+  }, nexusFormatMemoryDateTime(memory.createdAt))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 14,
+      lineHeight: 1.6,
+      marginTop: 4,
+      wordBreak: 'break-word',
+      whiteSpace: 'pre-wrap'
+    }
+  }, excerpt + (isLong ? '…' : '')), (memory.tags || []).length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 5,
+      flexWrap: 'wrap',
+      marginTop: 8
+    }
+  }, memory.tags.map(t => /*#__PURE__*/React.createElement("span", {
+    key: t,
+    className: "chip",
+    style: {
+      fontSize: 11,
+      padding: '3px 9px',
+      minHeight: 'auto',
+      cursor: 'default'
+    }
+  }, "#", t))));
+}
+
+// ── ＋ 記憶する（クイック追加シート）─────────────────────────────
+// 「思った瞬間に数秒で残せる」ことを最優先にする。本文の入力・保存だけで完結し、
+// カテゴリ・タグ・非公開設定は開かなくても保存できる（任意・後から整理できる）。
+function MemoryQuickAddSheet({
+  onSave,
+  onClose
+}) {
+  const [content, setContent] = useState('');
+  const [expanded, setExpanded] = useState(false);
+  const [category, setCategory] = useState('');
+  const [tagsText, setTagsText] = useState('');
+  const [isPrivate, setIsPrivate] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const canSave = content.trim().length > 0 && !saving;
+  const doSave = () => {
+    if (!canSave) return;
+    setSaving(true);
+    const tags = tagsText.split(/[,、\s]+/).map(t => t.trim()).filter(Boolean);
+    onSave({
+      content: content.trim(),
+      category,
+      tags,
+      isPrivate
+    });
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: "overlay",
+    onClick: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "drawer",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "drawer-handle"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "drawer-title"
+  }, "＋ 記憶する"), /*#__PURE__*/React.createElement("textarea", {
+    className: "form-textarea",
+    autoFocus: true,
+    style: {
+      minHeight: 130
+    },
+    placeholder: "思ったこと・気づき・アイデアなど、何でも自由に...",
+    value: content,
+    onChange: e => setContent(e.target.value)
+  }), !expanded ? /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setExpanded(true),
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--text-sub)',
+      fontSize: 12,
+      padding: '10px 0',
+      cursor: 'pointer',
+      textAlign: 'left'
+    }
+  }, "▾ カテゴリ・タグ・非公開設定（任意）") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 12,
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "form-label"
+  }, "カテゴリ（任意）"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 6
+    }
+  }, NEXUS_MEMORY_CATEGORIES.map(c => /*#__PURE__*/React.createElement("span", {
+    key: c.key,
+    className: `chip ${category === c.key ? 'active' : ''}`,
+    onClick: () => setCategory(category === c.key ? '' : c.key)
+  }, c.label)))), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "タグ（任意・カンマ区切り）"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    placeholder: "例：営業, 家族",
+    value: tagsText,
+    onChange: e => setTagsText(e.target.value)
+  })), /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      fontSize: 13,
+      marginBottom: 8,
+      cursor: 'pointer'
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: isPrivate,
+    onChange: e => setIsPrivate(e.target.checked)
+  }), "🔒 プライベート（非常に個人的な内容）")), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-full",
+    style: {
+      marginTop: 10
+    },
+    disabled: !canSave,
+    onClick: doSave
+  }, saving ? "保存中..." : "保存する")));
+}
+
+// ── Memory編集フォーム（詳細入力・関連付け）────────────────────────
+function MemoryForm({
+  editing,
+  customers,
+  onSave,
+  onClose
+}) {
+  const [content, setContent] = useState(editing ? editing.content || '' : '');
+  const [category, setCategory] = useState(editing ? editing.category || '' : '');
+  const [tagsText, setTagsText] = useState(editing && (editing.tags || []).length ? editing.tags.join(', ') : '');
+  const [isPrivate, setIsPrivate] = useState(editing ? !!editing.isPrivate : false);
+  const [relatedEntityIds, setRelatedEntityIds] = useState(editing && editing.relatedEntityIds || []);
+  const [customerSearch, setCustomerSearch] = useState('');
+  const candidates = customerSearch.trim() ? (customers || []).filter(c => {
+    const n = nexusDisplayName(c);
+    return n && n.includes(customerSearch.trim());
+  }).slice(0, 8) : [];
+  const addEntity = (type, id, label) => {
+    if (relatedEntityIds.some(e => e.type === type && e.id === id)) return;
+    setRelatedEntityIds([...relatedEntityIds, {
+      type,
+      id,
+      label
+    }]);
+  };
+  const removeEntity = (type, id) => setRelatedEntityIds(relatedEntityIds.filter(e => !(e.type === type && e.id === id)));
+  const canSave = content.trim().length > 0;
+  const save = () => {
+    if (!canSave) return;
+    const tags = tagsText.split(/[,、]+/).map(t => t.trim()).filter(Boolean);
+    onSave({
+      ...(editing || {}),
+      content: content.trim(),
+      category,
+      tags,
+      isPrivate,
+      relatedEntityIds
+    });
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: "full-screen"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "full-header"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    style: {
+      background: 'none',
+      border: 'none',
+      cursor: 'pointer',
+      fontSize: 15,
+      color: 'var(--text-sub)',
+      fontWeight: 600,
+      padding: '4px 8px'
+    }
+  }, "← 戻る"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      fontWeight: 700,
+      fontSize: 15
+    }
+  }, editing ? "記憶を編集" : "記憶を追加"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-primary btn-sm",
+    disabled: !canSave,
+    onClick: save
+  }, "保存")), /*#__PURE__*/React.createElement("div", {
+    className: "full-content"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("textarea", {
+    className: "form-textarea",
+    style: {
+      minHeight: 160
+    },
+    placeholder: "思ったこと・気づき・アイデアなど、何でも自由に...",
+    value: content,
+    onChange: e => setContent(e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "カテゴリ（任意）"), /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 6
+    }
+  }, NEXUS_MEMORY_CATEGORIES.map(c => /*#__PURE__*/React.createElement("span", {
+    key: c.key,
+    className: `chip ${category === c.key ? 'active' : ''}`,
+    onClick: () => setCategory(category === c.key ? '' : c.key)
+  }, c.label))), /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "タグ（任意・カンマ区切り）"), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    placeholder: "例：営業, 家族",
+    value: tagsText,
+    onChange: e => setTagsText(e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "関連付け（任意・顧客）"), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    style: {
+      marginBottom: 8
+    },
+    placeholder: "顧客名で検索して関連付け...",
+    value: customerSearch,
+    onChange: e => setCustomerSearch(e.target.value)
+  }), candidates.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 8
+    }
+  }, candidates.map(c => /*#__PURE__*/React.createElement("div", {
+    key: c.id,
+    onClick: () => {
+      addEntity('customer', c.id, nexusDisplayName(c));
+      setCustomerSearch('');
+    },
+    style: {
+      padding: '8px 10px',
+      borderRadius: 8,
+      background: 'var(--bg)',
+      marginBottom: 4,
+      cursor: 'pointer',
+      fontSize: 13
+    }
+  }, "＋ ", nexusDisplayName(c)))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 6
+    }
+  }, relatedEntityIds.length === 0 ? /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text-sub)'
+    }
+  }, "関連付けなし") : relatedEntityIds.map(e => /*#__PURE__*/React.createElement("span", {
+    key: `${e.type}:${e.id}`,
+    className: "chip active",
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 4
+    }
+  }, e.label || e.id, /*#__PURE__*/React.createElement("span", {
+    onClick: ev => {
+      ev.stopPropagation();
+      removeEntity(e.type, e.id);
+    },
+    style: {
+      cursor: 'pointer',
+      fontWeight: 700
+    }
+  }, "×")))), /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      fontSize: 13,
+      marginTop: 12,
+      cursor: 'pointer'
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: isPrivate,
+    onChange: e => setIsPrivate(e.target.checked)
+  }), "🔒 プライベート（非常に個人的な内容）"))));
+}
+
+// ── Memoryタブ（一覧・検索・クイック追加）───────────────────────────
+function MemoryTab({
+  memories,
+  loading,
+  onQuickAdd,
+  onSelect,
+  onExport,
+  onImportFile,
+  onOpenInsightForm
+}) {
+  const [search, setSearch] = useState('');
+  const filtered = useMemo(() => {
+    if (!search.trim()) return memories;
+    const q = search.trim().toLowerCase();
+    return memories.filter(m => (m.content || '').toLowerCase().includes(q) || (m.category || '').toLowerCase().includes(q) || (m.tags || []).some(t => t.toLowerCase().includes(q)));
+  }, [memories, search]);
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: 'sticky',
+      top: 0,
+      background: 'var(--bg)',
+      zIndex: 5,
+      paddingBottom: 4
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "search-wrap"
+  }, /*#__PURE__*/React.createElement("span", null, "🔍"), /*#__PURE__*/React.createElement("input", {
+    className: "search-input",
+    placeholder: "本文・タグ・カテゴリで検索...",
+    value: search,
+    onChange: e => setSearch(e.target.value)
+  }), search && /*#__PURE__*/React.createElement("button", {
+    className: "search-clear",
+    onClick: () => setSearch('')
+  }, "×")), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-full",
+    style: {
+      marginBottom: 8,
+      fontSize: 16,
+      fontWeight: 800
+    },
+    onClick: onQuickAdd
+  }, "＋ 記憶する"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline",
+    style: {
+      flex: 1,
+      fontSize: 12,
+      padding: '8px 10px'
+    },
+    onClick: onExport
+  }, "📤 書き出す"), /*#__PURE__*/React.createElement("label", {
+    className: "btn btn-outline",
+    style: {
+      flex: 1,
+      fontSize: 12,
+      padding: '8px 10px',
+      textAlign: 'center',
+      cursor: 'pointer'
+    }
+  }, "📥 復元する", /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: ".json",
+    style: {
+      display: 'none'
+    },
+    onChange: onImportFile
+  }))), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: {
+      fontSize: 12,
+      padding: '8px 10px',
+      marginBottom: 8
+    },
+    onClick: () => onOpenInsightForm([])
+  }, "🧠 AI Insightを保存する"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text-sub)',
+      marginBottom: 8
+    }
+  }, filtered.length, "件")), loading ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      textAlign: 'center',
+      padding: '40px 0',
+      color: 'var(--text-sub)'
+    }
+  }, "読み込み中...") : filtered.length === 0 ? /*#__PURE__*/React.createElement(EmptyState, {
+    icon: "🧠",
+    text: memories.length === 0 ? "まだ記憶がありません。「＋ 記憶する」から気軽に残してみましょう。" : "該当する記憶が見つかりません"
+  }) : filtered.map(m => /*#__PURE__*/React.createElement(MemoryCard, {
+    key: m.id,
+    memory: m,
+    onClick: onSelect
+  })));
+}
+
 // ── App ───────────────────────────────────────────────────────
+// ── 関連する記憶リスト（Memory詳細・AI分析パック選択画面の共通部品）────
+function MemoryRelatedList({
+  memory,
+  allMemories,
+  onSelect
+}) {
+  const related = useMemo(() => nexusFindRelatedMemories(memory, allMemories, {
+    limit: 10
+  }), [memory, allMemories]);
+  if (related.length === 0) {
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        color: 'var(--text-sub)'
+      }
+    }, "関連する記憶はまだ見つかりません（同じタグ・カテゴリ・関連付け・共通する単語から自動的に候補を出します）");
+  }
+  return /*#__PURE__*/React.createElement("div", null, related.map(m => /*#__PURE__*/React.createElement(MemoryCard, {
+    key: m.id,
+    memory: m,
+    onClick: onSelect
+  })));
+}
+
+// ── 手動で記憶を関連付ける小さな検索UI（Memory詳細画面から使う）────────
+function MemoryManualLinkPicker({
+  memory,
+  allMemories,
+  onLink
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const linkedIds = new Set(memory.relatedMemoryIds || []);
+  const candidates = search.trim() ? allMemories.filter(m => m.id !== memory.id && !linkedIds.has(m.id) && (m.content || '').includes(search.trim())).slice(0, 8) : [];
+  if (!open) {
+    return /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => setOpen(true),
+      style: {
+        background: 'none',
+        border: 'none',
+        color: 'var(--accent)',
+        fontSize: 12.5,
+        padding: '6px 0',
+        cursor: 'pointer'
+      }
+    }, "＋ 関連する記憶を手動で追加");
+  }
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 6
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    style: {
+      marginBottom: 6,
+      fontSize: 13
+    },
+    placeholder: "本文で検索して関連付け...",
+    value: search,
+    onChange: e => setSearch(e.target.value),
+    autoFocus: true
+  }), candidates.map(m => /*#__PURE__*/React.createElement("div", {
+    key: m.id,
+    onClick: () => {
+      onLink(m.id);
+      setSearch('');
+      setOpen(false);
+    },
+    style: {
+      padding: '8px 10px',
+      borderRadius: 8,
+      background: 'var(--bg)',
+      marginBottom: 4,
+      cursor: 'pointer',
+      fontSize: 12.5
+    }
+  }, "＋ ", (m.content || '').slice(0, 40))));
+}
+
+// ── Memory詳細画面 ───────────────────────────────────────────────
+function MemoryDetail({
+  memory,
+  allMemories,
+  onEdit,
+  onDelete,
+  onClose,
+  onOpenAiPack,
+  onLinkMemory,
+  onSelectMemory
+}) {
+  const [confirmDel, setConfirmDel] = useState(false);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "full-screen"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "full-header"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    style: {
+      background: 'none',
+      border: 'none',
+      cursor: 'pointer',
+      fontSize: 15,
+      color: 'var(--text-sub)',
+      fontWeight: 600,
+      padding: '4px 8px'
+    }
+  }, "← 戻る"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-primary btn-sm",
+    onClick: onEdit
+  }, "編集"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-sm btn-danger",
+    style: {
+      marginLeft: 6
+    },
+    onClick: () => setConfirmDel(true)
+  }, "削除")), /*#__PURE__*/React.createElement("div", {
+    className: "full-content"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap',
+      marginBottom: 10
+    }
+  }, memory.source === 'ai-insight' && /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    style: {
+      background: '#EDE9FE',
+      color: '#7C3AED'
+    }
+  }, "🤖 AI Insight"), memory.category && /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    style: {
+      background: 'var(--accent-light)',
+      color: 'var(--accent)'
+    }
+  }, nexusMemoryCategoryLabel(memory.category)), memory.isPrivate && /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    style: {
+      background: '#FEF2F2',
+      color: 'var(--danger)'
+    }
+  }, "🔒 PRIVATE")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 15,
+      lineHeight: 1.8,
+      whiteSpace: 'pre-wrap',
+      wordBreak: 'break-word',
+      marginBottom: 10
+    }
+  }, memory.content), (memory.tags || []).length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 5,
+      marginBottom: 10
+    }
+  }, memory.tags.map(t => /*#__PURE__*/React.createElement("span", {
+    key: t,
+    className: "chip",
+    style: {
+      fontSize: 11,
+      padding: '3px 9px',
+      minHeight: 'auto',
+      cursor: 'default'
+    }
+  }, "#", t))), (memory.relatedEntityIds || []).length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 5,
+      marginBottom: 10
+    }
+  }, memory.relatedEntityIds.map(e => /*#__PURE__*/React.createElement("span", {
+    key: `${e.type}:${e.id}`,
+    className: "chip active",
+    style: {
+      cursor: 'default'
+    }
+  }, "🔗 ", e.label || e.id))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)'
+    }
+  }, "作成：", nexusFormatMemoryDateTime(memory.createdAt), memory.updatedAt && memory.updatedAt !== memory.createdAt ? ` （更新：${nexusFormatMemoryDateTime(memory.updatedAt)}）` : '')), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-full",
+    style: {
+      marginBottom: 14,
+      fontSize: 15,
+      fontWeight: 800
+    },
+    onClick: () => onOpenAiPack([memory.id])
+  }, "🤖 AI分析パックを作る"), /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "関連する記憶"), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement(MemoryRelatedList, {
+    memory: memory,
+    allMemories: allMemories,
+    onSelect: onSelectMemory
+  }), /*#__PURE__*/React.createElement(MemoryManualLinkPicker, {
+    memory: memory,
+    allMemories: allMemories,
+    onLink: onLinkMemory
+  }))), confirmDel && /*#__PURE__*/React.createElement("div", {
+    className: "overlay",
+    style: {
+      zIndex: 60
+    },
+    onClick: () => setConfirmDel(false)
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "drawer",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "drawer-handle"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "drawer-title",
+    style: {
+      color: 'var(--danger)'
+    }
+  }, "削除しますか？"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 14,
+      color: 'var(--text-sub)',
+      marginBottom: 20
+    }
+  }, "この記憶を削除します。元に戻せません。"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-outline btn-full",
+    onClick: () => setConfirmDel(false)
+  }, "キャンセル"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-danger btn-full",
+    onClick: () => {
+      onDelete(memory.id);
+      onClose();
+    }
+  }, "削除する")))));
+}
+
+// ── AI分析パック作成画面 ─────────────────────────────────────────
+// Memoryを選択→関連Memoryを追加→分析目的を選ぶ→匿名化→匿名化プレビューを必ず確認→
+// AI分析用プロンプト生成→コピー、という一連の流れを1つの画面（step切替）で行う。
+// NEXUSそのものにAIは組み込まず、外部AIへの自動送信も一切行わない。ユーザーが
+// 「内容を確認しました」にチェックするまで次に進めない。
+function NexusAiPackScreen({
+  initialMemoryIds,
+  memories,
+  customers,
+  pseudonymMap,
+  onSavePseudonymMap,
+  onClose,
+  onOpenInsightForm
+}) {
+  const [step, setStep] = useState('select');
+  const [selectedIds, setSelectedIds] = useState(initialMemoryIds || []);
+  const [purposeKey, setPurposeKey] = useState('free');
+  const [addSearch, setAddSearch] = useState('');
+  const [confirmedRisk, setConfirmedRisk] = useState(false);
+  const [anonymizedResults, setAnonymizedResults] = useState([]);
+  const [toast, setToast] = useState('');
+  const showToast = msg => {
+    setToast(msg);
+    setTimeout(() => setToast(''), 3000);
+  };
+  const selectedMemories = selectedIds.map(id => memories.find(m => m.id === id)).filter(Boolean);
+  const primaryMemory = selectedMemories[0] || null;
+  const suggestions = useMemo(() => primaryMemory ? nexusFindRelatedMemories(primaryMemory, memories, {
+    limit: 10
+  }).filter(m => !selectedIds.includes(m.id)) : [], [primaryMemory, memories, selectedIds]);
+  const addCandidates = addSearch.trim() ? memories.filter(m => !selectedIds.includes(m.id) && (m.content || '').includes(addSearch.trim())).slice(0, 8) : [];
+  const hasPrivate = selectedMemories.some(m => m.isPrivate);
+  const toggleRemove = id => setSelectedIds(prev => prev.filter(x => x !== id));
+  const addId = id => setSelectedIds(prev => prev.includes(id) ? prev : [...prev, id]);
+  const runAnonymize = () => {
+    let map = pseudonymMap;
+    const results = selectedMemories.map(m => {
+      const r = nexusMemoryAnonymize(m.content, {
+        customers,
+        pseudonymMap: map
+      });
+      map = r.map;
+      return {
+        memory: m,
+        anonymizedContent: r.result,
+        matches: r.matches
+      };
+    });
+    onSavePseudonymMap(map);
+    setAnonymizedResults(results);
+    setConfirmedRisk(false);
+    setStep('preview');
+  };
+  const promptText = useMemo(() => {
+    if (step !== 'prompt') return '';
+    const anonMemories = anonymizedResults.map(r => ({
+      createdAt: r.memory.createdAt,
+      category: r.memory.category,
+      content: r.anonymizedContent
+    }));
+    return nexusBuildAiPackPrompt(anonMemories, purposeKey);
+  }, [step, anonymizedResults, purposeKey]);
+  const doCopy = () => {
+    nexusCopyToClipboard(promptText).then(ok => {
+      showToast(ok ? '📋 コピーしました！ChatGPTやClaudeに貼り付けてください' : '⚠️ コピーに失敗しました');
+    });
+  };
+  const stepTitle = {
+    select: '対象を選ぶ',
+    preview: '匿名化プレビュー',
+    prompt: 'コピーする'
+  }[step];
+  return /*#__PURE__*/React.createElement("div", {
+    className: "full-screen"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "full-header"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    style: {
+      background: 'none',
+      border: 'none',
+      cursor: 'pointer',
+      fontSize: 15,
+      color: 'var(--text-sub)',
+      fontWeight: 600,
+      padding: '4px 8px'
+    }
+  }, "← 閉じる"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      fontWeight: 700,
+      fontSize: 15
+    }
+  }, "🤖 AI分析パック：", stepTitle)), /*#__PURE__*/React.createElement("div", {
+    className: "full-content"
+  }, step === 'select' && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "今回AIへ渡す記録（", selectedMemories.length, "件）"), /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginBottom: 10
+    }
+  }, selectedMemories.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--text-sub)'
+    }
+  }, "まだ記録が選ばれていません。下から追加してください。") : selectedMemories.map(m => /*#__PURE__*/React.createElement("div", {
+    key: m.id,
+    style: {
+      display: 'flex',
+      alignItems: 'flex-start',
+      gap: 8,
+      padding: '8px 0',
+      borderBottom: '1px solid var(--border)'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      fontSize: 13
+    }
+  }, m.isPrivate && /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--danger)',
+      fontWeight: 700,
+      marginRight: 4
+    }
+  }, "🔒"), (m.content || '').slice(0, 60)), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => toggleRemove(m.id),
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--danger)',
+      fontSize: 16,
+      cursor: 'pointer',
+      flexShrink: 0
+    }
+  }, "×"))), hasPrivate && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10,
+      background: '#FEF2F2',
+      border: '1px solid #FECACA',
+      borderRadius: 10,
+      padding: '10px 12px',
+      fontSize: 12.5,
+      color: 'var(--danger)',
+      fontWeight: 600
+    }
+  }, "🔒 PRIVATEの記録が含まれています。匿名化後の内容を確認してからコピーしてください。")), suggestions.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "関連する記憶（候補）"), /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginBottom: 10
+    }
+  }, suggestions.map(m => /*#__PURE__*/React.createElement("div", {
+    key: m.id,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      padding: '8px 0',
+      borderBottom: '1px solid var(--border)'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      fontSize: 13
+    }
+  }, (m.content || '').slice(0, 60)), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-sm btn-outline",
+    style: {
+      flexShrink: 0
+    },
+    onClick: () => addId(m.id)
+  }, "＋ 追加"))))), /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "記憶を検索して追加"), /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    style: {
+      marginBottom: 8
+    },
+    placeholder: "本文で検索...",
+    value: addSearch,
+    onChange: e => setAddSearch(e.target.value)
+  }), addCandidates.map(m => /*#__PURE__*/React.createElement("div", {
+    key: m.id,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      padding: '6px 0'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      fontSize: 13
+    }
+  }, (m.content || '').slice(0, 60)), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-sm btn-outline",
+    onClick: () => {
+      addId(m.id);
+      setAddSearch('');
+    }
+  }, "＋ 追加")))), /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "分析目的"), /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 6,
+      marginBottom: 14
+    }
+  }, NEXUS_AI_PACK_PURPOSES.map(p => /*#__PURE__*/React.createElement("span", {
+    key: p.key,
+    className: `chip ${purposeKey === p.key ? 'active' : ''}`,
+    onClick: () => setPurposeKey(p.key)
+  }, p.label))), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-full",
+    disabled: selectedMemories.length === 0,
+    onClick: runAnonymize
+  }, "次へ（匿名化する）")), step === 'preview' && /*#__PURE__*/React.createElement(React.Fragment, null, hasPrivate && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 10,
+      background: '#FEF2F2',
+      border: '1px solid #FECACA',
+      borderRadius: 10,
+      padding: '10px 12px',
+      fontSize: 12.5,
+      color: 'var(--danger)',
+      fontWeight: 600
+    }
+  }, "🔒 PRIVATEの記録が含まれています。内容をよく確認してください。"), anonymizedResults.map(r => /*#__PURE__*/React.createElement("div", {
+    key: r.memory.id,
+    className: "card",
+    style: {
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-label",
+    style: {
+      marginBottom: 4
+    }
+  }, "元データ"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--text-sub)',
+      whiteSpace: 'pre-wrap',
+      wordBreak: 'break-word',
+      marginBottom: 10,
+      paddingBottom: 10,
+      borderBottom: '1px dashed var(--border)'
+    }
+  }, r.memory.content), /*#__PURE__*/React.createElement("div", {
+    className: "info-label",
+    style: {
+      marginBottom: 4,
+      color: 'var(--accent)'
+    }
+  }, "匿名化後"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13.5,
+      whiteSpace: 'pre-wrap',
+      wordBreak: 'break-word'
+    }
+  }, r.anonymizedContent), r.matches.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8,
+      fontSize: 11,
+      color: 'var(--text-sub)'
+    }
+  }, "匿名化した項目：", r.matches.map(m => m.type).join('、')))), /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginBottom: 10,
+      background: '#FFFBEB',
+      border: '1px solid #FDE68A'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 700,
+      color: '#B45309',
+      marginBottom: 6
+    }
+  }, "⚠️ 自動匿名化は100％安全ではありません"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: '#92400E',
+      lineHeight: 1.7,
+      marginBottom: 8
+    }
+  }, "氏名・連絡先等は消えていても、以下のような情報が残っていると本人特定につながる可能性があります。内容をよく確認してください。"), /*#__PURE__*/React.createElement("ul", {
+    style: {
+      fontSize: 12,
+      color: '#92400E',
+      lineHeight: 1.9,
+      paddingLeft: 18,
+      marginBottom: 10
+    }
+  }, ['具体的な勤務先・肩書き', '珍しい職業・役職', '細かすぎる住所・地名', '特殊な家族構成', '特徴的な出来事・エピソード', '病歴・健康状態', '具体的な資産額と勤務先などの組み合わせ'].map(t => /*#__PURE__*/React.createElement("li", {
+    key: t
+  }, t))), /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'flex-start',
+      gap: 8,
+      fontSize: 13,
+      fontWeight: 700,
+      color: '#92400E',
+      cursor: 'pointer'
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: confirmedRisk,
+    onChange: e => setConfirmedRisk(e.target.checked),
+    style: {
+      marginTop: 3
+    }
+  }), "内容を確認しました。この内容でAI分析用プロンプトを作成します。")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    onClick: () => setStep('select')
+  }, "戻る"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-full",
+    disabled: !confirmedRisk,
+    onClick: () => setStep('prompt')
+  }, "次へ（プロンプトを作成）"))), step === 'prompt' && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text-sub)',
+      marginBottom: 8
+    }
+  }, "分析目的：", NEXUS_AI_PACK_PURPOSES.find(p => p.key === purposeKey) && NEXUS_AI_PACK_PURPOSES.find(p => p.key === purposeKey).label), /*#__PURE__*/React.createElement("pre", {
+    style: {
+      whiteSpace: 'pre-wrap',
+      wordBreak: 'break-word',
+      fontFamily: 'inherit',
+      fontSize: 12.5,
+      lineHeight: 1.7,
+      background: 'var(--bg)',
+      borderRadius: 10,
+      padding: 12,
+      maxHeight: 360,
+      overflowY: 'auto'
+    }
+  }, promptText)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--text-sub)',
+      marginBottom: 12,
+      lineHeight: 1.6
+    }
+  }, "🔒 仮名対応表（PERSON_001＝実名 等）はこの端末内だけに保存され、コピーされる文章には含まれません。"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-full",
+    style: {
+      marginBottom: 10,
+      fontSize: 15,
+      fontWeight: 800
+    },
+    onClick: doCopy
+  }, "📋 コピー"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: {
+      marginBottom: 10
+    },
+    onClick: () => onOpenInsightForm(selectedIds)
+  }, "🧠 AI Insightを保存する（分析結果が届いたら）"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    onClick: () => setStep('preview')
+  }, "戻る"))), toast && /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: 'fixed',
+      bottom: 'calc(var(--safe-b) + 16px)',
+      left: '50%',
+      transform: 'translateX(-50%)',
+      background: '#22C55E',
+      color: '#fff',
+      borderRadius: 12,
+      padding: '12px 20px',
+      fontSize: 14,
+      fontWeight: 600,
+      boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
+      zIndex: 100,
+      whiteSpace: 'nowrap'
+    }
+  }, toast));
+}
+
+// ── AI Insight保存フォーム ───────────────────────────────────────
+// ChatGPT／Claude等から返ってきた分析結果を貼り付けて保存する。通常のMemoryとは
+// source:'ai-insight'で区別し、どのMemoryを元にした分析かがrelatedMemoryIdsで
+// 分かるようにする（元の記憶→AIの分析→その後の行動→再度AI分析、という流れを
+// 蓄積できるようにするため）。
+function NexusAiInsightForm({
+  relatedMemoryIds,
+  onSave,
+  onClose
+}) {
+  const [content, setContent] = useState('');
+  const canSave = content.trim().length > 0;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "full-screen"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "full-header"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    style: {
+      background: 'none',
+      border: 'none',
+      cursor: 'pointer',
+      fontSize: 15,
+      color: 'var(--text-sub)',
+      fontWeight: 600,
+      padding: '4px 8px'
+    }
+  }, "← 戻る"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      fontWeight: 700,
+      fontSize: 15
+    }
+  }, "🧠 AI Insightを保存"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-primary btn-sm",
+    disabled: !canSave,
+    onClick: () => canSave && onSave({
+      content: content.trim(),
+      source: 'ai-insight',
+      relatedMemoryIds: relatedMemoryIds || [],
+      category: '',
+      tags: [],
+      isPrivate: false
+    })
+  }, "保存")), /*#__PURE__*/React.createElement("div", {
+    className: "full-content"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--text-sub)',
+      marginBottom: 10,
+      lineHeight: 1.6
+    }
+  }, "ChatGPTやClaudeから返ってきた分析結果を、そのまま貼り付けて保存できます。", (relatedMemoryIds || []).length > 0 && ` 今回の分析に使った記録${relatedMemoryIds.length}件と自動的に関連付けられます。`), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("textarea", {
+    className: "form-textarea",
+    style: {
+      minHeight: 260
+    },
+    autoFocus: true,
+    placeholder: "AIからの分析結果をここに貼り付け...",
+    value: content,
+    onChange: e => setContent(e.target.value)
+  }))));
+}
+
 function App() {
   // 顧客データ（ins.htmlと同じキーで引継ぎ）
   const [customers, setCustomers] = useLS('customers_v1', []);
@@ -36059,6 +37814,79 @@ function App() {
   const [selectedMemo, setSelectedMemo] = useState(null);
   const [editingMemo, setEditingMemo] = useState(null);
   const [showMemoForm, setShowMemoForm] = useState(false);
+  // ── Second Brain / Memory機能（既存のuseLS／localStorageとは独立したIndexedDBストア）──
+  const memoryStore = useMemoryStore();
+  const [nexusPseudonymMap, setNexusPseudonymMapState] = useState(null);
+  React.useEffect(() => {
+    MemoryService.getPseudonymMap().then(setNexusPseudonymMapState).catch(() => setNexusPseudonymMapState(nexusEmptyPseudonymMap()));
+  }, []);
+  const setNexusPseudonymMap = map => {
+    setNexusPseudonymMapState(map);
+    MemoryService.savePseudonymMap(map).catch(() => {});
+  };
+  const [selectedMemory, setSelectedMemory] = useState(null);
+  const [editingMemory, setEditingMemory] = useState(null);
+  const [showMemoryForm, setShowMemoryForm] = useState(false);
+  const [showMemoryQuickAdd, setShowMemoryQuickAdd] = useState(false);
+  const [aiPackMemoryIds, setAiPackMemoryIds] = useState(null);
+  const [insightFormRelatedIds, setInsightFormRelatedIds] = useState(null);
+  const handleMemoryQuickAdd = partial => memoryStore.create(partial).then(() => setShowMemoryQuickAdd(false));
+  const handleMemorySave = data => {
+    const p = editingMemory ? memoryStore.update(editingMemory.id, data) : memoryStore.create(data);
+    p.then(m => {
+      setShowMemoryForm(false);
+      setEditingMemory(null);
+      setSelectedMemory(m);
+    });
+  };
+  const handleMemoryDelete = id => {
+    memoryStore.remove(id);
+    setSelectedMemory(null);
+  };
+  const handleMemoryLink = targetId => {
+    if (!selectedMemory) return;
+    const next = Array.from(new Set([...(selectedMemory.relatedMemoryIds || []), targetId]));
+    memoryStore.update(selectedMemory.id, {
+      relatedMemoryIds: next
+    }).then(m => setSelectedMemory(m));
+  };
+  const handleInsightSave = data => memoryStore.create(data).then(() => {
+    setInsightFormRelatedIds(null);
+    setAiPackMemoryIds(null);
+  });
+  const handleMemoryExport = () => {
+    MemoryService.exportBackup().then(data => {
+      const blob = new Blob([JSON.stringify(data, null, 2)], {
+        type: 'application/json'
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `medilife_nexus_memoryバックアップ_${todayStr()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+  };
+  const handleMemoryImportFile = e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const data = JSON.parse(ev.target.result);
+        if (!data || !Array.isArray(data.memories)) {
+          alert('Memoryバックアップの形式ではありません');
+          return;
+        }
+        if (!confirm(`Memory ${data.memories.length}件を復元します（同じIDの記憶は上書きされます）。よろしいですか？`)) return;
+        MemoryService.importBackup(data, 'merge').then(() => memoryStore.reload()).then(() => alert('✅ Memoryを復元しました'));
+      } catch (err) {
+        alert('復元に失敗しました: ' + err.message);
+      }
+    };
+    reader.readAsText(file, 'UTF-8');
+    e.target.value = '';
+  };
   const saveCustomer = c => setCustomers(prev => {
     const idx = prev.findIndex(x => x.id === c.id);
     return idx >= 0 ? prev.map((x, i) => i === idx ? c : x) : [...prev, c];
@@ -36151,8 +37979,12 @@ function App() {
     key: 'nexus',
     icon: '🕸️',
     label: '人脈'
+  }, {
+    key: 'memory',
+    icon: '🧠',
+    label: '記憶'
   }];
-  const anyOverlay = selectedCustomer || showCustomerForm || selectedMemo || showMemoForm;
+  const anyOverlay = selectedCustomer || showCustomerForm || selectedMemo || showMemoForm || selectedMemory || showMemoryForm || aiPackMemoryIds || insightFormRelatedIds;
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "header"
   }, /*#__PURE__*/React.createElement("div", {
@@ -36400,6 +38232,14 @@ function App() {
       if (c) setSelectedCustomer(c);
     },
     corpPlanningTargetId: corpPlanningTargetId
+  }), tab === 'memory' && /*#__PURE__*/React.createElement(MemoryTab, {
+    memories: memoryStore.memories,
+    loading: memoryStore.loading,
+    onQuickAdd: () => setShowMemoryQuickAdd(true),
+    onSelect: setSelectedMemory,
+    onExport: handleMemoryExport,
+    onImportFile: handleMemoryImportFile,
+    onOpenInsightForm: ids => setInsightFormRelatedIds(ids)
   })), /*#__PURE__*/React.createElement("nav", {
     className: "bottom-nav"
   }, tabs.map(t => /*#__PURE__*/React.createElement("button", {
@@ -36509,6 +38349,41 @@ function App() {
       setShowMemoForm(false);
       setEditingMemo(null);
     }
+  }), selectedMemory && !showMemoryForm && /*#__PURE__*/React.createElement(MemoryDetail, {
+    memory: memoryStore.memories.find(x => x.id === selectedMemory.id) || selectedMemory,
+    allMemories: memoryStore.memories,
+    onEdit: () => {
+      setEditingMemory(selectedMemory);
+      setShowMemoryForm(true);
+    },
+    onDelete: handleMemoryDelete,
+    onClose: () => setSelectedMemory(null),
+    onOpenAiPack: ids => setAiPackMemoryIds(ids),
+    onLinkMemory: handleMemoryLink,
+    onSelectMemory: m => setSelectedMemory(m)
+  }), showMemoryForm && /*#__PURE__*/React.createElement(MemoryForm, {
+    editing: editingMemory,
+    customers: customers,
+    onSave: handleMemorySave,
+    onClose: () => {
+      setShowMemoryForm(false);
+      setEditingMemory(null);
+    }
+  }), showMemoryQuickAdd && /*#__PURE__*/React.createElement(MemoryQuickAddSheet, {
+    onSave: handleMemoryQuickAdd,
+    onClose: () => setShowMemoryQuickAdd(false)
+  }), aiPackMemoryIds && /*#__PURE__*/React.createElement(NexusAiPackScreen, {
+    initialMemoryIds: aiPackMemoryIds,
+    memories: memoryStore.memories,
+    customers: customers,
+    pseudonymMap: nexusPseudonymMap || nexusEmptyPseudonymMap(),
+    onSavePseudonymMap: setNexusPseudonymMap,
+    onClose: () => setAiPackMemoryIds(null),
+    onOpenInsightForm: ids => setInsightFormRelatedIds(ids)
+  }), insightFormRelatedIds && /*#__PURE__*/React.createElement(NexusAiInsightForm, {
+    relatedMemoryIds: insightFormRelatedIds,
+    onSave: handleInsightSave,
+    onClose: () => setInsightFormRelatedIds(null)
   }));
 }
 ReactDOM.createRoot(document.getElementById('root')).render(/*#__PURE__*/React.createElement(App, null));</script>
