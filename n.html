@@ -36918,11 +36918,21 @@ function NexusTab({
 // UI側の変更を最小限にするため）。
 
 // ── IndexedDB 低レベルアクセス（このブロックの外からは直接呼ばない）──
+// ロールバック安全対策：画像添付機能（Second Brain Phase）で、この同じDBの
+// バージョンが2へ上がる可能性があるため、画像機能を含まないこのコードでも
+// バージョンを2で開くようにしている（1のまま固定していると、既に2へ
+// upgrade済みの端末でindexedDB.open()がVersionErrorとなり、Memory一覧が
+// 開けなくなる／既存Memoryが見えなくなるため）。attachmentsストアは
+// このコードでは使用しないが、存在しない場合のみ作成しておくことで、
+// 将来また画像機能入りのコードへ戻した際に、追加のDB migrationなしで
+// そのまま使える状態を維持する。既存のmemories／pseudonymMapストア、
+// および万一既に存在するattachmentsストアの中身は一切変更・削除しない。
 const NEXUS_MEMORY_DB_NAME = 'nexus_second_brain_db';
-const NEXUS_MEMORY_DB_VERSION = 1;
+const NEXUS_MEMORY_DB_VERSION = 2;
 const NEXUS_MEMORY_STORE = 'memories';
 const NEXUS_PSEUDONYM_STORE = 'pseudonymMap';
 const NEXUS_PSEUDONYM_KEY = 'main';
+const NEXUS_ATTACHMENT_STORE = 'attachments';
 let nexusMemoryDBPromise = null;
 function nexusMemoryOpenDB() {
   return new Promise((resolve, reject) => {
@@ -36947,6 +36957,22 @@ function nexusMemoryOpenDB() {
       if (!db.objectStoreNames.contains(NEXUS_PSEUDONYM_STORE)) {
         db.createObjectStore(NEXUS_PSEUDONYM_STORE, {
           keyPath: 'key'
+        });
+      }
+      // このコード自体は画像添付機能を持たないが、DBバージョンの整合性のためだけに
+      // ストアの形だけ用意しておく（画像機能入りコードと同じ構造）。
+      if (!db.objectStoreNames.contains(NEXUS_ATTACHMENT_STORE)) {
+        const attachStore = db.createObjectStore(NEXUS_ATTACHMENT_STORE, {
+          keyPath: 'id'
+        });
+        attachStore.createIndex('memoryId', 'memoryId', {
+          unique: false
+        });
+        attachStore.createIndex('createdAt', 'createdAt', {
+          unique: false
+        });
+        attachStore.createIndex('sha256', 'sha256', {
+          unique: false
         });
       }
     };
