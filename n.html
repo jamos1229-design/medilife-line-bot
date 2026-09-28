@@ -39767,8 +39767,17 @@ function NexusAiPackScreen({
     }));
     return nexusBuildAiPackPrompt(anonMemories, purposeKey);
   }, [step, anonymizedResults, purposeKey]);
+  // コピー前の最終確認として、匿名化直後の文章（promptText）をtextareaへ表示し、ユーザーが
+  // 直接編集できるようにする。編集内容はこの画面内だけの一時的なものであり、Memory本文・
+  // category・tags・relatedMemoryIds・relatedEntityIdsなどNEXUS内部のデータには一切反映しない
+  // （コピー操作でクリップボードへ渡すだけ）。promptTextが新しく計算されるたび
+  // （＝このステップに入った直後）に編集内容を初期化する。
+  const [editedPromptText, setEditedPromptText] = useState('');
+  React.useEffect(() => {
+    if (step === 'prompt') setEditedPromptText(promptText);
+  }, [promptText, step]);
   const doCopy = () => {
-    nexusCopyToClipboard(promptText).then(ok => {
+    nexusCopyToClipboard(editedPromptText).then(ok => {
       showToast(ok ? '📋 コピーしました！ChatGPTやClaudeに貼り付けてください' : '⚠️ コピーに失敗しました');
     });
   };
@@ -40059,8 +40068,30 @@ function NexusAiPackScreen({
       color: 'var(--text-sub)',
       marginBottom: 8
     }
-  }, "分析目的：", NEXUS_AI_PACK_PURPOSES.find(p => p.key === purposeKey) && NEXUS_AI_PACK_PURPOSES.find(p => p.key === purposeKey).label), /*#__PURE__*/React.createElement("pre", {
+  }, "分析目的：", NEXUS_AI_PACK_PURPOSES.find(p => p.key === purposeKey) && NEXUS_AI_PACK_PURPOSES.find(p => p.key === purposeKey).label), hasPrivate && /*#__PURE__*/React.createElement("div", {
     style: {
+      marginBottom: 8,
+      background: '#FEF2F2',
+      border: '1px solid #FECACA',
+      borderRadius: 10,
+      padding: '10px 12px',
+      fontSize: 12.5,
+      color: 'var(--danger)',
+      fontWeight: 600
+    }
+  }, "🔒 PRIVATEの記録が含まれています。匿名化後の内容を確認し、必要であれば削除・修正してからコピーしてください。"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      marginBottom: 6
+    }
+  }, "コピーする前に内容を確認し、必要であれば直接編集できます（元のMemoryは変更されません）。"), /*#__PURE__*/React.createElement("textarea", {
+    className: "form-textarea",
+    value: editedPromptText,
+    onChange: e => setEditedPromptText(e.target.value),
+    style: {
+      width: '100%',
+      boxSizing: 'border-box',
       whiteSpace: 'pre-wrap',
       wordBreak: 'break-word',
       fontFamily: 'inherit',
@@ -40069,10 +40100,22 @@ function NexusAiPackScreen({
       background: 'var(--bg)',
       borderRadius: 10,
       padding: 12,
-      maxHeight: 360,
-      overflowY: 'auto'
+      minHeight: 280,
+      maxHeight: 420,
+      border: '1px solid var(--border)'
     }
-  }, promptText)), /*#__PURE__*/React.createElement("div", {
+  }), editedPromptText !== promptText && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setEditedPromptText(promptText),
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--accent)',
+      fontSize: 12,
+      padding: '6px 0',
+      cursor: 'pointer'
+    }
+  }, "↺ 匿名化直後の文章に戻す")), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11.5,
       color: 'var(--text-sub)',
