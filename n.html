@@ -37220,6 +37220,53 @@ function nexusMemoryDeleteAttachmentTx(memoryId, attachmentId) {
     tx.onabort = () => reject(tx.error);
   }));
 }
+// バックアップ復元の安全対策：Memory.attachmentIdsのうち、attachmentsストアに
+// 実在しないIDだけを取り除く（通常Memoryバックアップには画像本体が含まれないため、
+// 別端末や画像を持たない状態へ復元した場合に「参照だけ残って画像が無い」状態が
+// 発生しうる）。
+// 絶対に行わないこと：
+//   ・Memory本体の削除／本文・category・tags等の書き換え
+//   ・attachments store側の削除（孤立画像はここでは一切削除しない。将来のクリーンアップ機能に委ねる）
+//   ・attachments storeの初期化
+// あくまで「存在しない参照IDだけを安全に除外する」処理に限定する。
+function nexusReconcileMemoryAttachmentIds() {
+  return nexusMemoryGetDB().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction([NEXUS_MEMORY_STORE, NEXUS_ATTACHMENT_STORE], 'readwrite');
+    const memoryStore = tx.objectStore(NEXUS_MEMORY_STORE);
+    const attachStore = tx.objectStore(NEXUS_ATTACHMENT_STORE);
+    let existingIds = null;
+    let allMemories = null;
+    let fixedCount = 0;
+    const tryFinish = () => {
+      if (existingIds === null || allMemories === null) return;
+      allMemories.forEach(m => {
+        const ids = m.attachmentIds || [];
+        if (ids.length === 0) return;
+        const filtered = ids.filter(id => existingIds.has(id));
+        if (filtered.length !== ids.length) {
+          fixedCount++;
+          memoryStore.put({
+            ...m,
+            attachmentIds: filtered
+          });
+        }
+      });
+    };
+    const keysReq = attachStore.getAllKeys();
+    keysReq.onsuccess = () => {
+      existingIds = new Set(keysReq.result || []);
+      tryFinish();
+    };
+    const memReq = memoryStore.getAll();
+    memReq.onsuccess = () => {
+      allMemories = memReq.result || [];
+      tryFinish();
+    };
+    tx.oncomplete = () => resolve(fixedCount);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  }));
+}
 
 // ── MemoryService（UIが実際に呼ぶのはここだけ）──────────────────
 // 新規Memoryの初期値・並び替え・更新時刻の付与など、業務ロジックをここに集約する。
@@ -37309,7 +37356,10 @@ const MemoryService = {
   importBackup(data, mode) {
     if (!data || !Array.isArray(data.memories)) return Promise.reject(new Error('Memoryバックアップの形式ではありません'));
     const run = mode === 'replace' ? nexusMemoryClearAllRaw() : Promise.resolve();
-    return run.then(() => nexusMemoryBulkPutRaw(data.memories.map(nexusMemoryWithDefaults))).then(() => data.memories.length);
+    // 通常Memoryバックアップには画像本体が含まれないため、復元後に
+    // attachmentIdsのうちattachmentsストアに実在しないIDだけを安全に除外する
+    // （Memory本体・本文・attachments storeの画像自体には一切手を加えない）。
+    return run.then(() => nexusMemoryBulkPutRaw(data.memories.map(nexusMemoryWithDefaults))).then(() => nexusReconcileMemoryAttachmentIds()).then(() => data.memories.length);
   },
   getPseudonymMap() {
     return nexusPseudonymMapGetRaw();
@@ -37658,12 +37708,16 @@ async function nexusParseFullBackupFile(file) {
 // 同一IDは上書き）と同じ方針にそろえる。IDはMemory・attachmentともに維持する。
 async function nexusRestoreFullBackup(file) {
   const parsed = await nexusParseFullBackupFile(file);
+  // 画像を先にattachmentsストアへ書き込んでから、Memory本体を復元する（この順序が重要）。
+  // MemoryService.importBackupは内部でnexusReconcileMemoryAttachmentIdsを実行し、
+  // attachmentsストアに実在しないIDだけを取り除く安全対策を行うため、画像が先に
+  // 揃っていないと今回復元する画像への参照まで誤って除外されてしまう。
+  if (parsed.attachmentRecords.length) await MemoryService.bulkPutAttachments(parsed.attachmentRecords);
   await MemoryService.importBackup({
     __nexusMemoryBackup: true,
     version: 1,
     memories: parsed.memories
   }, 'merge');
-  if (parsed.attachmentRecords.length) await MemoryService.bulkPutAttachments(parsed.attachmentRecords);
   return {
     memoryCount: parsed.memories.length,
     attachmentCount: parsed.attachmentRecords.length
@@ -39948,6 +40002,13 @@ function MemoryTab({
     },
     onChange: onImportFile
   }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: 'var(--text-sub)',
+      marginTop: 4,
+      lineHeight: 1.5
+    }
+  }, "通常バックアップには画像本体は含まれません。画像も保存する場合は「画像込み完全バックアップ」をご利用ください。"), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       gap: 8,
