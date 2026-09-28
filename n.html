@@ -36638,11 +36638,13 @@ function nexusPseudonymMapPutRaw(map) {
 // 将来IndexedDB以外のストレージへ差し替える場合も、この関数群のシグネチャを保てば
 // UI側（useMemoryStore以降）は変更不要にする。
 const MemoryService = {
+  // 旧バックアップ・自動整理機能追加前のMemoryにも安全な初期値を補ってから返す
+  // （nexusMemoryWithDefaults参照。読み取り時に補うだけでIndexedDBへの書き戻しはしない）。
   getAll() {
-    return nexusMemoryGetAllRaw().then(list => list.slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')));
+    return nexusMemoryGetAllRaw().then(list => list.map(nexusMemoryWithDefaults).sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')));
   },
   getById(id) {
-    return nexusMemoryGetOneRaw(id);
+    return nexusMemoryGetOneRaw(id).then(m => m ? nexusMemoryWithDefaults(m) : m);
   },
   create(partial) {
     const now = new Date().toISOString();
@@ -36659,7 +36661,18 @@ const MemoryService = {
       source: p.source || 'manual',
       isPrivate: !!p.isPrivate,
       analysisHistoryIds: p.analysisHistoryIds || [],
-      parentMemoryId: p.parentMemoryId || null
+      parentMemoryId: p.parentMemoryId || null,
+      // 自動整理用フィールド（候補のみ。ユーザーが確定した上記のcategory/tags/isPrivate/
+      // relatedMemoryIdsを自動で上書きすることはない）。
+      suggestedCategory: p.suggestedCategory || '',
+      suggestedTags: p.suggestedTags || [],
+      suggestedPrivate: !!p.suggestedPrivate,
+      privacyRiskFlags: p.privacyRiskFlags || [],
+      relatedCandidates: p.relatedCandidates || [],
+      autoProcessedAt: p.autoProcessedAt || null,
+      manualCategoryConfirmed: !!p.manualCategoryConfirmed,
+      manualTagsConfirmed: !!p.manualTagsConfirmed,
+      manualPrivateConfirmed: !!p.manualPrivateConfirmed
     };
     return nexusMemoryPutRaw(memory).then(() => memory);
   },
@@ -36667,7 +36680,7 @@ const MemoryService = {
     return nexusMemoryGetOneRaw(id).then(existing => {
       if (!existing) throw new Error('指定されたMemoryが見つかりません');
       const updated = {
-        ...existing,
+        ...nexusMemoryWithDefaults(existing),
         ...patch,
         id,
         updatedAt: new Date().toISOString()
@@ -36675,21 +36688,37 @@ const MemoryService = {
       return nexusMemoryPutRaw(updated).then(() => updated);
     });
   },
+  // ローカル解析（自動整理）専用の更新。suggested系・candidate系のフィールドだけを
+  // 更新し、updatedAtは変更しない（ユーザー自身の編集ではないため、更新日時を動かさない）。
+  updateSuggestions(id, patch) {
+    return nexusMemoryGetOneRaw(id).then(existing => {
+      if (!existing) throw new Error('指定されたMemoryが見つかりません');
+      const updated = {
+        ...nexusMemoryWithDefaults(existing),
+        ...patch,
+        id
+      };
+      return nexusMemoryPutRaw(updated).then(() => updated);
+    });
+  },
   remove(id) {
     return nexusMemoryDeleteRaw(id);
   },
+  // バックアップ形式（version 1）は変更しない。旧バージョンのバックアップに自動整理用
+  // フィールドが無くても復元時にエラーにならないよう、書き出し・復元のどちらでも
+  // nexusMemoryWithDefaultsで安全な初期値を補ってから保存する。
   exportBackup() {
     return nexusMemoryGetAllRaw().then(list => ({
       __nexusMemoryBackup: true,
       version: 1,
       exportedAt: new Date().toISOString(),
-      memories: list
+      memories: list.map(nexusMemoryWithDefaults)
     }));
   },
   importBackup(data, mode) {
     if (!data || !Array.isArray(data.memories)) return Promise.reject(new Error('Memoryバックアップの形式ではありません'));
     const run = mode === 'replace' ? nexusMemoryClearAllRaw() : Promise.resolve();
-    return run.then(() => nexusMemoryBulkPutRaw(data.memories)).then(() => data.memories.length);
+    return run.then(() => nexusMemoryBulkPutRaw(data.memories.map(nexusMemoryWithDefaults))).then(() => data.memories.length);
   },
   getPseudonymMap() {
     return nexusPseudonymMapGetRaw();
@@ -36745,6 +36774,203 @@ function nexusFindRelatedMemories(memory, allMemories, opts) {
     memory: m,
     score: nexusMemoryRelationScore(memory, m)
   })).filter(r => r.score > 0).sort((a, b) => b.score - a.score).slice(0, limit).map(r => r.memory);
+}
+
+// ── ローカル解析（自動整理）サービス層 ──────────────────────────────
+// AI APIは一切使わない。キーワード辞書によるルールベース判定のみで、判定結果は
+// あくまで「候補」（suggested*／*candidates）として返す。ユーザーが確定した既存フィールド
+// （content・category・tags・isPrivate・relatedMemoryIds）は、この層のどの関数も一切
+// 書き換えない・参照して上書きしない（新しいオブジェクトとして候補フィールドだけを返す）。
+//
+// カテゴリ・タグ判定用のキーワードはここに集約する。将来「相続」「介護」「保険」「AI」「法人」等を
+// 追加したい場合は、この2つの定数に語を足すだけでよい（他のコンポーネントには書かない）。
+const MEMORY_CATEGORY_RULES = [{
+  key: 'money',
+  keywords: ['借金', '返済', '売上', '万円', 'お金', '資金', '収入', '貯金', '投資', '経費', '振込', '入金', '出金', 'ショート', '資金繰り']
+}, {
+  key: 'work',
+  keywords: ['営業', '商談', '契約', '紹介', '代理店', '仕事', '会社', '取引先', 'アポ', '打ち合わせ', 'プレゼン', '提案']
+}, {
+  key: 'customer',
+  keywords: ['お客様', '顧客', 'クレーム', 'ヒアリング']
+}, {
+  key: 'family',
+  keywords: ['子ども', '子供', '家族', '妻', '夫', '両親', '運動会', 'クリスマス', '誕生日', '娘', '息子']
+}, {
+  key: 'health',
+  keywords: ['体調', '病院', '通院', '診断', '健康', '睡眠', '疲れ', '痛み', '検査']
+}, {
+  key: 'idea',
+  keywords: ['やってみよう', '作りたい', '事業', 'アイデア', 'サービス', '新しい企画', '構想']
+}, {
+  key: 'task',
+  keywords: ['やること', 'タスク', '締切', '忘れずに']
+}, {
+  key: 'reflection',
+  keywords: ['振り返る', '反省', '気づいた', '学んだ', '失敗した']
+}, {
+  key: 'learning',
+  keywords: ['読んだ', '勉強', '学習', 'セミナー', '研修', '資格']
+}, {
+  key: 'private',
+  keywords: ['不安', '悩み', '弱み', '自信がない', '恥ずかしい']
+}];
+// タグ候補用の辞書（カテゴリと重複してもよい。タグは複数付けられるため）。
+const MEMORY_TAG_DICTIONARY = ['売上', '資金', '収入', '目標', '営業', '商談', '契約', '紹介', '代理店', '顧客', 'クレーム', '家族', '子ども', '健康', '体調', 'アイデア', '事業', 'サービス', 'やること', '振り返り', '学び', '相続', '介護', '保険', 'AI', '法人'];
+// PRIVATE候補の判定ルール。reasonはそのまま画面表示・privacyRiskFlagsへ使う短い日本語文。
+const MEMORY_PRIVACY_RULES = [{
+  reason: '個人的な金銭情報が含まれています',
+  keywords: ['借金', '返済', 'ローン', '滞納', '債務']
+}, {
+  reason: '家族・健康に関する情報が含まれています',
+  keywords: ['子ども', '子供', '家族', '妻', '夫', '両親', '病院', '通院', '診断', '体調']
+}, {
+  reason: '不安・悩みなど感情的な内容が含まれています',
+  keywords: ['不安', '悩み', '怖い', 'つらい', '自信がない', '弱み']
+}, {
+  reason: '実名と思われる文字列が含まれています',
+  test: text => /[一-龠]{1,3}\s?(さん|様|君|ちゃん)/.test(text)
+}];
+function nexusMemoryDictionaryTagHits(text) {
+  const t = text || '';
+  return MEMORY_TAG_DICTIONARY.filter(w => t.includes(w));
+}
+function nexusMemoryAmountExpressions(text) {
+  if (!text) return [];
+  const matches = String(text).match(/\d+(?:\.\d+)?\s?(?:万円|万|円)/g) || [];
+  return Array.from(new Set(matches.map(m => m.replace(/\s/g, ''))));
+}
+// カテゴリ候補：キーワード一致数が最も多いカテゴリを1つだけ返す（1件のMemoryに複数テーマが
+// あっても、カテゴリは代表1つ・タグは複数、という役割分担にする）。一致が無ければ空文字。
+function nexusMemorySuggestCategory(content) {
+  const text = content || '';
+  let best = '', bestCount = 0;
+  MEMORY_CATEGORY_RULES.forEach(rule => {
+    const count = rule.keywords.filter(k => text.includes(k)).length;
+    if (count > bestCount) {
+      best = rule.key;
+      bestCount = count;
+    }
+  });
+  return best;
+}
+// タグ候補：辞書一致語＋金額表現を、すでに付いている既存タグを除いて最大6件まで返す。
+function nexusMemorySuggestTags(content, existingTags) {
+  const text = content || '';
+  const found = nexusMemoryDictionaryTagHits(text);
+  nexusMemoryAmountExpressions(text).forEach(amt => {
+    if (!found.includes(amt)) found.push(amt);
+  });
+  const already = new Set(existingTags || []);
+  return found.filter(t => !already.has(t)).slice(0, 6);
+}
+// PRIVATE候補：該当したルールの理由をすべて集め、1件でもあればsuggestedPrivate=trueにする。
+// 既存のisPrivateは一切書き換えない（あくまで候補として返すだけ）。
+function nexusMemoryPrivacyCandidates(content) {
+  const text = content || '';
+  const flags = [];
+  MEMORY_PRIVACY_RULES.forEach(rule => {
+    const hit = rule.test ? rule.test(text) : rule.keywords.some(k => text.includes(k));
+    if (hit) flags.push(rule.reason);
+  });
+  return {
+    suggestedPrivate: flags.length > 0,
+    privacyRiskFlags: flags
+  };
+}
+// 関連Memory候補のスコア＋理由。既存のnexusMemoryRelationScore（AI分析パック画面の
+// 候補表示など、既存機能が現在も使用中）はここでは変更せず、Second Brainの「関連候補」
+// 表示専用の新しい関数として追加する（重み付けの意味合いが異なるため：あちらはAI分析パック
+// への「追加候補」の並び替え用、こちらは「なぜ関連したか」を人に説明するための候補提示用）。
+function nexusMemoryRelationScoreWithReasons(a, b) {
+  if (a.id === b.id) return {
+    score: 0,
+    reasons: []
+  };
+  let score = 0;
+  const reasons = [];
+  const aManualTags = new Set(a.tags || []);
+  const commonManualTags = (b.tags || []).filter(t => aManualTags.has(t));
+  if (commonManualTags.length) {
+    score += commonManualTags.length * 5;
+    reasons.push(`共通タグ：${commonManualTags.join('・')}`);
+  }
+  if (a.category && a.category === b.category) {
+    score += 3;
+    reasons.push(`共通カテゴリ：${nexusMemoryCategoryLabel(a.category)}`);
+  }
+  const aEntities = new Set((a.relatedEntityIds || []).map(nexusRelatedEntityKey));
+  const commonEntityCount = (b.relatedEntityIds || []).map(nexusRelatedEntityKey).filter(k => aEntities.has(k)).length;
+  if (commonEntityCount > 0) {
+    score += commonEntityCount * 5;
+    reasons.push('共通する顧客・関係先');
+  }
+  const aThemeWords = new Set(nexusMemoryDictionaryTagHits(a.content));
+  const commonThemeWords = nexusMemoryDictionaryTagHits(b.content).filter(w => aThemeWords.has(w));
+  if (commonThemeWords.length) {
+    score += Math.min(commonThemeWords.length, 3) * 2;
+    reasons.push(`共通テーマ：${commonThemeWords.slice(0, 3).join('・')}`);
+  }
+  const aTokens = new Set(nexusMemoryTokenize(a.content));
+  const commonTokenCount = nexusMemoryTokenize(b.content).filter(t => aTokens.has(t)).length;
+  if (commonTokenCount > 0) {
+    score += Math.min(commonTokenCount, 10);
+    reasons.push('本文中に共通する言葉があります');
+  }
+  if ((a.relatedMemoryIds || []).includes(b.id) || (b.relatedMemoryIds || []).includes(a.id)) {
+    score += 10;
+    reasons.push('すでに手動で関連付け済みです');
+  }
+  return {
+    score,
+    reasons
+  };
+}
+// 各Memoryについて、関連しそうな過去のMemory候補を上位N件返す。手動確定済み
+// （relatedMemoryIds）はすでに確定情報のため、候補には出さない（二重管理を避ける）。
+function nexusMemoryFindRelatedCandidates(memory, allMemories, opts) {
+  const limit = opts && opts.limit || 8;
+  const linkedIds = new Set(memory.relatedMemoryIds || []);
+  return (allMemories || []).filter(m => m.id !== memory.id && !linkedIds.has(m.id)).map(m => {
+    const r = nexusMemoryRelationScoreWithReasons(memory, m);
+    return {
+      memoryId: m.id,
+      score: r.score,
+      reasons: r.reasons
+    };
+  }).filter(r => r.score > 0).sort((a, b) => b.score - a.score).slice(0, limit);
+}
+// Memoryのローカル解析本体。content・category・tags・isPrivate・relatedMemoryIdsには
+// 一切触れず、suggested系・candidate系のフィールドだけを新しいオブジェクトとして返す。
+function nexusMemoryLocalAnalyze(memory, allMemories) {
+  const privacy = nexusMemoryPrivacyCandidates(memory.content);
+  return {
+    suggestedCategory: nexusMemorySuggestCategory(memory.content),
+    suggestedTags: nexusMemorySuggestTags(memory.content, memory.tags),
+    suggestedPrivate: privacy.suggestedPrivate,
+    privacyRiskFlags: privacy.privacyRiskFlags,
+    relatedCandidates: nexusMemoryFindRelatedCandidates(memory, allMemories, {
+      limit: 8
+    }),
+    autoProcessedAt: new Date().toISOString()
+  };
+}
+// 旧バックアップ・自動整理機能追加前に作られたMemoryにも、読み取り時に安全な初期値を補う
+// （エラーにならないようにするための後方互換処理。IndexedDBへの書き戻しは行わず、
+// 読み取りのたびにその場で補うだけなので、既存データそのものは一切変更しない）。
+function nexusMemoryWithDefaults(m) {
+  return {
+    suggestedCategory: '',
+    suggestedTags: [],
+    suggestedPrivate: false,
+    privacyRiskFlags: [],
+    relatedCandidates: [],
+    autoProcessedAt: null,
+    manualCategoryConfirmed: false,
+    manualTagsConfirmed: false,
+    manualPrivateConfirmed: false,
+    ...m
+  };
 }
 
 // ── 匿名化・仮名化サービス層 ────────────────────────────────────
@@ -36995,6 +37221,16 @@ const NEXUS_MEMORY_CATEGORIES = [{
   key: 'learning',
   label: '読書・学習'
 }, {
+  // 自動カテゴリ候補（MEMORY_CATEGORY_RULES）で新設した3カテゴリー。既存キーは一切変更せず追加のみ。
+  key: 'money',
+  label: 'お金'
+}, {
+  key: 'health',
+  label: '健康'
+}, {
+  key: 'task',
+  label: 'やること'
+}, {
   key: 'other',
   label: 'その他'
 }];
@@ -37031,8 +37267,14 @@ function useMemoryStore() {
       cancelled = true;
     };
   }, []);
+  // 保存自体はここで完了させ、ローカル解析（カテゴリ候補・タグ候補・PRIVATE候補・関連候補）は
+  // 保存後にバックグラウンドで行う（ユーザーの操作は一切ブロックしない）。解析結果は
+  // updateSuggestions（updatedAtを動かさない専用更新）で反映し、失敗しても保存自体には影響しない。
   const create = useCallback(partial => MemoryService.create(partial).then(m => {
     setMemories(prev => [m, ...prev]);
+    MemoryService.getAll().then(all => MemoryService.updateSuggestions(m.id, nexusMemoryLocalAnalyze(m, all))).then(updated => {
+      setMemories(prev => prev.map(x => x.id === updated.id ? updated : x));
+    }).catch(() => {});
     return m;
   }), []);
   const update = useCallback((id, patch) => MemoryService.update(id, patch).then(m => {
@@ -37046,6 +37288,12 @@ function useMemoryStore() {
     setMemories(list);
     return list;
   }), []);
+  // 既存Memoryのまとめ再解析（「🧹 記憶を整理する」）。content・category・tags・isPrivate・
+  // relatedMemoryIdsは一切変更せず、suggested系・candidate系のフィールドだけを再計算する。
+  const reanalyzeAll = useCallback(() => MemoryService.getAll().then(all => Promise.all(all.map(m => MemoryService.updateSuggestions(m.id, nexusMemoryLocalAnalyze(m, all))))).then(updated => {
+    setMemories(prev => prev.map(x => updated.find(u => u.id === x.id) || x));
+    return updated.length;
+  }), []);
   return {
     memories,
     loading,
@@ -37053,7 +37301,8 @@ function useMemoryStore() {
     create,
     update,
     remove,
-    reload
+    reload,
+    reanalyzeAll
   };
 }
 
@@ -37416,9 +37665,11 @@ function MemoryTab({
   onSelect,
   onExport,
   onImportFile,
-  onOpenInsightForm
+  onOpenInsightForm,
+  onReanalyzeAll
 }) {
   const [search, setSearch] = useState('');
+  const [reanalyzing, setReanalyzing] = useState(false);
   const filtered = useMemo(() => {
     if (!search.trim()) return memories;
     const q = search.trim().toLowerCase();
@@ -37491,7 +37742,20 @@ function MemoryTab({
       marginBottom: 8
     },
     onClick: () => onOpenInsightForm([])
-  }, "🧠 AI Insightを保存する"), /*#__PURE__*/React.createElement("div", {
+  }, "🧠 AI Insightを保存する"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    disabled: reanalyzing,
+    style: {
+      fontSize: 12,
+      padding: '8px 10px',
+      marginBottom: 8
+    },
+    onClick: () => {
+      setReanalyzing(true);
+      Promise.resolve(onReanalyzeAll()).finally(() => setReanalyzing(false));
+    }
+  }, reanalyzing ? "整理中..." : "🧹 記憶を整理する（カテゴリ・タグ・関連候補を再生成）"), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12,
       color: 'var(--text-sub)',
@@ -37595,6 +37859,187 @@ function MemoryManualLinkPicker({
 }
 
 // ── Memory詳細画面 ───────────────────────────────────────────────
+// ── NEXUSの整理候補（自動整理の確認・採用）─────────────────────────
+// suggested系フィールドを表示するだけ。ユーザーが「この分類を採用」を押した時だけ、
+// category/tags/isPrivateへ反映する（onAdoptSuggestions経由。ここでは書き換えない）。
+function MemoryAutoSuggestionCard({
+  memory,
+  onAdopt
+}) {
+  const hasCategory = !!memory.suggestedCategory;
+  const hasTags = (memory.suggestedTags || []).length > 0;
+  const hasPrivacy = !!memory.suggestedPrivate;
+  if (!hasCategory && !hasTags && !hasPrivacy) return null;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginBottom: 10,
+      border: '1px solid var(--accent-light)'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: 'var(--accent)',
+      marginBottom: 8
+    }
+  }, "🧭 NEXUSの整理候補"), hasCategory && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      marginBottom: 3
+    }
+  }, "カテゴリ候補"), /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    style: {
+      background: 'var(--accent-light)',
+      color: 'var(--accent)'
+    }
+  }, nexusMemoryCategoryLabel(memory.suggestedCategory))), hasTags && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      marginBottom: 3
+    }
+  }, "タグ候補"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 5
+    }
+  }, memory.suggestedTags.map(t => /*#__PURE__*/React.createElement("span", {
+    key: t,
+    className: "chip",
+    style: {
+      fontSize: 11,
+      padding: '3px 9px',
+      minHeight: 'auto',
+      cursor: 'default'
+    }
+  }, "#", t)))), hasPrivacy && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 8,
+      fontSize: 12.5,
+      color: 'var(--danger)'
+    }
+  }, "🔒 PRIVATE候補", (memory.privacyRiskFlags || []).map((r, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      fontSize: 11.5,
+      marginTop: 2
+    }
+  }, "理由：", r))), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: {
+      fontSize: 13,
+      marginTop: 4
+    },
+    onClick: () => onAdopt(memory)
+  }, "この分類を採用"));
+}
+// ── 🔗 NEXUSが見つけた関連候補（自動候補。手動関連付け・AI分析パックへの追加はユーザー操作のみ）──
+function MemoryRelatedCandidateCard({
+  memory,
+  candidate,
+  onLink,
+  onAddToPack,
+  onSelect
+}) {
+  if (!memory) return null;
+  const excerpt = (memory.content || '').replace(/\n/g, ' ').slice(0, 60);
+  const tier = candidate.score >= 15 ? '高' : candidate.score >= 8 ? '中' : '低';
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: '10px 0',
+      borderBottom: '1px solid var(--border)'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      marginBottom: 3
+    }
+  }, nexusFormatMemoryDateTime(memory.createdAt).slice(0, 10), "　関連度：", tier), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      lineHeight: 1.6,
+      marginBottom: 4,
+      cursor: 'pointer',
+      wordBreak: 'break-word'
+    },
+    onClick: () => onSelect(memory)
+  }, excerpt, (memory.content || '').length > 60 ? '…' : ''), candidate.reasons.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--accent)',
+      marginBottom: 6
+    }
+  }, candidate.reasons.join('　')), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline",
+    style: {
+      flex: 1,
+      fontSize: 12,
+      padding: '7px 8px'
+    },
+    onClick: () => onLink(candidate.memoryId)
+  }, "関連付けする"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline",
+    style: {
+      flex: 1,
+      fontSize: 12,
+      padding: '7px 8px'
+    },
+    onClick: () => onAddToPack(candidate.memoryId)
+  }, "AI分析に追加")));
+}
+function MemoryRelatedCandidatesSection({
+  memory,
+  allMemories,
+  onLink,
+  onAddToPack,
+  onSelect
+}) {
+  const candidates = memory.relatedCandidates || [];
+  if (candidates.length === 0) return null;
+  const byId = new Map(allMemories.map(m => [m.id, m]));
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "🔗 NEXUSが見つけた関連候補（", candidates.length, "件）"), /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--text-sub)',
+      marginBottom: 4
+    }
+  }, "本当に関係すると思うものだけ「関連付けする」を押してください。押すまでは記憶同士は繋がりません。"), candidates.map(c => /*#__PURE__*/React.createElement(MemoryRelatedCandidateCard, {
+    key: c.memoryId,
+    memory: byId.get(c.memoryId),
+    candidate: c,
+    onLink: onLink,
+    onAddToPack: onAddToPack,
+    onSelect: onSelect
+  }))));
+}
 function MemoryDetail({
   memory,
   allMemories,
@@ -37603,7 +38048,8 @@ function MemoryDetail({
   onClose,
   onOpenAiPack,
   onLinkMemory,
-  onSelectMemory
+  onSelectMemory,
+  onAdoptSuggestions
 }) {
   const [confirmDel, setConfirmDel] = useState(false);
   return /*#__PURE__*/React.createElement("div", {
@@ -37717,7 +38163,10 @@ function MemoryDetail({
       fontWeight: 800
     },
     onClick: () => onOpenAiPack([memory.id])
-  }, "🤖 AI分析パックを作る"), /*#__PURE__*/React.createElement("div", {
+  }, "🤖 AI分析パックを作る"), /*#__PURE__*/React.createElement(MemoryAutoSuggestionCard, {
+    memory: memory,
+    onAdopt: onAdoptSuggestions
+  }), /*#__PURE__*/React.createElement("div", {
     className: "section-header"
   }, "関連する記憶"), /*#__PURE__*/React.createElement("div", {
     className: "card"
@@ -37729,7 +38178,13 @@ function MemoryDetail({
     memory: memory,
     allMemories: allMemories,
     onLink: onLinkMemory
-  }))), confirmDel && /*#__PURE__*/React.createElement("div", {
+  })), /*#__PURE__*/React.createElement(MemoryRelatedCandidatesSection, {
+    memory: memory,
+    allMemories: allMemories,
+    onLink: candidateId => onLinkMemory(candidateId),
+    onAddToPack: candidateId => onOpenAiPack([memory.id, candidateId]),
+    onSelect: onSelectMemory
+  })), confirmDel && /*#__PURE__*/React.createElement("div", {
     className: "overlay",
     style: {
       zIndex: 60
@@ -38368,9 +38823,18 @@ function App() {
   const [showMemoryQuickAdd, setShowMemoryQuickAdd] = useState(false);
   const [aiPackMemoryIds, setAiPackMemoryIds] = useState(null);
   const [insightFormRelatedIds, setInsightFormRelatedIds] = useState(null);
-  const handleMemoryQuickAdd = partial => memoryStore.create(partial).then(() => setShowMemoryQuickAdd(false));
+  // ユーザーが実際に入力したcategory/tags/isPrivateは「確定済み」として扱い、自動整理で
+  // 上書きされないようにフラグを立てる（値そのものは書き換えない。あくまでフラグのみ追加）。
+  const nexusWithManualConfirmedFlags = data => ({
+    ...data,
+    manualCategoryConfirmed: data.manualCategoryConfirmed || !!data.category,
+    manualTagsConfirmed: data.manualTagsConfirmed || !!(data.tags && data.tags.length > 0),
+    manualPrivateConfirmed: data.manualPrivateConfirmed || !!data.isPrivate
+  });
+  const handleMemoryQuickAdd = partial => memoryStore.create(nexusWithManualConfirmedFlags(partial)).then(() => setShowMemoryQuickAdd(false));
   const handleMemorySave = data => {
-    const p = editingMemory ? memoryStore.update(editingMemory.id, data) : memoryStore.create(data);
+    const patch = nexusWithManualConfirmedFlags(data);
+    const p = editingMemory ? memoryStore.update(editingMemory.id, patch) : memoryStore.create(patch);
     p.then(m => {
       setShowMemoryForm(false);
       setEditingMemory(null);
@@ -38383,11 +38847,35 @@ function App() {
   };
   const handleMemoryLink = targetId => {
     if (!selectedMemory) return;
-    const next = Array.from(new Set([...(selectedMemory.relatedMemoryIds || []), targetId]));
-    memoryStore.update(selectedMemory.id, {
-      relatedMemoryIds: next
-    }).then(m => setSelectedMemory(m));
+    const target = memoryStore.memories.find(m => m.id === targetId);
+    const nextSource = Array.from(new Set([...(selectedMemory.relatedMemoryIds || []), targetId]));
+    const updates = [memoryStore.update(selectedMemory.id, {
+      relatedMemoryIds: nextSource
+    })];
+    if (target) {
+      const nextTarget = Array.from(new Set([...(target.relatedMemoryIds || []), selectedMemory.id]));
+      updates.push(memoryStore.update(targetId, {
+        relatedMemoryIds: nextTarget
+      }));
+    }
+    Promise.all(updates).then(([m]) => setSelectedMemory(m));
   };
+  const handleMemoryAdoptSuggestions = memory => {
+    const patch = {
+      manualCategoryConfirmed: true,
+      manualTagsConfirmed: true,
+      manualPrivateConfirmed: true
+    };
+    if (memory.suggestedCategory) patch.category = memory.suggestedCategory;
+    if ((memory.suggestedTags || []).length > 0) {
+      patch.tags = Array.from(new Set([...(memory.tags || []), ...memory.suggestedTags]));
+    }
+    if (memory.suggestedPrivate) patch.isPrivate = true;
+    memoryStore.update(memory.id, patch).then(m => setSelectedMemory(m));
+  };
+  const handleMemoryReanalyzeAll = () => memoryStore.reanalyzeAll().then(count => {
+    alert(`✅ ${count}件のMemoryを整理しました（カテゴリ候補・タグ候補・関連候補を再生成しました）`);
+  });
   const handleInsightSave = data => memoryStore.create(data).then(() => {
     setInsightFormRelatedIds(null);
     setAiPackMemoryIds(null);
@@ -38786,7 +39274,8 @@ function App() {
     onSelect: setSelectedMemory,
     onExport: handleMemoryExport,
     onImportFile: handleMemoryImportFile,
-    onOpenInsightForm: ids => setInsightFormRelatedIds(ids)
+    onOpenInsightForm: ids => setInsightFormRelatedIds(ids),
+    onReanalyzeAll: handleMemoryReanalyzeAll
   })), /*#__PURE__*/React.createElement("nav", {
     className: "bottom-nav"
   }, tabs.map(t => /*#__PURE__*/React.createElement("button", {
@@ -38907,7 +39396,8 @@ function App() {
     onClose: () => setSelectedMemory(null),
     onOpenAiPack: ids => setAiPackMemoryIds(ids),
     onLinkMemory: handleMemoryLink,
-    onSelectMemory: m => setSelectedMemory(m)
+    onSelectMemory: m => setSelectedMemory(m),
+    onAdoptSuggestions: handleMemoryAdoptSuggestions
   }), showMemoryForm && /*#__PURE__*/React.createElement(MemoryForm, {
     editing: editingMemory,
     customers: customers,
