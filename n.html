@@ -4709,6 +4709,87 @@ function nexusCustomerDisplayName(c) {
   // 法人は「会社名」を優先表示（name欄は担当者名のため、会社名で検索できなくなるのを防ぐ）
   return (c.customerType === '法人' ? c.corporateName || c.name : c.name || c.corporateName) || '(名称未設定)';
 }
+
+// ── 顧客宛て連絡文のルールベース下書き生成 ─────────────────────────
+// 外部AI APIは使わない。NEXUSに既に登録されている情報（氏名・家族構成・最終接触・契約有無）
+// だけを使い、登録されていない情報（子どもの年齢・最近の出来事等）は一切補完・推測しない。
+// 生成結果は必ず編集可能なテキストとして表示し、コピーするかどうか・そのまま使うかどうかは
+// 常にユーザー自身が判断する（自動送信は行わない。行えない）。
+const NEXUS_MESSAGE_PURPOSES = [
+  { key: 'checkin', label: '久しぶりの連絡' },
+  { key: 'afterContract', label: '契約後フォロー' },
+  { key: 'birthday', label: '誕生日' },
+  { key: 'family', label: '家族について' },
+  { key: 'child', label: '子どもについて' },
+  { key: 'contractReview', label: '契約内容確認' },
+  { key: 'renewal', label: '保険更新' },
+  { key: 'assetBuilding', label: '資産形成' },
+  { key: 'inheritance', label: '相続' },
+  { key: 'careInsurance', label: '介護' },
+  { key: 'autoInsurance', label: '自動車保険' },
+  { key: 'noteArticle', label: 'note記事案内' },
+  { key: 'afterMeeting', label: '面談後フォロー' },
+  { key: 'referralRequest', label: '紹介依頼' },
+  { key: 'other', label: 'その他' }
+];
+function nexusMessageContextForCustomer(customer) {
+  const suspects = (customer && customer.suspects) || [];
+  const spouse = suspects.find(sp => sp.relation === '配偶者' && (sp.name || '').trim());
+  const childNames = suspects.filter(sp => sp.relation === '子供' && (sp.name || '').trim()).map(sp => sp.name.trim());
+  const daysSinceContact = customer && customer.lastContact ? -daysUntil(customer.lastContact) : null;
+  return {
+    name: nexusCustomerDisplayName(customer),
+    spouseName: spouse ? spouse.name.trim() : '',
+    childNames,
+    hasContracts: !!(customer && customer.contracts && customer.contracts.length > 0),
+    daysSinceContact
+  };
+}
+// purposeごとに本文だけを組み立てる（挨拶・結びは呼び出し側で共通付与）。存在しないデータに
+// 触れる分岐は必ずctxの値を確認したうえで、無ければ具体性のない一般的な文へフォールバックする。
+function nexusMessageBodyForPurpose(purposeKey, ctx) {
+  const name = ctx.name;
+  switch (purposeKey) {
+    case 'checkin':
+      return (ctx.daysSinceContact !== null && ctx.daysSinceContact >= 60 ? 'しばらくご連絡できておらず、ご無沙汰しております。' : `ふと${name}様のことを思い出しまして、ご連絡させていただきました。`) + '\nお変わりございませんでしょうか。お仕事やご家庭のご様子など、またお聞かせいただけたらうれしいです。';
+    case 'afterContract':
+      return (ctx.hasContracts ? 'ご契約いただいてから、その後お変わりないかと思いご連絡いたしました。' : 'その後、お変わりないかと思いご連絡いたしました。') + '\n保障の内容で気になる点や、生活の変化などございましたら、いつでもお知らせください。';
+    case 'birthday':
+      return 'お誕生日おめでとうございます！\n素敵な一年になりますように、心よりお祈りしております。' + (ctx.spouseName || ctx.childNames.length ? '\nご家族の皆様にとっても、良い一年になりますように。' : '');
+    case 'family':
+      return (ctx.spouseName || ctx.childNames.length ? 'ご家族の皆様もお元気でお過ごしでしょうか。' : 'ご家族の皆様もお元気でお過ごしでしょうか。') + '\nまた変わったことなどあれば、お聞かせいただけたらうれしいです。';
+    case 'child':
+      return (ctx.childNames.length ? `${ctx.childNames.join('さん、')}さんも、お元気にお過ごしでしょうか。` : 'お子様も、お元気にお過ごしでしょうか。') + '\n日々の成長を感じる時期かと思います。またお話を聞かせてください。';
+    case 'contractReview':
+      return 'ご契約いただいている保障の内容について、一度確認の機会を持てればと思いご連絡しました。\nご不明な点や、保障を見直したいポイントなどあれば教えてください。';
+    case 'renewal':
+      return '更新の時期が近づいてきたかと思い、ご連絡いたしました。\n今のご状況に合わせて、保障内容を一緒に確認できればと思います。';
+    case 'assetBuilding':
+      return `最近、資産形成やこれからのお金の準備について考える方が増えているようです。\n${name}様のお考えやご希望があれば、ぜひお聞かせください。`;
+    case 'inheritance':
+      return '相続について、早めに整理しておきたいというお話をよく伺います。\nもしご関心があれば、一緒に整理するお手伝いができればと思います。';
+    case 'careInsurance':
+      return 'ご家族の将来のことも含めて、介護に関する備えを考える方が増えています。\nもしご興味があれば、情報だけでもお伝えできればと思います。';
+    case 'autoInsurance':
+      return '自動車保険の内容を見直す方も増えている時期です。\nもし更新のタイミングが近ければ、内容を一緒に確認できればと思います。';
+    case 'noteArticle':
+      return `最近書いた記事が、${name}様のお役に立てるかもしれないと思いご連絡しました。\n（こちらの記事です：　　　　　）\nお時間があるときにでも、読んでいただけたらうれしいです。`;
+    case 'afterMeeting':
+      return '先日はお時間をいただき、ありがとうございました。\nお話しした内容で気になる点があれば、いつでもご連絡ください。';
+    case 'referralRequest':
+      return `いつも本当にありがとうございます。\nもし${name}様の周りで、保険や将来のお金のことで悩んでいる方がいらっしゃったら、力になれるかもしれません。\nもしよろしければ、機会があるときにでもお声がけいただけたらうれしいです。`;
+    case 'other':
+    default:
+      return '';
+  }
+}
+function nexusDraftContactMessage(purposeKey, customer) {
+  const ctx = nexusMessageContextForCustomer(customer);
+  const greeting = `${ctx.name}様\n\nいつもお世話になっております。`;
+  const body = nexusMessageBodyForPurpose(purposeKey, ctx);
+  const closing = purposeKey === 'other' ? '' : '\n\n何かあれば、いつでもお気軽にご連絡ください。';
+  return body ? `${greeting}\n\n${body}${closing}` : `${greeting}\n\n`;
+}
 function CustomerSelect({
   label,
   value,
@@ -4935,6 +5016,208 @@ function CustomerSelect({
   }, "完了（", selectedIds.length, "人選択中）")))), document.body));
 }
 
+// ── フォロー状況カード（顧客詳細画面）───────────────────────────
+// 既存のファン化フォロー機能（キャンペーン管理・送信記録）のデータをそのまま集計して
+// 表示するだけで、新しいデータ構造・新しい記録方法は一切追加しない。送信記録が1件もなく
+// 紹介実績もない顧客では、情報が無いことを示すだけのカードになってしまうため表示しない。
+// ── 連絡文を作る画面（顧客詳細画面から開く）─────────────────────
+// ルールベースの下書き（nexusDraftContactMessage）を表示するだけ。コピーしても自動的に
+// 送信済み・既読扱いにはしない（実際に送ったかどうかはNEXUSには分からないため）。
+// 「フォロー記録に残す」を押した場合のみ、既存のファン化フォローと全く同じデータ構造
+// （NexusFanFollowRecordFormのblankと同じフィールド）でレコードを1件追加する。
+function NexusContactMessageScreen({
+  customer,
+  onSaveFollowRecord,
+  onClose
+}) {
+  const [purposeKey, setPurposeKey] = useState('');
+  const [draft, setDraft] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const choose = key => {
+    setPurposeKey(key);
+    setDraft(nexusDraftContactMessage(key, customer));
+    setCopied(false);
+    setSaved(false);
+  };
+  const regenerate = () => {
+    if (!purposeKey) return;
+    setDraft(nexusDraftContactMessage(purposeKey, customer));
+    setCopied(false);
+    setSaved(false);
+  };
+  const copy = () => {
+    nexusCopyToClipboard(draft).then(ok => {
+      if (ok) {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }
+    });
+  };
+  const saveToFollow = () => {
+    if (!onSaveFollowRecord) return;
+    onSaveFollowRecord(draft);
+    setSaved(true);
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: "full-screen"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "full-header"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    style: {
+      background: 'none',
+      border: 'none',
+      cursor: 'pointer',
+      fontSize: 15,
+      color: 'var(--text-sub)',
+      fontWeight: 600,
+      padding: '4px 8px'
+    }
+  }, "← 戻る"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      fontWeight: 700,
+      fontSize: 15
+    }
+  }, "連絡文を作る")), /*#__PURE__*/React.createElement("div", {
+    className: "full-content"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text-sub)',
+      marginBottom: 8
+    }
+  }, "目的を選んでください"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 8
+    }
+  }, NEXUS_MESSAGE_PURPOSES.map(p => /*#__PURE__*/React.createElement("button", {
+    key: p.key,
+    type: "button",
+    className: `chip ${purposeKey === p.key ? 'active' : ''}`,
+    onClick: () => choose(p.key)
+  }, p.label)))), purposeKey && /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text-sub)',
+      marginBottom: 6
+    }
+  }, "下書き（自由に編集できます）"), /*#__PURE__*/React.createElement("textarea", {
+    value: draft,
+    onChange: e => {
+      setDraft(e.target.value);
+      setCopied(false);
+      setSaved(false);
+    },
+    rows: 10,
+    style: {
+      width: '100%',
+      fontSize: 14,
+      lineHeight: 1.7,
+      padding: 10,
+      border: '1px solid var(--border)',
+      borderRadius: 8,
+      resize: 'vertical',
+      boxSizing: 'border-box',
+      fontFamily: 'inherit'
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary",
+    style: {
+      flex: 1
+    },
+    onClick: copy
+  }, copied ? "✓ コピーしました" : "コピー"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline",
+    style: {
+      flex: 1
+    },
+    onClick: regenerate
+  }, "作り直す")), onSaveFollowRecord && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: {
+      marginTop: 8,
+      fontSize: 12.5
+    },
+    disabled: saved,
+    onClick: saveToFollow
+  }, saved ? "✓ フォロー記録に残しました" : "この文章をフォロー記録に残す"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--text-sub)',
+      marginTop: 8,
+      lineHeight: 1.5
+    }
+  }, "※コピーしただけでは送信済みにはなりません。実際に送った後、必要であれば上のボタンで記録してください。"))));
+}
+function NexusFollowStatusCard({
+  customerId,
+  fanFollows,
+  activityLogs,
+  customers
+}) {
+  const d = useMemo(() => nexusFanFollowCustomerDashboard(customerId, fanFollows, activityLogs, customers), [customerId, fanFollows, activityLogs, customers]);
+  if (d.sent === 0 && d.referralCount === 0) return null;
+  const stat = (label, value) => /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: '1 1 0',
+      minWidth: 44,
+      textAlign: 'center'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 17,
+      fontWeight: 800
+    }
+  }, value), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--text-sub)',
+      marginTop: 1
+    }
+  }, label));
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "フォロー状況"), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, d.lastSentDate && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--text-sub)',
+      marginBottom: 8
+    }
+  }, "最後にフォロー：", d.lastSentDate.replace(/-/g, '/')), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 6
+    }
+  }, stat('送信', d.sent), stat('既読', d.read), stat('返信', d.replied), stat('相談', d.consulted), stat('面談', d.met), stat('紹介', d.referralCount))));
+}
+
 // ── Customer Detail Screen ────────────────────────────────────
 function CustomerDetail({
   customer,
@@ -4953,9 +5236,12 @@ function CustomerDetail({
   activityLogs,
   setActivityLogs,
   opportunities,
-  setOpportunities
+  setOpportunities,
+  nexusFanFollows,
+  setNexusFanFollows
 }) {
   const [confirmDel, setConfirmDel] = useState(false);
+  const [showContactMessage, setShowContactMessage] = useState(false);
   // 契約一覧の担当区分による絞り込み（すべて／当社担当／他代理店契約）。初期表示は「すべて」。
   const [contractResponsibleFilter, setContractResponsibleFilter] = useState('すべて');
   const c = customer;
@@ -5201,7 +5487,21 @@ function CustomerDetail({
     onClick: () => onUpdateCustomer({
       assetDiagnosisCompleted: !c.assetDiagnosisCompleted
     })
-  }, c.assetDiagnosisCompleted ? "✓ 資産診断 実施済み" : "資産診断 実施済みにする"))), tasks && setTasks && /*#__PURE__*/React.createElement("div", {
+  }, c.assetDiagnosisCompleted ? "✓ 資産診断 実施済み" : "資産診断 実施済みにする"))), nexusFanFollows && /*#__PURE__*/React.createElement(NexusFollowStatusCard, {
+    customerId: c.id,
+    fanFollows: nexusFanFollows,
+    activityLogs: activityLogs,
+    customers: customers
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: {
+      marginBottom: 10,
+      fontSize: 13.5,
+      fontWeight: 700
+    },
+    onClick: () => setShowContactMessage(true)
+  }, "✍️ 連絡文を作る"), tasks && setTasks && /*#__PURE__*/React.createElement("div", {
     style: {
       marginBottom: 10
     }
@@ -6408,7 +6708,35 @@ function CustomerDetail({
       onDelete(c.id);
       onClose();
     }
-  }, "削除する")))));
+  }, "削除する")))), showContactMessage && /*#__PURE__*/React.createElement(NexusContactMessageScreen, {
+    customer: c,
+    onSaveFollowRecord: setNexusFanFollows ? text => {
+      const now = new Date().toISOString();
+      setNexusFanFollows(prev => [{
+        id: uid(),
+        campaignId: '',
+        customerId: c.id,
+        customerNameText: '',
+        attribute: '',
+        sentDate: todayStr(),
+        articleTitle: '',
+        articleUrl: '',
+        sendMethod: '',
+        messageText: text,
+        memo: '',
+        readAt: '',
+        repliedAt: '',
+        relatedActivityLogId: '',
+        nextFollowDate: '',
+        nextFollowAction: '',
+        noFollowNeeded: false,
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: ''
+      }, ...prev]);
+    } : null,
+    onClose: () => setShowContactMessage(false)
+  }));
 }
 
 // ── 今日の指針バナー（理念・行動指針を1行表示、タップで全文展開）──
@@ -15967,6 +16295,16 @@ function nexusFanBuildRecordsWithStage(follows, activityLogs, customers, tasks) 
 function nexusFanCampaignDashboard(campaignId, follows, activityLogs, customers, tasks) {
   const scoped = nexusFanBuildRecordsWithStage(follows, activityLogs, customers, tasks).filter(r => r.record.campaignId === campaignId);
   return nexusFanFollowMetricsGroup(scoped);
+}
+// 顧客詳細画面の「フォロー状況」カード用：nexusFanCampaignDashboardと全く同じ計算
+// （nexusFanBuildRecordsWithStage／nexusFanFollowMetricsGroup）を、campaignIdではなく
+// customerIdで絞り込んで再利用するだけ。新しい集計ロジックは追加しない。紹介実績は
+// 既存のnexusReferralCount（顧客検索・顧客ランク判定で既に使われているもの）をそのまま使う。
+function nexusFanFollowCustomerDashboard(customerId, follows, activityLogs, customers) {
+  const scoped = nexusFanBuildRecordsWithStage(follows, activityLogs, customers, []).filter(r => r.record.customerId === customerId);
+  const metrics = nexusFanFollowMetricsGroup(scoped);
+  const lastSentDate = scoped.reduce((max, r) => r.record.sentDate && (!max || r.record.sentDate > max) ? r.record.sentDate : max, null);
+  return { ...metrics, lastSentDate, referralCount: nexusReferralCount({ id: customerId }, customers) };
 }
 function nexusFanArticleBreakdown(follows, activityLogs, customers, tasks) {
   const all = nexusFanBuildRecordsWithStage(follows, activityLogs, customers, tasks);
@@ -39326,6 +39664,8 @@ function App() {
     setActivityLogs: setActivityLogs,
     opportunities: opportunities,
     setOpportunities: setOpportunities,
+    nexusFanFollows: nexusFanFollows,
+    setNexusFanFollows: setNexusFanFollows,
     onEdit: () => openEditCustomer(selectedCustomer),
     onDelete: id => {
       deleteCustomer(id);
