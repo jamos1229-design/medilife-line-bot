@@ -36919,10 +36919,15 @@ function NexusTab({
 
 // ── IndexedDB 低レベルアクセス（このブロックの外からは直接呼ばない）──
 const NEXUS_MEMORY_DB_NAME = 'nexus_second_brain_db';
-const NEXUS_MEMORY_DB_VERSION = 1;
+// version 1→2：画像添付（attachments store）を追加するための拡張。
+// 既存のmemories／pseudonymMapストアはonupgradeneeded内でobjectStoreNames.contains()により
+// 存在確認してから作成しているため、v1からv2へ上がる際も既存2ストアは一切変更されず、
+// 存在しないattachmentsストアだけが追加される（既存Memory・AI Insight・pseudonymMapは無傷）。
+const NEXUS_MEMORY_DB_VERSION = 2;
 const NEXUS_MEMORY_STORE = 'memories';
 const NEXUS_PSEUDONYM_STORE = 'pseudonymMap';
 const NEXUS_PSEUDONYM_KEY = 'main';
+const NEXUS_ATTACHMENT_STORE = 'attachments';
 let nexusMemoryDBPromise = null;
 function nexusMemoryOpenDB() {
   return new Promise((resolve, reject) => {
@@ -36947,6 +36952,23 @@ function nexusMemoryOpenDB() {
       if (!db.objectStoreNames.contains(NEXUS_PSEUDONYM_STORE)) {
         db.createObjectStore(NEXUS_PSEUDONYM_STORE, {
           keyPath: 'key'
+        });
+      }
+      // 画像添付本体（Blob）専用ストア。Memory本体にはattachmentIds（文字列の配列）だけを
+      // 持たせ、画像そのものはこのストアにのみ保存する（Memory JSON・通常バックアップ・
+      // localStorageへは画像本体もBase64も一切書き込まない）。
+      if (!db.objectStoreNames.contains(NEXUS_ATTACHMENT_STORE)) {
+        const attachStore = db.createObjectStore(NEXUS_ATTACHMENT_STORE, {
+          keyPath: 'id'
+        });
+        attachStore.createIndex('memoryId', 'memoryId', {
+          unique: false
+        });
+        attachStore.createIndex('createdAt', 'createdAt', {
+          unique: false
+        });
+        attachStore.createIndex('sha256', 'sha256', {
+          unique: false
         });
       }
     };
@@ -36993,10 +37015,27 @@ function nexusMemoryBulkPutRaw(memories) {
     tx.onabort = () => reject(tx.error);
   }));
 }
+// Memoryを削除する際、そのMemoryに紐づくattachments（画像本体・サムネイル）も
+// 同一トランザクション内でまとめて削除する。画像だけが孤立してIndexedDBに残り
+// 続けることを防ぐ（両ストアへの書き込みが1つのトランザクションなので、
+// 途中で失敗した場合はどちらのストアも変更されない＝all-or-nothing）。
 function nexusMemoryDeleteRaw(id) {
   return nexusMemoryGetDB().then(db => new Promise((resolve, reject) => {
-    const tx = db.transaction(NEXUS_MEMORY_STORE, 'readwrite');
+    const storeNames = db.objectStoreNames.contains(NEXUS_ATTACHMENT_STORE) ? [NEXUS_MEMORY_STORE, NEXUS_ATTACHMENT_STORE] : [NEXUS_MEMORY_STORE];
+    const tx = db.transaction(storeNames, 'readwrite');
     tx.objectStore(NEXUS_MEMORY_STORE).delete(id);
+    if (storeNames.length > 1) {
+      const attachStore = tx.objectStore(NEXUS_ATTACHMENT_STORE);
+      const idx = attachStore.index('memoryId');
+      const cursorReq = idx.openCursor(IDBKeyRange.only(id));
+      cursorReq.onsuccess = () => {
+        const cursor = cursorReq.result;
+        if (cursor) {
+          cursor.delete();
+          cursor.continue();
+        }
+      };
+    }
     tx.oncomplete = () => resolve(id);
     tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error);
@@ -37048,6 +37087,187 @@ function nexusPseudonymMapPutRaw(map) {
   }));
 }
 
+// ── 画像添付（attachments）低レベルアクセス ──────────────────────
+// Memory本体には画像を一切持たせず、attachmentIds（文字列IDの配列）だけを持たせる。
+// 画像本体（Blob）・サムネイル（Blob）はこのattachmentsストアにのみ保存する。
+function nexusAttachmentGetRaw(id) {
+  return nexusMemoryGetDB().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(NEXUS_ATTACHMENT_STORE, 'readonly');
+    const req = tx.objectStore(NEXUS_ATTACHMENT_STORE).get(id);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error);
+  }));
+}
+function nexusAttachmentsByMemoryIdRaw(memoryId) {
+  return nexusMemoryGetDB().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(NEXUS_ATTACHMENT_STORE, 'readonly');
+    const idx = tx.objectStore(NEXUS_ATTACHMENT_STORE).index('memoryId');
+    const req = idx.getAll(IDBKeyRange.only(memoryId));
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  }));
+}
+function nexusAttachmentGetAllRaw() {
+  return nexusMemoryGetDB().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(NEXUS_ATTACHMENT_STORE, 'readonly');
+    const req = tx.objectStore(NEXUS_ATTACHMENT_STORE).getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  }));
+}
+function nexusAttachmentBulkPutRaw(records) {
+  return nexusMemoryGetDB().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(NEXUS_ATTACHMENT_STORE, 'readwrite');
+    const store = tx.objectStore(NEXUS_ATTACHMENT_STORE);
+    (records || []).forEach(r => store.put(r));
+    tx.oncomplete = () => resolve(records);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  }));
+}
+// 新しく圧縮済みの画像（attachmentレコード）を、対象Memoryのattachments追加として
+// 1つのトランザクションでまとめて書き込む。attachmentレコードの保存とMemory側の
+// attachmentIds更新を同一トランザクションにすることで、「画像だけ保存されたが
+// MemoryにIDがない」という中途半端な状態を防ぐ（途中で失敗すれば両方とも反映されない）。
+// 同一Memory内での重複登録防止（SHA-256が一致する画像は追加しない）。実装が複雑に
+// なりすぎないよう、対象は「同じMemoryに既についている画像」と「今回まとめて追加
+// しようとしている画像同士」に限定する（Memoryをまたいだ全体重複チェックはしない）。
+function nexusMemoryAddAttachmentsTx(memoryId, records) {
+  return nexusMemoryGetDB().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction([NEXUS_MEMORY_STORE, NEXUS_ATTACHMENT_STORE], 'readwrite');
+    const memoryStore = tx.objectStore(NEXUS_MEMORY_STORE);
+    const attachStore = tx.objectStore(NEXUS_ATTACHMENT_STORE);
+    let updatedMemory = null;
+    let savedRecords = [];
+    let skippedDuplicateIds = [];
+    let existingMemory = null;
+    let existingAttachments = null;
+    const tryFinish = () => {
+      if (existingMemory === null || existingAttachments === null) return;
+      if (existingMemory === false) {
+        tx.abort();
+        return;
+      }
+      const existingShas = new Set((existingAttachments || []).map(a => a.sha256).filter(Boolean));
+      const toSave = [];
+      (records || []).forEach(r => {
+        if (r.sha256 && existingShas.has(r.sha256)) {
+          skippedDuplicateIds.push(r.id);
+          return;
+        }
+        if (r.sha256) existingShas.add(r.sha256);
+        // レコード作成時点（写真選択時）ではまだMemoryが存在しない場合があり、
+        // memoryIdがnullのまま渡ってくることがあるため、ここで必ず実際のmemoryIdへ
+        // 上書きしてから保存する（memoryIdインデックスを使う連鎖削除・重複判定を
+        // 正しく機能させるため）。
+        toSave.push({
+          ...r,
+          memoryId
+        });
+      });
+      toSave.forEach(r => attachStore.put(r));
+      const existingIds = existingMemory.attachmentIds || [];
+      const newIds = toSave.map(r => r.id);
+      savedRecords = toSave;
+      updatedMemory = {
+        ...existingMemory,
+        attachmentIds: Array.from(new Set([...existingIds, ...newIds]))
+      };
+      memoryStore.put(updatedMemory);
+    };
+    const getReq = memoryStore.get(memoryId);
+    getReq.onsuccess = () => {
+      existingMemory = getReq.result || false;
+      tryFinish();
+    };
+    const existingAttachReq = attachStore.index('memoryId').getAll(IDBKeyRange.only(memoryId));
+    existingAttachReq.onsuccess = () => {
+      existingAttachments = existingAttachReq.result || [];
+      tryFinish();
+    };
+    tx.oncomplete = () => {
+      if (updatedMemory) resolve({
+        memory: updatedMemory,
+        records: savedRecords,
+        skippedDuplicateIds
+      });else reject(new Error('指定されたMemoryが見つかりません'));
+    };
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error || new Error('指定されたMemoryが見つかりません'));
+  }));
+}
+// 画像1件の削除（attachmentレコード本体の削除とMemory.attachmentIdsからの除去を
+// 同一トランザクションで行う。孤立データを残さないため）。
+function nexusMemoryDeleteAttachmentTx(memoryId, attachmentId) {
+  return nexusMemoryGetDB().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction([NEXUS_MEMORY_STORE, NEXUS_ATTACHMENT_STORE], 'readwrite');
+    const memoryStore = tx.objectStore(NEXUS_MEMORY_STORE);
+    const attachStore = tx.objectStore(NEXUS_ATTACHMENT_STORE);
+    let updatedMemory = null;
+    attachStore.delete(attachmentId);
+    const getReq = memoryStore.get(memoryId);
+    getReq.onsuccess = () => {
+      const existing = getReq.result;
+      if (!existing) return;
+      updatedMemory = {
+        ...existing,
+        attachmentIds: (existing.attachmentIds || []).filter(x => x !== attachmentId)
+      };
+      memoryStore.put(updatedMemory);
+    };
+    tx.oncomplete = () => resolve(updatedMemory);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  }));
+}
+// バックアップ復元の安全対策：Memory.attachmentIdsのうち、attachmentsストアに
+// 実在しないIDだけを取り除く（通常Memoryバックアップには画像本体が含まれないため、
+// 別端末や画像を持たない状態へ復元した場合に「参照だけ残って画像が無い」状態が
+// 発生しうる）。
+// 絶対に行わないこと：
+//   ・Memory本体の削除／本文・category・tags等の書き換え
+//   ・attachments store側の削除（孤立画像はここでは一切削除しない。将来のクリーンアップ機能に委ねる）
+//   ・attachments storeの初期化
+// あくまで「存在しない参照IDだけを安全に除外する」処理に限定する。
+function nexusReconcileMemoryAttachmentIds() {
+  return nexusMemoryGetDB().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction([NEXUS_MEMORY_STORE, NEXUS_ATTACHMENT_STORE], 'readwrite');
+    const memoryStore = tx.objectStore(NEXUS_MEMORY_STORE);
+    const attachStore = tx.objectStore(NEXUS_ATTACHMENT_STORE);
+    let existingIds = null;
+    let allMemories = null;
+    let fixedCount = 0;
+    const tryFinish = () => {
+      if (existingIds === null || allMemories === null) return;
+      allMemories.forEach(m => {
+        const ids = m.attachmentIds || [];
+        if (ids.length === 0) return;
+        const filtered = ids.filter(id => existingIds.has(id));
+        if (filtered.length !== ids.length) {
+          fixedCount++;
+          memoryStore.put({
+            ...m,
+            attachmentIds: filtered
+          });
+        }
+      });
+    };
+    const keysReq = attachStore.getAllKeys();
+    keysReq.onsuccess = () => {
+      existingIds = new Set(keysReq.result || []);
+      tryFinish();
+    };
+    const memReq = memoryStore.getAll();
+    memReq.onsuccess = () => {
+      allMemories = memReq.result || [];
+      tryFinish();
+    };
+    tx.oncomplete = () => resolve(fixedCount);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  }));
+}
+
 // ── MemoryService（UIが実際に呼ぶのはここだけ）──────────────────
 // 新規Memoryの初期値・並び替え・更新時刻の付与など、業務ロジックをここに集約する。
 // 将来IndexedDB以外のストレージへ差し替える場合も、この関数群のシグネチャを保てば
@@ -37077,6 +37297,8 @@ const MemoryService = {
       isPrivate: !!p.isPrivate,
       analysisHistoryIds: p.analysisHistoryIds || [],
       parentMemoryId: p.parentMemoryId || null,
+      // 画像添付（Second Brain画像機能）。画像本体は持たず、attachmentsストアのIDのみ。
+      attachmentIds: p.attachmentIds || [],
       // 自動整理用フィールド（候補のみ。ユーザーが確定した上記のcategory/tags/isPrivate/
       // relatedMemoryIdsを自動で上書きすることはない）。
       suggestedCategory: p.suggestedCategory || '',
@@ -37134,15 +37356,373 @@ const MemoryService = {
   importBackup(data, mode) {
     if (!data || !Array.isArray(data.memories)) return Promise.reject(new Error('Memoryバックアップの形式ではありません'));
     const run = mode === 'replace' ? nexusMemoryClearAllRaw() : Promise.resolve();
-    return run.then(() => nexusMemoryBulkPutRaw(data.memories.map(nexusMemoryWithDefaults))).then(() => data.memories.length);
+    // 通常Memoryバックアップには画像本体が含まれないため、復元後に
+    // attachmentIdsのうちattachmentsストアに実在しないIDだけを安全に除外する
+    // （Memory本体・本文・attachments storeの画像自体には一切手を加えない）。
+    return run.then(() => nexusMemoryBulkPutRaw(data.memories.map(nexusMemoryWithDefaults))).then(() => nexusReconcileMemoryAttachmentIds()).then(() => data.memories.length);
   },
   getPseudonymMap() {
     return nexusPseudonymMapGetRaw();
   },
   savePseudonymMap(map) {
     return nexusPseudonymMapPutRaw(map);
+  },
+  // ── 画像添付 ──────────────────────────────────────────────
+  getAttachmentsByMemoryId(memoryId) {
+    return nexusAttachmentsByMemoryIdRaw(memoryId);
+  },
+  getAttachment(id) {
+    return nexusAttachmentGetRaw(id);
+  },
+  getAllAttachments() {
+    return nexusAttachmentGetAllRaw();
+  },
+  addAttachments(memoryId, records) {
+    return nexusMemoryAddAttachmentsTx(memoryId, records).then(r => ({
+      memory: nexusMemoryWithDefaults(r.memory),
+      records: r.records,
+      skippedDuplicateIds: r.skippedDuplicateIds || []
+    }));
+  },
+  deleteAttachment(memoryId, attachmentId) {
+    return nexusMemoryDeleteAttachmentTx(memoryId, attachmentId).then(m => m ? nexusMemoryWithDefaults(m) : m);
+  },
+  bulkPutAttachments(records) {
+    return nexusAttachmentBulkPutRaw(records);
   }
 };
+
+// ══════════════════════════════════════════════════════════════
+// ── 画像添付：圧縮・サムネイル生成パイプライン ─────────────────────
+// ══════════════════════════════════════════════════════════════
+// 元画像（iPhone写真は数MBになりうる）をそのままIndexedDBへ保存せず、必ずcanvasで
+// 再エンコードしてから保存する。再エンコードすることでGPS等のEXIFメタデータも
+// 副次的に落ちる（canvasはピクセルデータしか保持しないため）。
+const NEXUS_ATTACHMENT_MAX_COUNT = 3;
+const NEXUS_ATTACHMENT_MAX_DIM = 1600;
+const NEXUS_ATTACHMENT_THUMB_MAX_DIM = 360;
+const NEXUS_ATTACHMENT_TARGET_BYTES = 500 * 1024; // 目標：1枚200〜500KB程度
+const NEXUS_ATTACHMENT_SOFT_LIMIT_BYTES = 900 * 1024; // 圧縮しても大きい画像の許容上限目安
+const NEXUS_ATTACHMENT_MIN_QUALITY = 0.55; // これ以上は下げない（文字が読めなくなるのを防ぐ）
+const NEXUS_ATTACHMENT_MIN_DIM = 1000; // これ以上は縮めない（チラシ・資料の文字対策）
+
+// 画像デコード：createImageBitmapが使えればそれを優先（EXIF回転を自動反映しつつ
+// メタデータ自体は保持しない）。使えない古い環境ではHTMLImageElementにフォールバック。
+function nexusImageDecodeFile(file) {
+  if (typeof createImageBitmap === 'function') {
+    return createImageBitmap(file).catch(() => nexusImageDecodeViaElement(file));
+  }
+  return nexusImageDecodeViaElement(file);
+}
+function nexusImageDecodeViaElement(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('画像を読み込めませんでした'));
+    };
+    img.src = url;
+  });
+}
+function nexusImageSourceSize(src) {
+  return {
+    width: src.width || src.naturalWidth || 0,
+    height: src.height || src.naturalHeight || 0
+  };
+}
+// srcを指定辺以内に収まるサイズへ描画し、canvasを返す。
+function nexusImageDrawToCanvas(src, maxDim) {
+  const {
+    width,
+    height
+  } = nexusImageSourceSize(src);
+  if (!width || !height) throw new Error('画像サイズを取得できませんでした');
+  const scale = Math.min(1, maxDim / Math.max(width, height));
+  const outW = Math.max(1, Math.round(width * scale));
+  const outH = Math.max(1, Math.round(height * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = outW;
+  canvas.height = outH;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(src, 0, 0, outW, outH);
+  return {
+    canvas,
+    width: outW,
+    height: outH
+  };
+}
+// canvas.toBlobをPromise化。指定mimeTypeでの出力に対応していないブラウザは
+// 暗黙にPNG等へフォールバックすることがあるため、返ってきたBlobのtypeを検証する。
+function nexusCanvasToBlob(canvas, mimeType, quality) {
+  return new Promise(resolve => {
+    canvas.toBlob(blob => resolve(blob), mimeType, quality);
+  });
+}
+async function nexusCanvasEncodeBestEffort(canvas, quality) {
+  const webp = await nexusCanvasToBlob(canvas, 'image/webp', quality);
+  if (webp && webp.type === 'image/webp' && webp.size > 0) {
+    return {
+      blob: webp,
+      mimeType: 'image/webp'
+    };
+  }
+  const jpeg = await nexusCanvasToBlob(canvas, 'image/jpeg', quality);
+  if (jpeg && jpeg.size > 0) {
+    return {
+      blob: jpeg,
+      mimeType: jpeg.type || 'image/jpeg'
+    };
+  }
+  return null;
+}
+// 段階的に画質・サイズを落としながら、目標ファイルサイズに近づける。
+// 文字が読めなくなるほどの過圧縮を避けるため、品質・辺の下限を設けている。
+async function nexusImageCompressMain(src) {
+  const attempts = [{
+    maxDim: NEXUS_ATTACHMENT_MAX_DIM,
+    quality: 0.82
+  }, {
+    maxDim: NEXUS_ATTACHMENT_MAX_DIM,
+    quality: 0.7
+  }, {
+    maxDim: 1300,
+    quality: 0.65
+  }, {
+    maxDim: NEXUS_ATTACHMENT_MIN_DIM,
+    quality: NEXUS_ATTACHMENT_MIN_QUALITY
+  }];
+  let best = null;
+  for (const a of attempts) {
+    const {
+      canvas,
+      width,
+      height
+    } = nexusImageDrawToCanvas(src, a.maxDim);
+    const encoded = await nexusCanvasEncodeBestEffort(canvas, a.quality);
+    if (!encoded) continue;
+    best = {
+      ...encoded,
+      width,
+      height
+    };
+    if (encoded.blob.size <= NEXUS_ATTACHMENT_TARGET_BYTES) break;
+    if (encoded.blob.size <= NEXUS_ATTACHMENT_SOFT_LIMIT_BYTES) break;
+  }
+  return best;
+}
+async function nexusImageCompressThumbnail(src) {
+  const {
+    canvas,
+    width,
+    height
+  } = nexusImageDrawToCanvas(src, NEXUS_ATTACHMENT_THUMB_MAX_DIM);
+  const encoded = await nexusCanvasEncodeBestEffort(canvas, 0.7);
+  if (!encoded) return null;
+  return {
+    ...encoded,
+    width,
+    height
+  };
+}
+async function nexusSha256OfBlob(blob) {
+  if (!(window.crypto && window.crypto.subtle && window.crypto.subtle.digest)) return null;
+  try {
+    const buf = await blob.arrayBuffer();
+    const hashBuf = await window.crypto.subtle.digest('SHA-256', buf);
+    return Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  } catch (e) {
+    return null;
+  }
+}
+// 1ファイルを受け取り、圧縮済み本画像＋サムネイルを含むattachmentレコード候補を作る。
+// 失敗した場合はerrorフィールドを持つオブジェクトを返す（呼び出し側が
+// 「この画像は保存できませんでした」を表示できるように、例外を投げず握りつぶす）。
+async function nexusPrepareImageAttachment(file, memoryId) {
+  try {
+    const src = await nexusImageDecodeFile(file);
+    const main = await nexusImageCompressMain(src);
+    if (!main) return {
+      error: 'この画像は保存できませんでした'
+    };
+    const thumb = await nexusImageCompressThumbnail(src);
+    const sha256 = await nexusSha256OfBlob(main.blob);
+    if (src.close) src.close(); // ImageBitmapのリソース解放
+    return {
+      id: `ATTACH_${uid()}`,
+      memoryId: memoryId || null,
+      blob: main.blob,
+      thumbnailBlob: thumb ? thumb.blob : main.blob,
+      mimeType: main.mimeType,
+      size: main.blob.size,
+      width: main.width,
+      height: main.height,
+      createdAt: new Date().toISOString(),
+      originalFileName: file.name || '',
+      sha256
+    };
+  } catch (e) {
+    return {
+      error: 'この画像は保存できませんでした'
+    };
+  }
+}
+
+// ── 画像ストレージ使用量（純粋関数：attachmentレコード一覧から集計するだけ）──
+function nexusAttachmentStorageStats(records) {
+  const list = records || [];
+  let mainBytes = 0;
+  let thumbBytes = 0;
+  list.forEach(r => {
+    mainBytes += r.size || (r.blob && r.blob.size) || 0;
+    thumbBytes += (r.thumbnailBlob && r.thumbnailBlob.size) || 0;
+  });
+  return {
+    count: list.length,
+    mainBytes,
+    thumbBytes,
+    totalBytes: mainBytes + thumbBytes
+  };
+}
+function nexusFormatBytes(n) {
+  if (!n || n <= 0) return '0KB';
+  const kb = n / 1024;
+  if (kb < 1024) return `${kb.toFixed(kb < 10 ? 1 : 0)}KB`;
+  const mb = kb / 1024;
+  if (mb < 1024) return `${mb.toFixed(mb < 10 ? 1 : 0)}MB`;
+  return `${(mb / 1024).toFixed(2)}GB`;
+}
+
+// ══════════════════════════════════════════════════════════════
+// ── 画像込み完全バックアップ（.nexusmemory：独自の単純binary container）──
+// ══════════════════════════════════════════════════════════════
+// 通常のMemoryバックアップJSON（Base64禁止・画像本体は含まない）とは別に、画像も
+// まとめて長期保存するための専用形式。Base64化による約33%の容量増加を避けるため、
+// ヘッダ＋マニフェストJSON＋Blobをそのまま連結したバイナリコンテナとする。
+// 外部ZIPライブラリ・CDN依存は一切使わず、ブラウザ標準のBlob/ArrayBufferのみで組み立てる。
+//
+// レイアウト：
+//   [0..7]   マジック文字列 "NXSMEMB1"（ASCII 8バイト。フォーマット＋バージョンを兼ねる）
+//   [8..11]  manifestLength（uint32 little-endian）
+//   [12..]   マニフェストJSON（UTF-8、manifestLength バイト）
+//   [以降]   各attachmentの本画像Blob・サムネイルBlobを、マニフェストのoffset/lengthの
+//            通りに単純連結したもの（offsetはこの領域の先頭を0とする相対位置）
+const NEXUS_FULL_BACKUP_MAGIC = 'NXSMEMB1';
+function nexusBuildFullBackupBlob(memories, attachmentRecords) {
+  const manifestAttachments = [];
+  const parts = [];
+  let offset = 0;
+  (attachmentRecords || []).forEach(r => {
+    const mainBlob = r.blob;
+    const thumbBlob = r.thumbnailBlob || r.blob;
+    if (!mainBlob) return;
+    const blobOffset = offset;
+    const blobLength = mainBlob.size;
+    parts.push(mainBlob);
+    offset += blobLength;
+    const thumbOffset = offset;
+    const thumbLength = thumbBlob.size;
+    parts.push(thumbBlob);
+    offset += thumbLength;
+    manifestAttachments.push({
+      id: r.id,
+      memoryId: r.memoryId,
+      mimeType: r.mimeType,
+      size: r.size,
+      width: r.width,
+      height: r.height,
+      createdAt: r.createdAt,
+      originalFileName: r.originalFileName,
+      sha256: r.sha256,
+      blobOffset,
+      blobLength,
+      thumbMimeType: thumbBlob.type || r.mimeType,
+      thumbOffset,
+      thumbLength
+    });
+  });
+  const manifest = {
+    formatVersion: 1,
+    exportedAt: new Date().toISOString(),
+    memories: memories || [],
+    attachments: manifestAttachments
+  };
+  const manifestBytes = new TextEncoder().encode(JSON.stringify(manifest));
+  const header = new ArrayBuffer(12);
+  const headerView = new DataView(header);
+  for (let i = 0; i < 8; i++) headerView.setUint8(i, NEXUS_FULL_BACKUP_MAGIC.charCodeAt(i));
+  headerView.setUint32(8, manifestBytes.byteLength, true);
+  return new Blob([header, manifestBytes, ...parts], {
+    type: 'application/octet-stream'
+  });
+}
+function nexusBuildFullBackupFileBlob() {
+  return Promise.all([MemoryService.exportBackup().then(d => d.memories), MemoryService.getAllAttachments()]).then(([memories, attachmentRecords]) => nexusBuildFullBackupBlob(memories, attachmentRecords));
+}
+// 復元失敗時に既存データを一切変更しないよう、マニフェストの検証まで完了してから
+// 初めてIndexedDBへの書き込みを行う（検証途中でエラーが出た場合は何も書き込まれない）。
+async function nexusParseFullBackupFile(file) {
+  const headerBuf = await file.slice(0, 12).arrayBuffer();
+  if (headerBuf.byteLength < 12) throw new Error('画像込み完全バックアップの形式ではありません');
+  const headerView = new DataView(headerBuf);
+  let magic = '';
+  for (let i = 0; i < 8; i++) magic += String.fromCharCode(headerView.getUint8(i));
+  if (magic !== NEXUS_FULL_BACKUP_MAGIC) throw new Error('画像込み完全バックアップの形式ではありません');
+  const manifestLength = headerView.getUint32(8, true);
+  const manifestBuf = await file.slice(12, 12 + manifestLength).arrayBuffer();
+  let manifest;
+  try {
+    manifest = JSON.parse(new TextDecoder().decode(manifestBuf));
+  } catch (e) {
+    throw new Error('画像込み完全バックアップの読み込みに失敗しました（ファイルが壊れている可能性があります）');
+  }
+  if (!manifest || !Array.isArray(manifest.memories) || !Array.isArray(manifest.attachments)) {
+    throw new Error('画像込み完全バックアップの形式が正しくありません');
+  }
+  const dataStart = 12 + manifestLength;
+  const attachmentRecords = manifest.attachments.map(a => ({
+    id: a.id,
+    memoryId: a.memoryId,
+    blob: file.slice(dataStart + a.blobOffset, dataStart + a.blobOffset + a.blobLength, a.mimeType),
+    thumbnailBlob: file.slice(dataStart + a.thumbOffset, dataStart + a.thumbOffset + a.thumbLength, a.thumbMimeType || a.mimeType),
+    mimeType: a.mimeType,
+    size: a.size,
+    width: a.width,
+    height: a.height,
+    createdAt: a.createdAt,
+    originalFileName: a.originalFileName,
+    sha256: a.sha256
+  }));
+  return {
+    memories: manifest.memories,
+    attachmentRecords,
+    exportedAt: manifest.exportedAt,
+    formatVersion: manifest.formatVersion
+  };
+}
+// Memory本体の復元は、既存の通常バックアップ復元（MemoryService.importBackup、常にmerge＝
+// 同一IDは上書き）と同じ方針にそろえる。IDはMemory・attachmentともに維持する。
+async function nexusRestoreFullBackup(file) {
+  const parsed = await nexusParseFullBackupFile(file);
+  // 画像を先にattachmentsストアへ書き込んでから、Memory本体を復元する（この順序が重要）。
+  // MemoryService.importBackupは内部でnexusReconcileMemoryAttachmentIdsを実行し、
+  // attachmentsストアに実在しないIDだけを取り除く安全対策を行うため、画像が先に
+  // 揃っていないと今回復元する画像への参照まで誤って除外されてしまう。
+  if (parsed.attachmentRecords.length) await MemoryService.bulkPutAttachments(parsed.attachmentRecords);
+  await MemoryService.importBackup({
+    __nexusMemoryBackup: true,
+    version: 1,
+    memories: parsed.memories
+  }, 'merge');
+  return {
+    memoryCount: parsed.memories.length,
+    attachmentCount: parsed.attachmentRecords.length
+  };
+}
 
 // ── 関連する記憶を見つけるサービス層 ──────────────────────────────
 // AIは使用しない。タグ・カテゴリ・共通する単語・relatedEntityIds・手動関連付けから
@@ -37656,6 +38236,7 @@ function nexusMemoryWithDefaults(m) {
     manualCategoryConfirmed: false,
     manualTagsConfirmed: false,
     manualPrivateConfirmed: false,
+    attachmentIds: [],
     ...m
   };
 }
@@ -38038,6 +38619,20 @@ function useMemoryStore(customers) {
     setMemories(prev => prev.map(x => updated.find(u => u.id === x.id) || x));
     return updated.length;
   }), []);
+  // 画像添付の追加・削除。attachmentレコードの書き込みとMemory.attachmentIdsの更新は
+  // MemoryService側で1つのトランザクションにまとめているため、ここでは結果を
+  // ローカルstateへ反映するだけでよい。
+  const addAttachments = useCallback((memoryId, records) => {
+    if (!records || records.length === 0) return Promise.resolve(null);
+    return MemoryService.addAttachments(memoryId, records).then(r => {
+      setMemories(prev => prev.map(x => x.id === memoryId ? r.memory : x));
+      return r;
+    });
+  }, []);
+  const deleteAttachment = useCallback((memoryId, attachmentId) => MemoryService.deleteAttachment(memoryId, attachmentId).then(m => {
+    if (m) setMemories(prev => prev.map(x => x.id === memoryId ? m : x));
+    return m;
+  }), []);
   return {
     memories,
     loading,
@@ -38046,8 +38641,112 @@ function useMemoryStore(customers) {
     update,
     remove,
     reload,
-    reanalyzeAll
+    reanalyzeAll,
+    addAttachments,
+    deleteAttachment
   };
+}
+
+// ══════════════════════════════════════════════════════════════
+// ── 画像添付：表示用の共通部品 ─────────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+// 指定attachmentIdのBlob（本画像 or サムネイル）をIndexedDBから取得し、ObjectURLへ変換する。
+// アンマウント時・id変更時に必ずrevokeObjectURLし、メモリリークを防ぐ。
+function useNexusAttachmentUrl(attachmentId, field) {
+  const [url, setUrl] = useState(null);
+  React.useEffect(() => {
+    if (!attachmentId) {
+      setUrl(null);
+      return;
+    }
+    let cancelled = false;
+    let objectUrl = null;
+    MemoryService.getAttachment(attachmentId).then(rec => {
+      if (cancelled || !rec) return;
+      const blob = field === 'main' ? rec.blob : rec.thumbnailBlob || rec.blob;
+      if (!blob) return;
+      objectUrl = URL.createObjectURL(blob);
+      setUrl(objectUrl);
+    }).catch(() => {});
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [attachmentId, field]);
+  return url;
+}
+// 画面に入ってから初めてtrueになる（IntersectionObserver）。数百〜数千件のMemory一覧で、
+// 画面外のサムネイルまで一括ロードしないようにするため。未対応環境では即表示にフォールバック。
+function useNexusInView(rootMargin) {
+  const ref = React.useRef(null);
+  const [inView, setInView] = useState(false);
+  React.useEffect(() => {
+    if (inView) return;
+    const el = ref.current;
+    if (!el || typeof IntersectionObserver !== 'function') {
+      setInView(true);
+      return;
+    }
+    const obs = new IntersectionObserver(entries => {
+      if (entries.some(e => e.isIntersecting)) setInView(true);
+    }, {
+      rootMargin: rootMargin || '200px'
+    });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [inView]);
+  return [ref, inView];
+}
+// 一覧・カード用の小さなサムネイル1枚。
+function NexusAttachmentThumb({
+  attachmentId,
+  size,
+  onClick
+}) {
+  const url = useNexusAttachmentUrl(attachmentId, 'thumb');
+  const s = size || 56;
+  return /*#__PURE__*/React.createElement("div", {
+    onClick: onClick,
+    style: {
+      width: s,
+      height: s,
+      borderRadius: 8,
+      overflow: 'hidden',
+      background: 'var(--bg)',
+      border: '1px solid var(--border)',
+      flexShrink: 0,
+      cursor: onClick ? 'pointer' : 'default'
+    }
+  }, url && /*#__PURE__*/React.createElement("img", {
+    src: url,
+    alt: "",
+    style: {
+      width: '100%',
+      height: '100%',
+      objectFit: 'cover',
+      display: 'block'
+    }
+  }));
+}
+// Memoryカード内のサムネイル行（画面に入ってから読み込む）。PRIVATEでマスクされている
+// 場合は呼び出し元がそもそもレンダリングしない（masked時は「🔒 画像あり」の文字だけ）。
+function MemoryCardThumbRow({
+  attachmentIds
+}) {
+  const [ref, inView] = useNexusInView();
+  if (!attachmentIds || attachmentIds.length === 0) return null;
+  return /*#__PURE__*/React.createElement("div", {
+    ref: ref,
+    style: {
+      display: 'flex',
+      gap: 6,
+      marginTop: 8
+    }
+  }, inView && attachmentIds.slice(0, 3).map(id => /*#__PURE__*/React.createElement(NexusAttachmentThumb, {
+    key: id,
+    attachmentId: id,
+    size: 52
+  })));
 }
 
 // ── Memoryカード（一覧表示用）──────────────────────────────────
@@ -38060,6 +38759,7 @@ function MemoryCard({
   const hidden = !!(maskPrivateContent && memory.isPrivate);
   const excerpt = hidden ? '' : (memory.content || '').replace(/\n/g, ' ').slice(0, 80);
   const isLong = !hidden && (memory.content || '').length > 80;
+  const attachmentIds = memory.attachmentIds || [];
   return /*#__PURE__*/React.createElement("div", {
     className: "customer-card",
     onClick: () => onClick(memory)
@@ -38108,7 +38808,9 @@ function MemoryCard({
     style: {
       color: 'var(--danger)'
     }
-  }, "🔒 PRIVATEな記憶があります") : excerpt + (isLong ? '…' : '')), !hidden && (memory.tags || []).length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, "🔒 PRIVATEな記憶があります", attachmentIds.length > 0 ? "（画像あり）" : "") : excerpt + (isLong ? '…' : '')), !hidden && attachmentIds.length > 0 && /*#__PURE__*/React.createElement(MemoryCardThumbRow, {
+    attachmentIds: attachmentIds
+  }), !hidden && (memory.tags || []).length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       gap: 5,
@@ -38133,6 +38835,224 @@ function MemoryCard({
   }, "一致：", matchReasons.join('　')));
 }
 
+// ── 既に保存済みの画像1枚（編集画面用・削除ボタン付き）──────────────
+function MemoryExistingAttachmentChip({
+  attachmentId,
+  onDelete
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: 'relative'
+    }
+  }, /*#__PURE__*/React.createElement(NexusAttachmentThumb, {
+    attachmentId: attachmentId,
+    size: 64
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => onDelete(attachmentId),
+    "aria-label": "画像を削除",
+    style: {
+      position: 'absolute',
+      top: -6,
+      right: -6,
+      width: 22,
+      height: 22,
+      borderRadius: '50%',
+      border: 'none',
+      background: 'var(--danger)',
+      color: '#fff',
+      fontSize: 12,
+      fontWeight: 700,
+      lineHeight: '22px',
+      textAlign: 'center',
+      padding: 0,
+      cursor: 'pointer'
+    }
+  }, "×"));
+}
+// 圧縮処理中・完了・失敗のいずれかの状態にある、まだ保存していない画像1枚。
+function MemoryPendingAttachmentChip({
+  item,
+  onRemove
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: 'relative',
+      width: 64,
+      height: 64,
+      borderRadius: 8,
+      overflow: 'hidden',
+      background: 'var(--bg)',
+      border: '1px solid var(--border)',
+      flexShrink: 0,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center'
+    }
+  }, item.status === 'processing' && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 10,
+      color: 'var(--text-sub)'
+    }
+  }, "圧縮中..."), item.status === 'error' && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 9.5,
+      color: 'var(--danger)',
+      textAlign: 'center',
+      padding: 2
+    }
+  }, "保存できません"), item.status === 'ready' && item.previewUrl && /*#__PURE__*/React.createElement("img", {
+    src: item.previewUrl,
+    alt: "",
+    style: {
+      width: '100%',
+      height: '100%',
+      objectFit: 'cover',
+      display: 'block'
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => onRemove(item.localId),
+    "aria-label": "画像を取り消す",
+    style: {
+      position: 'absolute',
+      top: -6,
+      right: -6,
+      width: 22,
+      height: 22,
+      borderRadius: '50%',
+      border: 'none',
+      background: 'var(--danger)',
+      color: '#fff',
+      fontSize: 12,
+      fontWeight: 700,
+      lineHeight: '22px',
+      textAlign: 'center',
+      padding: 0,
+      cursor: 'pointer'
+    }
+  }, "×"));
+}
+// ── 写真追加ピッカー（クイック追加・編集フォーム共通）──────────────────
+// 選択直後にブラウザ内で自動圧縮・サムネイル生成する（元画像はそのまま保存しない）。
+// ここで作る「保存準備ができた添付レコード」はまだIndexedDBへ書き込まれておらず、
+// 呼び出し元がMemory本体の保存に成功した後、MemoryService.addAttachmentsで
+// まとめて書き込む（Memoryと添付を別々のタイミングで中途半端に保存しないため）。
+function MemoryAttachmentPicker({
+  existingAttachmentIds,
+  onDeleteExisting,
+  onPendingChange
+}) {
+  const [pending, setPending] = useState([]);
+  React.useEffect(() => () => {
+    pending.forEach(p => p.previewUrl && URL.revokeObjectURL(p.previewUrl));
+  }, []);
+  const existingCount = (existingAttachmentIds || []).length;
+  const readyPendingCount = pending.filter(p => p.status !== 'error').length;
+  const remainingSlots = Math.max(0, NEXUS_ATTACHMENT_MAX_COUNT - existingCount - readyPendingCount);
+  const notify = list => onPendingChange(list.filter(p => p.status === 'ready').map(p => p.record));
+  const handleFiles = fileList => {
+    const files = Array.from(fileList || []).slice(0, remainingSlots);
+    if (files.length === 0) return;
+    const entries = files.map(f => ({
+      localId: uid(),
+      status: 'processing',
+      fileName: f.name,
+      previewUrl: null,
+      record: null
+    }));
+    setPending(prev => {
+      const next = [...prev, ...entries];
+      notify(next);
+      return next;
+    });
+    files.forEach((f, i) => {
+      const localId = entries[i].localId;
+      nexusPrepareImageAttachment(f, null).then(result => {
+        setPending(prev => {
+          const next = prev.map(p => {
+            if (p.localId !== localId) return p;
+            if (result.error) return {
+              ...p,
+              status: 'error'
+            };
+            return {
+              ...p,
+              status: 'ready',
+              record: result,
+              previewUrl: URL.createObjectURL(result.blob)
+            };
+          });
+          notify(next);
+          return next;
+        });
+      });
+    });
+  };
+  const removePending = localId => {
+    setPending(prev => {
+      const target = prev.find(p => p.localId === localId);
+      if (target && target.previewUrl) URL.revokeObjectURL(target.previewUrl);
+      const next = prev.filter(p => p.localId !== localId);
+      notify(next);
+      return next;
+    });
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "form-label"
+  }, "写真（任意・最大", NEXUS_ATTACHMENT_MAX_COUNT, "枚）"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 8,
+      marginBottom: 6
+    }
+  }, (existingAttachmentIds || []).map(id => /*#__PURE__*/React.createElement(MemoryExistingAttachmentChip, {
+    key: id,
+    attachmentId: id,
+    onDelete: onDeleteExisting
+  })), pending.map(p => /*#__PURE__*/React.createElement(MemoryPendingAttachmentChip, {
+    key: p.localId,
+    item: p,
+    onRemove: removePending
+  })), remainingSlots > 0 && /*#__PURE__*/React.createElement("label", {
+    className: "btn btn-outline btn-sm",
+    style: {
+      width: 64,
+      height: 64,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      textAlign: 'center',
+      fontSize: 11,
+      lineHeight: 1.3,
+      cursor: 'pointer',
+      padding: 4
+    }
+  }, "📷 写真を追加", /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: "image/*",
+    multiple: true,
+    style: {
+      display: 'none'
+    },
+    onChange: e => {
+      handleFiles(e.target.files);
+      e.target.value = '';
+    }
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--text-sub)',
+      lineHeight: 1.5
+    }
+  }, "顧客書類・証券・住所などの画像には個人情報が含まれる場合があります。画像は端末内のブラウザ保存領域に保存され、AI分析パックへ自動で送信されることはありません。"));
+}
+
 // ── ＋ 記憶する（クイック追加シート）─────────────────────────────
 // 「思った瞬間に数秒で残せる」ことを最優先にする。本文の入力・保存だけで完結し、
 // カテゴリ・タグ・非公開設定は開かなくても保存できる（任意・後から整理できる）。
@@ -38146,6 +39066,7 @@ function MemoryQuickAddSheet({
   const [tagsText, setTagsText] = useState('');
   const [isPrivate, setIsPrivate] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [pendingAttachments, setPendingAttachments] = useState([]);
   const canSave = content.trim().length > 0 && !saving;
   const doSave = () => {
     if (!canSave) return;
@@ -38156,7 +39077,7 @@ function MemoryQuickAddSheet({
       category,
       tags,
       isPrivate
-    });
+    }, pendingAttachments);
   };
   return /*#__PURE__*/React.createElement("div", {
     className: "overlay",
@@ -38177,6 +39098,10 @@ function MemoryQuickAddSheet({
     placeholder: "思ったこと・気づき・アイデアなど、何でも自由に...",
     value: content,
     onChange: e => setContent(e.target.value)
+  }), /*#__PURE__*/React.createElement(MemoryAttachmentPicker, {
+    existingAttachmentIds: [],
+    onDeleteExisting: () => {},
+    onPendingChange: setPendingAttachments
   }), !expanded ? /*#__PURE__*/React.createElement("button", {
     type: "button",
     onClick: () => setExpanded(true),
@@ -38247,7 +39172,8 @@ function MemoryForm({
   editing,
   customers,
   onSave,
-  onClose
+  onClose,
+  onDeleteAttachment
 }) {
   const [content, setContent] = useState(editing ? editing.content || '' : '');
   const [category, setCategory] = useState(editing ? editing.category || '' : '');
@@ -38255,6 +39181,8 @@ function MemoryForm({
   const [isPrivate, setIsPrivate] = useState(editing ? !!editing.isPrivate : false);
   const [relatedEntityIds, setRelatedEntityIds] = useState(editing && editing.relatedEntityIds || []);
   const [customerSearch, setCustomerSearch] = useState('');
+  const [existingAttachmentIds, setExistingAttachmentIds] = useState(editing && editing.attachmentIds || []);
+  const [pendingAttachments, setPendingAttachments] = useState([]);
   const candidates = customerSearch.trim() ? (customers || []).filter(c => {
     const n = nexusDisplayName(c);
     return n && n.includes(customerSearch.trim());
@@ -38268,6 +39196,14 @@ function MemoryForm({
     }]);
   };
   const removeEntity = (type, id) => setRelatedEntityIds(relatedEntityIds.filter(e => !(e.type === type && e.id === id)));
+  // 既存画像の削除は編集画面上で即座に反映する（保存ボタンを待たない）。IndexedDB側の
+  // 実削除（attachmentレコード削除＋Memory.attachmentIdsからの除去）はonDeleteAttachment
+  // 経由でその場で確定させ、この画面のローカル表示もあわせて更新する。
+  const handleDeleteExisting = attachmentId => {
+    if (!editing) return;
+    onDeleteAttachment(editing.id, attachmentId);
+    setExistingAttachmentIds(prev => prev.filter(x => x !== attachmentId));
+  };
   const canSave = content.trim().length > 0;
   const save = () => {
     if (!canSave) return;
@@ -38279,7 +39215,7 @@ function MemoryForm({
       tags,
       isPrivate,
       relatedEntityIds
-    });
+    }, pendingAttachments);
   };
   return /*#__PURE__*/React.createElement("div", {
     className: "full-screen"
@@ -38318,6 +39254,12 @@ function MemoryForm({
     placeholder: "思ったこと・気づき・アイデアなど、何でも自由に...",
     value: content,
     onChange: e => setContent(e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement(MemoryAttachmentPicker, {
+    existingAttachmentIds: existingAttachmentIds,
+    onDeleteExisting: handleDeleteExisting,
+    onPendingChange: setPendingAttachments
   })), /*#__PURE__*/React.createElement("div", {
     className: "section-header"
   }, "カテゴリ（任意）"), /*#__PURE__*/React.createElement("div", {
@@ -38630,6 +39572,147 @@ function MemoryPersonFilterView({
     }
   }, "まだありません") : candidates.map(row));
 }
+// ── 画像ストレージ使用量パネル（折りたたみ・普段は邪魔にならない）──────────
+// 画像枚数・NEXUS画像使用量・端末全体のusage/quota（取得できる場合のみ）・容量警告・
+// 永続化(persist)リクエストを表示する。navigator.storage.estimate()が使えない環境
+// （Safari/iPhoneで取得できない場合を含む）でも、NEXUS内の画像容量だけは表示する。
+function NexusImageStoragePanel() {
+  const [open, setOpen] = useState(false);
+  const [stats, setStats] = useState(null);
+  const [quota, setQuota] = useState(null);
+  const [quotaChecked, setQuotaChecked] = useState(false);
+  const [persistState, setPersistState] = useState(null);
+  React.useEffect(() => {
+    if (!open) return;
+    MemoryService.getAllAttachments().then(list => setStats(nexusAttachmentStorageStats(list))).catch(() => {});
+    if (navigator.storage && navigator.storage.estimate) {
+      navigator.storage.estimate().then(e => {
+        setQuota(e);
+        setQuotaChecked(true);
+      }).catch(() => setQuotaChecked(true));
+    } else {
+      setQuotaChecked(true);
+    }
+  }, [open]);
+  const requestPersist = () => {
+    if (!(navigator.storage && navigator.storage.persist)) {
+      setPersistState('unsupported');
+      return;
+    }
+    navigator.storage.persist().then(granted => setPersistState(granted ? 'granted' : 'denied')).catch(() => setPersistState('unsupported'));
+  };
+  if (!open) {
+    return /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      className: "btn btn-outline btn-full",
+      style: {
+        fontSize: 11.5,
+        padding: '7px 8px',
+        marginBottom: 8
+      },
+      onClick: () => setOpen(true)
+    }, "🖼 画像ストレージ");
+  }
+  const usageRatio = quota && quota.quota ? quota.usage / quota.quota : null;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginBottom: 8,
+      fontSize: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 700
+    }
+  }, "🖼 画像ストレージ"), /*#__PURE__*/React.createElement("span", {
+    onClick: () => setOpen(false),
+    style: {
+      cursor: 'pointer',
+      color: 'var(--text-sub)',
+      fontSize: 11
+    }
+  }, "閉じる")), !stats ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: 'var(--text-sub)'
+    }
+  }, "読み込み中...") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 4
+    }
+  }, "画像 ", stats.count, "枚　／　NEXUS画像使用量 ", nexusFormatBytes(stats.totalBytes)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: 'var(--text-sub)',
+      fontSize: 11,
+      marginBottom: 6
+    }
+  }, "本体 ", nexusFormatBytes(stats.mainBytes), "　サムネイル ", nexusFormatBytes(stats.thumbBytes)), stats.totalBytes > 500 * 1024 * 1024 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: 'var(--warning, #B45309)',
+      fontSize: 11,
+      marginBottom: 6
+    }
+  }, "画像が増えています。バックアップを確認してください。")), quotaChecked && (quota && quota.quota ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("div", null, "この端末で使用中：", nexusFormatBytes(quota.usage), " / ", nexusFormatBytes(quota.quota)), usageRatio >= 0.85 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: 'var(--danger)',
+      fontSize: 11,
+      fontWeight: 700
+    }
+  }, "⚠️ 保存領域の残りが少なくなっています"), usageRatio >= 0.7 && usageRatio < 0.85 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: 'var(--warning, #B45309)',
+      fontSize: 11
+    }
+  }, "保存領域の使用率が高くなっています")) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: 'var(--text-sub)',
+      fontSize: 11,
+      marginBottom: 6
+    }
+  }, "この端末のブラウザ保存容量は取得できませんでした（NEXUS画像の使用量のみ表示しています）")), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: {
+      fontSize: 11,
+      padding: '6px 6px',
+      marginTop: 4,
+      marginBottom: 4
+    },
+    onClick: requestPersist
+  }, "端末に永続保存をリクエスト"), persistState === 'granted' && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: '#2E7D32'
+    }
+  }, "✅ 永続化が許可されました"), persistState === 'denied' && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)'
+    }
+  }, "永続化は許可されませんでした（端末の空き容量などにより自動的に削除される可能性があります）"), persistState === 'unsupported' && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)'
+    }
+  }, "この端末・ブラウザでは永続化のリクエストに対応していません"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--text-sub)',
+      marginTop: 6,
+      lineHeight: 1.5
+    }
+  }, "画像は端末内のブラウザ保存領域に保存されます。iCloud写真へ保存されるわけではありません。"));
+}
 function MemoryTab({
   memories,
   loading,
@@ -38637,6 +39720,8 @@ function MemoryTab({
   onSelect,
   onExport,
   onImportFile,
+  onExportFull,
+  onImportFullFile,
   onOpenInsightForm,
   onReanalyzeAll,
   entityFilter,
@@ -38916,7 +40001,45 @@ function MemoryTab({
       display: 'none'
     },
     onChange: onImportFile
-  })))), personFilterCustomer ? /*#__PURE__*/React.createElement(MemoryPersonFilterView, {
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: 'var(--text-sub)',
+      marginTop: 4,
+      lineHeight: 1.5
+    }
+  }, "通常バックアップには画像本体は含まれません。画像も保存する場合は「画像込み完全バックアップ」をご利用ください。"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      marginTop: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline",
+    style: {
+      flex: 1,
+      fontSize: 10.5,
+      padding: '6px 6px'
+    },
+    onClick: onExportFull
+  }, "📦 画像込み完全バックアップ"), /*#__PURE__*/React.createElement("label", {
+    className: "btn btn-outline",
+    style: {
+      flex: 1,
+      fontSize: 10.5,
+      padding: '6px 6px',
+      textAlign: 'center',
+      cursor: 'pointer'
+    }
+  }, "📦 画像込み復元", /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: ".nexusmemory",
+    style: {
+      display: 'none'
+    },
+    onChange: onImportFullFile
+  }))), /*#__PURE__*/React.createElement(NexusImageStoragePanel, null)), personFilterCustomer ? /*#__PURE__*/React.createElement(MemoryPersonFilterView, {
     customer: personFilterCustomer,
     memories: memories,
     onSelect: onSelect,
@@ -39484,6 +40607,119 @@ function NexusMemoryExploreScreen({
     }
   }, "🤖 選択した", selectedIds.length, "件をAI分析パックに追加"))));
 }
+// Memory詳細画面用：画像1枚（サムネイル表示・タップで拡大・削除ボタン付き）
+function MemoryDetailAttachmentImage({
+  attachmentId,
+  onDelete,
+  onOpen
+}) {
+  const url = useNexusAttachmentUrl(attachmentId, 'thumb');
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: 'relative',
+      width: 92,
+      height: 92
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    onClick: () => onOpen(attachmentId),
+    style: {
+      width: '100%',
+      height: '100%',
+      borderRadius: 8,
+      overflow: 'hidden',
+      background: 'var(--bg)',
+      border: '1px solid var(--border)',
+      cursor: 'pointer'
+    }
+  }, url && /*#__PURE__*/React.createElement("img", {
+    src: url,
+    alt: "",
+    style: {
+      width: '100%',
+      height: '100%',
+      objectFit: 'cover',
+      display: 'block'
+    }
+  })), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: e => {
+      e.stopPropagation();
+      onDelete(attachmentId);
+    },
+    "aria-label": "画像を削除",
+    style: {
+      position: 'absolute',
+      top: -6,
+      right: -6,
+      width: 24,
+      height: 24,
+      borderRadius: '50%',
+      border: 'none',
+      background: 'var(--danger)',
+      color: '#fff',
+      fontSize: 13,
+      fontWeight: 700,
+      lineHeight: '24px',
+      textAlign: 'center',
+      padding: 0,
+      cursor: 'pointer'
+    }
+  }, "×"));
+}
+// タップした画像を画面幅に収まる大きさで拡大表示する（iPhone画面幅を超えない）。
+function MemoryDetailAttachmentLightbox({
+  attachmentId,
+  onClose
+}) {
+  const url = useNexusAttachmentUrl(attachmentId, 'main');
+  if (!attachmentId) return null;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "overlay",
+    style: {
+      zIndex: 80,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 16,
+      boxSizing: 'border-box'
+    },
+    onClick: onClose
+  }, url && /*#__PURE__*/React.createElement("img", {
+    src: url,
+    alt: "",
+    style: {
+      maxWidth: '100%',
+      maxHeight: '85vh',
+      objectFit: 'contain',
+      borderRadius: 8
+    },
+    onClick: e => e.stopPropagation()
+  }));
+}
+// Memory詳細内の画像セクション本体。添付が無ければ何も表示しない。
+function MemoryAttachmentGallery({
+  attachmentIds,
+  onDelete
+}) {
+  const [openId, setOpenId] = useState(null);
+  if (!attachmentIds || attachmentIds.length === 0) return null;
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 8,
+      marginBottom: 10
+    }
+  }, attachmentIds.map(id => /*#__PURE__*/React.createElement(MemoryDetailAttachmentImage, {
+    key: id,
+    attachmentId: id,
+    onDelete: onDelete,
+    onOpen: setOpenId
+  }))), /*#__PURE__*/React.createElement(MemoryDetailAttachmentLightbox, {
+    attachmentId: openId,
+    onClose: () => setOpenId(null)
+  }));
+}
 function MemoryDetail({
   memory,
   allMemories,
@@ -39497,7 +40733,8 @@ function MemoryDetail({
   onOpenCustomer,
   onLinkEntity,
   onSearchTheme,
-  onExplore
+  onExplore,
+  onDeleteAttachment
 }) {
   const [confirmDel, setConfirmDel] = useState(false);
   return /*#__PURE__*/React.createElement("div", {
@@ -39573,7 +40810,10 @@ function MemoryDetail({
       wordBreak: 'break-word',
       marginBottom: 10
     }
-  }, memory.content), (memory.tags || []).length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, memory.content), /*#__PURE__*/React.createElement(MemoryAttachmentGallery, {
+    attachmentIds: memory.attachmentIds,
+    onDelete: onDeleteAttachment
+  }), (memory.tags || []).length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       flexWrap: 'wrap',
@@ -39841,7 +41081,13 @@ function NexusAiPackScreen({
       fontWeight: 700,
       marginRight: 4
     }
-  }, "🔒"), (m.content || '').slice(0, 60)), /*#__PURE__*/React.createElement("button", {
+  }, "🔒"), (m.attachmentIds || []).length > 0 && /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--text-sub)',
+      marginRight: 4,
+      fontSize: 11
+    }
+  }, "📎", m.attachmentIds.length), (m.content || '').slice(0, 60)), /*#__PURE__*/React.createElement("button", {
     type: "button",
     onClick: () => toggleRemove(m.id),
     style: {
@@ -39884,7 +41130,13 @@ function NexusAiPackScreen({
       flex: 1,
       fontSize: 13
     }
-  }, (m.content || '').slice(0, 60)), /*#__PURE__*/React.createElement("button", {
+  }, (m.attachmentIds || []).length > 0 && /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--text-sub)',
+      marginRight: 4,
+      fontSize: 11
+    }
+  }, "📎", m.attachmentIds.length), (m.content || '').slice(0, 60)), /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "btn btn-sm btn-outline",
     style: {
@@ -39919,7 +41171,13 @@ function NexusAiPackScreen({
       flex: 1,
       fontSize: 13
     }
-  }, (m.content || '').slice(0, 60)), /*#__PURE__*/React.createElement("button", {
+  }, (m.attachmentIds || []).length > 0 && /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--text-sub)',
+      marginRight: 4,
+      fontSize: 11
+    }
+  }, "📎", m.attachmentIds.length), (m.content || '').slice(0, 60)), /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "btn btn-sm btn-outline",
     onClick: () => {
@@ -40364,14 +41622,21 @@ function App() {
     manualTagsConfirmed: data.manualTagsConfirmed || !!(data.tags && data.tags.length > 0),
     manualPrivateConfirmed: data.manualPrivateConfirmed || !!data.isPrivate
   });
-  const handleMemoryQuickAdd = partial => memoryStore.create(nexusWithManualConfirmedFlags(partial)).then(() => setShowMemoryQuickAdd(false));
-  const handleMemorySave = data => {
+  // 画像添付はMemory本体の保存が確定した後に書き込む（Memoryが先に存在しない状態で
+  // attachmentIdsだけ増える、という中途半端な状態を避けるため）。
+  const handleMemoryQuickAdd = (partial, pendingAttachments) => memoryStore.create(nexusWithManualConfirmedFlags(partial)).then(m => (pendingAttachments && pendingAttachments.length ? memoryStore.addAttachments(m.id, pendingAttachments) : Promise.resolve()).then(() => m)).then(() => setShowMemoryQuickAdd(false));
+  const handleMemorySave = (data, pendingAttachments) => {
     const patch = nexusWithManualConfirmedFlags(data);
     const p = editingMemory ? memoryStore.update(editingMemory.id, patch) : memoryStore.create(patch);
-    p.then(m => {
+    p.then(m => (pendingAttachments && pendingAttachments.length ? memoryStore.addAttachments(m.id, pendingAttachments) : Promise.resolve()).then(() => m)).then(m => {
       setShowMemoryForm(false);
       setEditingMemory(null);
       setSelectedMemory(m);
+    });
+  };
+  const handleMemoryDeleteAttachment = (memoryId, attachmentId) => {
+    memoryStore.deleteAttachment(memoryId, attachmentId).then(m => {
+      if (m) setSelectedMemory(prev => prev && prev.id === memoryId ? m : prev);
     });
   };
   const handleMemoryDelete = id => {
@@ -40493,6 +41758,30 @@ function App() {
     };
     reader.readAsText(file, 'UTF-8');
     e.target.value = '';
+  };
+  // 画像込み完全バックアップ（.nexusmemory）。通常バックアップとは別の独自binary形式で、
+  // 画像本体もまとめて保存・復元できる（Base64化しない。詳細はnexusBuildFullBackupBlob等）。
+  const handleMemoryExportFull = () => {
+    nexusBuildFullBackupFileBlob().then(blob => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `medilife_nexus_memory_full_${todayStr()}.nexusmemory`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+  };
+  const handleMemoryImportFullFile = e => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!confirm('画像込み完全バックアップを復元します（同じIDの記憶・画像は上書きされます）。よろしいですか？')) return;
+    nexusRestoreFullBackup(file).then(result => {
+      memoryStore.reload();
+      alert(`✅ Memory ${result.memoryCount}件・画像 ${result.attachmentCount}枚を復元しました`);
+    }).catch(err => {
+      alert('復元に失敗しました: ' + err.message);
+    });
   };
   const saveCustomer = c => setCustomers(prev => {
     const idx = prev.findIndex(x => x.id === c.id);
@@ -40855,6 +42144,8 @@ function App() {
     onSelect: setSelectedMemory,
     onExport: handleMemoryExport,
     onImportFile: handleMemoryImportFile,
+    onExportFull: handleMemoryExportFull,
+    onImportFullFile: handleMemoryImportFullFile,
     onOpenInsightForm: ids => setInsightFormRelatedIds(ids),
     onReanalyzeAll: handleMemoryReanalyzeAll,
     entityFilter: nexusMemoryEntityFilter,
@@ -40992,7 +42283,8 @@ function App() {
     onOpenCustomer: handleMemoryOpenCustomer,
     onLinkEntity: handleMemoryEntityLink,
     onSearchTheme: handleSearchMemoryTheme,
-    onExplore: m => setNexusMemoryExploreTarget(m)
+    onExplore: m => setNexusMemoryExploreTarget(m),
+    onDeleteAttachment: attachmentId => handleMemoryDeleteAttachment(selectedMemory.id, attachmentId)
   }), nexusMemoryExploreTarget && /*#__PURE__*/React.createElement(NexusMemoryExploreScreen, {
     memory: memoryStore.memories.find(x => x.id === nexusMemoryExploreTarget.id) || nexusMemoryExploreTarget,
     allMemories: memoryStore.memories,
@@ -41017,7 +42309,8 @@ function App() {
     onClose: () => {
       setShowMemoryForm(false);
       setEditingMemory(null);
-    }
+    },
+    onDeleteAttachment: handleMemoryDeleteAttachment
   }), showMemoryQuickAdd && /*#__PURE__*/React.createElement(MemoryQuickAddSheet, {
     onSave: handleMemoryQuickAdd,
     onClose: () => setShowMemoryQuickAdd(false)
