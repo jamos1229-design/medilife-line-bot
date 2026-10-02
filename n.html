@@ -3617,7 +3617,22 @@ function CustomerForm({
     interestTags: [],
     preferredContactMethods: [],
     contactPolicy: '未確認',
-    contactMemo: ''
+    contactMemo: '',
+    // 法人・紹介分析（AI営業本部向け）。未設定はすべて「未確認」「不明」「空欄」のまま、
+    // Second BrainのMemoryや他の自由記述欄から自動確定しない（候補提示のみ将来対応可）。
+    corpRelationType: '未確認',
+    jobTitle: '',
+    industryMajor: '未確認',
+    industryDetail: '',
+    corpRelationScale: '不明',
+    corpConsultationStatus: '未確認',
+    corpConsultationCount: '',
+    corpContractStatus: '未確認',
+    corpReferralMemo: '',
+    corpSalesCaution: '',
+    corpLastContact: '',
+    aiSalesEligibility: '要確認',
+    salesExclusionReason: '未確認'
   };
   const [form, setForm] = useState({
     ...blank,
@@ -3781,13 +3796,27 @@ function CustomerForm({
             key: p, type: "button", className: `toggle-btn ${form.contactPolicy === p ? 'sel' : ''}`,
             onClick: () => s('contactPolicy')(p)
           }, p)))),
-      React.createElement("div", { className: "form-group", style: { marginTop: 12, marginBottom: 0 } },
+      React.createElement("div", { className: "form-group", style: { marginTop: 12 } },
         React.createElement("label", { className: "form-label" }, "連絡メモ（任意）"),
         React.createElement("textarea", {
           className: "form-textarea", style: { resize: 'vertical', minHeight: 60 },
           placeholder: "例：電話よりLINE希望／仕事中は電話不可／営業案内は不要",
           value: form.contactMemo || '', onChange: si('contactMemo')
-        }))));
+        })),
+      React.createElement("div", { className: "form-group", style: { marginTop: 12 } },
+        React.createElement("label", { className: "form-label" }, "AI営業対象可否"),
+        React.createElement("div", { className: "toggle-group" },
+          NEXUS_AI_SALES_ELIGIBILITY_OPTIONS.map(v => React.createElement("button", {
+            key: v, type: "button", className: `toggle-btn ${form.aiSalesEligibility === v ? 'sel' : ''}`,
+            onClick: () => s('aiSalesEligibility')(v)
+          }, v)))),
+      React.createElement("div", { className: "form-group", style: { marginTop: 12, marginBottom: 0 } },
+        React.createElement("label", { className: "form-label" }, "営業除外理由（任意・AI分析用データには出力されません）"),
+        React.createElement("div", { className: "toggle-group" },
+          NEXUS_SALES_EXCLUSION_REASONS.map(v => React.createElement("button", {
+            key: v, type: "button", className: `toggle-btn ${form.salesExclusionReason === v ? 'sel' : ''}`,
+            onClick: () => s('salesExclusionReason')(v)
+          }, v))))));
   return /*#__PURE__*/React.createElement("div", {
     className: "full-screen"
   }, /*#__PURE__*/React.createElement("div", {
@@ -3904,6 +3933,21 @@ function CustomerForm({
     value: form.employeeCount || '',
     onChange: si('employeeCount')
   }))), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginTop: 14,
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "業種大分類（AI分析用・任意）"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, NEXUS_INDUSTRY_MAJOR_OPTIONS.map(t => /*#__PURE__*/React.createElement("button", {
+    key: t,
+    type: "button",
+    className: `toggle-btn ${form.industryMajor === t ? 'sel' : ''}`,
+    onClick: () => s('industryMajor')(t)
+  }, t)))), /*#__PURE__*/React.createElement("div", {
     className: "form-row",
     style: {
       marginTop: 14
@@ -4410,7 +4454,135 @@ function CustomerForm({
       color: 'var(--text-sub)',
       marginTop: 4
     }
-  }, "選択すると、プランニング画面でこの法人の契約もあわせて表示・集計されます（代表者は法人側の「代表者」欄で自動連携されるため、通常はそれ以外の役員・従業員が対象）")), /*#__PURE__*/React.createElement("div", {
+  }, "選択すると、プランニング画面でこの法人の契約もあわせて表示・集計されます（代表者は法人側の「代表者」欄で自動連携されるため、通常はそれ以外の役員・従業員が対象）"), /*#__PURE__*/React.createElement("div", {
+    className: "section-header",
+    style: { marginTop: 14 }
+  }, "法人との関係（任意・AI分析用）"), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "法人との関係"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, NEXUS_CORP_RELATION_TYPES.map(t => /*#__PURE__*/React.createElement("button", {
+    key: t,
+    type: "button",
+    className: `toggle-btn ${form.corpRelationType === t ? 'sel' : ''}`,
+    onClick: () => s('corpRelationType')(t)
+  }, t)))), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: { marginTop: 12 }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "役職（任意）"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    placeholder: "例：部長",
+    value: form.jobTitle || '',
+    onChange: si('jobTitle')
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: { marginTop: 12 }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "業種大分類（AI分析用・任意）"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, NEXUS_INDUSTRY_MAJOR_OPTIONS.map(t => /*#__PURE__*/React.createElement("button", {
+    key: t,
+    type: "button",
+    className: `toggle-btn ${form.industryMajor === t ? 'sel' : ''}`,
+    onClick: () => s('industryMajor')(t)
+  }, t)))), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: { marginTop: 12 }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "詳細業種（任意）"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    placeholder: "例：訪問介護",
+    value: form.industryDetail || '',
+    onChange: si('industryDetail')
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: { marginTop: 12 }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "法人規模（わかる範囲で）"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, NEXUS_CORP_RELATION_SCALES.map(t => /*#__PURE__*/React.createElement("button", {
+    key: t,
+    type: "button",
+    className: `toggle-btn ${form.corpRelationScale === t ? 'sel' : ''}`,
+    onClick: () => s('corpRelationScale')(t)
+  }, t)))), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: { marginTop: 12 }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "法人相談歴"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, NEXUS_CORP_YES_NO_STATUSES.map(t => /*#__PURE__*/React.createElement("button", {
+    key: t,
+    type: "button",
+    className: `toggle-btn ${form.corpConsultationStatus === t ? 'sel' : ''}`,
+    onClick: () => s('corpConsultationStatus')(t)
+  }, t)))), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: { marginTop: 12 }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "法人相談回数（任意）"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    type: "number",
+    min: "0",
+    placeholder: "例：2",
+    value: form.corpConsultationCount,
+    onChange: si('corpConsultationCount')
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: { marginTop: 12 }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "法人契約歴"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, NEXUS_CORP_YES_NO_STATUSES.map(t => /*#__PURE__*/React.createElement("button", {
+    key: t,
+    type: "button",
+    className: `toggle-btn ${form.corpContractStatus === t ? 'sel' : ''}`,
+    onClick: () => s('corpContractStatus')(t)
+  }, t)))), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: { marginTop: 12 }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "最終法人接触日（任意）"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    type: "date",
+    value: form.corpLastContact || '',
+    onChange: si('corpLastContact')
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: { marginTop: 12 }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "紹介可能性に関するメモ（内部用：AI分析用データには「あり／なし」のみ反映されます）"), /*#__PURE__*/React.createElement("textarea", {
+    className: "form-textarea",
+    style: { resize: 'vertical', minHeight: 50 },
+    placeholder: "例：代表者経由で紹介いただけそう",
+    value: form.corpReferralMemo || '',
+    onChange: si('corpReferralMemo')
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: { marginTop: 12, marginBottom: 0 }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "法人営業上の注意事項（内部用：AI分析用データには「あり／なし」のみ反映されます）"), /*#__PURE__*/React.createElement("textarea", {
+    className: "form-textarea",
+    style: { resize: 'vertical', minHeight: 50 },
+    placeholder: "例：現在は他代理店と契約中",
+    value: form.corpSalesCaution || '',
+    onChange: si('corpSalesCaution')
+  })))), /*#__PURE__*/React.createElement("div", {
     className: "form-row",
     style: {
       marginTop: 14
@@ -5820,7 +5992,21 @@ function CustomerDetail({
       alignItems: 'center',
       gap: 6
     }
-  }, "⚠️ ", c.contactPolicy, "：営業連絡は控えてください"), /*#__PURE__*/React.createElement("div", {
+  }, "⚠️ ", c.contactPolicy, "：営業連絡は控えてください"), c.aiSalesEligibility === '不可' && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: '#FEF2F2',
+      border: '1px solid var(--danger)',
+      borderRadius: 10,
+      padding: '10px 12px',
+      fontSize: 13,
+      fontWeight: 700,
+      color: 'var(--danger)',
+      marginBottom: 12,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6
+    }
+  }, "🚫 AI営業対象外（不可）", c.salesExclusionReason && c.salesExclusionReason !== '未確認' ? `：${c.salesExclusionReason}` : ''), /*#__PURE__*/React.createElement("div", {
     className: "customer-info-row",
     style: { marginBottom: 10 }
   }, /*#__PURE__*/React.createElement("div", {
@@ -5871,7 +6057,88 @@ function CustomerDetail({
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: { fontWeight: 700 }
-  }, "📝 連絡メモ：\xa0"), c.contactMemo)), /*#__PURE__*/React.createElement("div", {
+  }, "📝 連絡メモ：\xa0"), c.contactMemo)), c.customerType !== '法人' && (c.corpRelationType && c.corpRelationType !== '未確認' || c.jobTitle || c.industryMajor && c.industryMajor !== '未確認' || c.industryDetail || c.corpRelationScale && c.corpRelationScale !== '不明' || c.corpConsultationStatus && c.corpConsultationStatus !== '未確認' || c.corpConsultationCount || c.corpContractStatus && c.corpContractStatus !== '未確認' || c.corpReferralMemo || c.corpSalesCaution || c.corpLastContact) && /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "法人との関係"), c.customerType !== '法人' && (c.corpRelationType && c.corpRelationType !== '未確認' || c.jobTitle || c.industryMajor && c.industryMajor !== '未確認' || c.industryDetail || c.corpRelationScale && c.corpRelationScale !== '不明' || c.corpConsultationStatus && c.corpConsultationStatus !== '未確認' || c.corpConsultationCount || c.corpContractStatus && c.corpContractStatus !== '未確認' || c.corpReferralMemo || c.corpSalesCaution || c.corpLastContact) && /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "customer-info-row",
+    style: { marginBottom: 10 }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-item"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-label"
+  }, "法人との関係"), /*#__PURE__*/React.createElement("div", {
+    className: "info-value"
+  }, c.corpRelationType || '未確認')), c.jobTitle && /*#__PURE__*/React.createElement("div", {
+    className: "info-item"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-label"
+  }, "役職"), /*#__PURE__*/React.createElement("div", {
+    className: "info-value"
+  }, c.jobTitle))), /*#__PURE__*/React.createElement("div", {
+    className: "customer-info-row",
+    style: { marginBottom: 10 }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-item"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-label"
+  }, "業種"), /*#__PURE__*/React.createElement("div", {
+    className: "info-value"
+  }, [c.industryMajor && c.industryMajor !== '未確認' ? c.industryMajor : null, c.industryDetail].filter(Boolean).join('／') || '未確認')), /*#__PURE__*/React.createElement("div", {
+    className: "info-item"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-label"
+  }, "法人規模"), /*#__PURE__*/React.createElement("div", {
+    className: "info-value"
+  }, c.corpRelationScale || '不明'))), /*#__PURE__*/React.createElement("div", {
+    className: "customer-info-row",
+    style: { marginBottom: 10 }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-item"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-label"
+  }, "法人相談歴"), /*#__PURE__*/React.createElement("div", {
+    className: "info-value"
+  }, c.corpConsultationStatus || '未確認', c.corpConsultationCount ? `（${c.corpConsultationCount}回）` : '')), /*#__PURE__*/React.createElement("div", {
+    className: "info-item"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-label"
+  }, "法人契約歴"), /*#__PURE__*/React.createElement("div", {
+    className: "info-value"
+  }, c.corpContractStatus || '未確認'))), c.corpLastContact && /*#__PURE__*/React.createElement("div", {
+    className: "customer-info-row",
+    style: { marginBottom: 10 }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-item"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-label"
+  }, "最終法人接触日"), /*#__PURE__*/React.createElement("div", {
+    className: "info-value"
+  }, fmtDate(c.corpLastContact)))), c.corpReferralMemo && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: 'var(--bg)',
+      borderRadius: 10,
+      padding: '10px 12px',
+      fontSize: 12.5,
+      lineHeight: 1.6,
+      color: 'var(--text)',
+      marginBottom: c.corpSalesCaution ? 8 : 0
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: { fontWeight: 700 }
+  }, "🔗 紹介可能性メモ：\xa0"), c.corpReferralMemo), c.corpSalesCaution && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: '#FFFBEB',
+      borderRadius: 10,
+      padding: '10px 12px',
+      fontSize: 12.5,
+      lineHeight: 1.6,
+      color: 'var(--text)'
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: { fontWeight: 700 }
+  }, "⚠️ 法人営業上の注意：\xa0"), c.corpSalesCaution)), /*#__PURE__*/React.createElement("div", {
     className: "section-header"
   }, "接触管理"), /*#__PURE__*/React.createElement("div", {
     className: "card"
@@ -12021,15 +12288,16 @@ function CustomerListTab({
 // ── 顧客一覧のAI戦略分析用データ出力：CSV変換・ダウンロードヘルパー ──
 // fieldDefs／categoryKeysを省略した場合は、既存の固定列（従来のAI分析用CSVと同じ内容）を返す
 // （呼び出し側が出力項目を指定しない後方互換のデフォルト動作）。
-function nexusCustomerAnalysisCsvRows(rows, fieldDefs, categoryKeys) {
+function nexusCustomerAnalysisCsvRows(rows, fieldDefs, categoryKeys, corpSalesMode) {
   const defs = fieldDefs || NEXUS_AI_EXPORT_FIELD_DEFS.filter(d => !d.newField);
   const cats = categoryKeys || NEXUS_COVERAGE_TYPE_OPTIONS.map(o => o.key);
-  return nexusAiExportCsvBlockA(rows, defs, cats);
+  return nexusAiExportCsvBlockA(rows, defs, cats, corpSalesMode);
 }
 // includeDetailBlockがtrueで、かつ保障詳細を含む顧客が1名以上いる場合のみ、
 // 空行＋見出し行をはさんで契約詳細CSV（Bブロック）を追記する（顧客概要CSVはAブロックのみで完結する）。
-function nexusCustomerAnalysisCsvText(rows, fieldDefs, categoryKeys, includeDetailBlock) {
-  const csvRows = nexusCustomerAnalysisCsvRows(rows, fieldDefs, categoryKeys);
+// corpSalesMode（法人営業モード）がtrueの場合のみ、末尾に「法人名」列を追加する。
+function nexusCustomerAnalysisCsvText(rows, fieldDefs, categoryKeys, includeDetailBlock, corpSalesMode) {
+  const csvRows = nexusCustomerAnalysisCsvRows(rows, fieldDefs, categoryKeys, corpSalesMode);
   const esc = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
   let text = '﻿' + csvRows.map(r => r.map(esc).join(',')).join('\n');
   if (includeDetailBlock) {
@@ -12080,8 +12348,8 @@ function nexusShareOrDownloadFile(filename, content, mime) {
   URL.revokeObjectURL(url);
   return 'downloaded';
 }
-function nexusDownloadCustomerAnalysisCsv(rows, fieldDefs, categoryKeys, includeDetailBlock) {
-  return nexusShareOrDownloadFile(`NEXUS_AI_ANALYSIS_${todayStr()}.csv`, nexusCustomerAnalysisCsvText(rows, fieldDefs, categoryKeys, includeDetailBlock), 'text/csv;charset=utf-8');
+function nexusDownloadCustomerAnalysisCsv(rows, fieldDefs, categoryKeys, includeDetailBlock, corpSalesMode) {
+  return nexusShareOrDownloadFile(`NEXUS_AI_ANALYSIS_${todayStr()}.csv`, nexusCustomerAnalysisCsvText(rows, fieldDefs, categoryKeys, includeDetailBlock, corpSalesMode), 'text/csv;charset=utf-8');
 }
 function nexusDownloadCustomerAnalysisJson(rows) {
   return nexusShareOrDownloadFile(`NEXUS_AI_ANALYSIS_${todayStr()}.json`, JSON.stringify(rows, null, 2), 'application/json');
@@ -12203,6 +12471,8 @@ function NexusCustomerAiExportScreen({ customers, activityLogs, nexusFanFollows,
   const [inheritanceHolder, setInheritanceHolder] = useState(false);
   const [ranks, setRanks] = useState([]);
   const [includeCity, setIncludeCity] = useState(false);
+  const [corpSalesMode, setCorpSalesMode] = useState(false); // false=完全匿名モード, true=法人営業モード（法人名を出力可能にする）
+  const [excludeAiSalesIneligible, setExcludeAiSalesIneligible] = useState(false);
   // ── 出力する情報（誰を出すかとは完全に別の「何を出すか」の選択） ──
   // 初期値は既存のAI分析用CSVと同じ内容になるようにする（新規追加のresponsibleSplitだけOFF）。
   const [fieldSelection, setFieldSelection] = useState(() => {
@@ -12217,7 +12487,7 @@ function NexusCustomerAiExportScreen({ customers, activityLogs, nexusFanFollows,
   });
   const [coverageDetailMode, setCoverageDetailMode] = useState('off'); // 'off' | 'on'（大きなON/OFFスイッチ）
   const [coverageDetailOverride, setCoverageDetailOverride] = useState({}); // カテゴリー別の個別上書き（設定があれば最優先）
-  const [openGroups, setOpenGroups] = useState({ basic: true, relation: false, contractSummary: false, coverage: false });
+  const [openGroups, setOpenGroups] = useState({ basic: true, relation: false, contractSummary: false, corpAnalysis: false, coverage: false });
   const [rows, setRows] = useState([]);
   const [scanResult, setScanResult] = useState(null);
   const [toast, setToast] = useState('');
@@ -12237,7 +12507,8 @@ function NexusCustomerAiExportScreen({ customers, activityLogs, nexusFanFollows,
     medicalHolder,
     deathHolder,
     inheritanceHolder,
-    ranks
+    ranks,
+    excludeAiSalesIneligible
   };
   const filteredCustomers = selectionMode === 'manual' ? (customers || []).filter(c => manualSelectedIds.includes(c.id)) : (customers || []).filter(c => nexusCustomerAnalysisFilterPredicate(c, filters, ctx));
   const toggleInArray = (arr, setArr, value) => setArr(arr.includes(value) ? arr.filter(x => x !== value) : [...arr, value]);
@@ -12258,7 +12529,7 @@ function NexusCustomerAiExportScreen({ customers, activityLogs, nexusFanFollows,
   const ageBandRow = filterGroup("年代（複数選択可）", AGE_BAND_OPTIONS.map(band => chip(ageBands.includes(band), band, () => toggleInArray(ageBands, setAgeBands, band))));
   const lineRow = filterGroup("LINE登録", [[null, '指定なし'], [true, 'LINE登録者'], [false, 'LINE未登録']].map(([val, label]) => chip(lineRegistered === val, label, () => setLineRegistered(val))));
   const lastContactRow = filterGroup("最終接触", [[null, '指定なし'], [6, '6か月以上'], [12, '1年以上']].map(([val, label]) => chip(lastContactMonthsAtLeast === val, label, () => setLastContactMonthsAtLeast(val))));
-  const flagsRow = filterGroup("その他の条件", [chip(hasReferrals, '紹介実績あり', () => setHasReferrals(v => !v)), chip(medicalHolder, '医療保険加入者', () => setMedicalHolder(v => !v)), chip(deathHolder, '死亡保険加入者', () => setDeathHolder(v => !v)), chip(inheritanceHolder, '相続対策の契約を保有', () => setInheritanceHolder(v => !v))]);
+  const flagsRow = filterGroup("その他の条件", [chip(hasReferrals, '紹介実績あり', () => setHasReferrals(v => !v)), chip(medicalHolder, '医療保険加入者', () => setMedicalHolder(v => !v)), chip(deathHolder, '死亡保険加入者', () => setDeathHolder(v => !v)), chip(inheritanceHolder, '相続対策の契約を保有', () => setInheritanceHolder(v => !v)), chip(excludeAiSalesIneligible, 'AI営業対象外（不可）を除外', () => setExcludeAiSalesIneligible(v => !v))]);
   const rankRow = filterGroup("顧客ランク（複数選択可）", RANK_OPTIONS.map(r => chip(ranks.includes(r), r, () => toggleInArray(ranks, setRanks, r))));
   const cityToggleRow = React.createElement("div", {
     className: "form-group"
@@ -12267,6 +12538,14 @@ function NexusCustomerAiExportScreen({ customers, activityLogs, nexusFanFollows,
   }, chip(!includeCity, '都道府県まで', () => setIncludeCity(false)), chip(includeCity, '市区町村まで含める', () => setIncludeCity(true))), React.createElement("div", {
     style: { fontSize: 11.5, color: 'var(--text-sub)', marginTop: 4 }
   }, "番地・建物名はどちらを選んでも絶対に出力されません。"));
+  // 完全匿名モード（既定）／法人営業モード（ユーザーが明示的に選択した場合のみ法人名を出力可能にする）。
+  const corpSalesModeRow = React.createElement("div", {
+    className: "form-group"
+  }, React.createElement("label", { className: "form-label" }, "法人名の出力"), React.createElement("div", {
+    style: { display: 'flex', flexWrap: 'wrap', gap: 8 }
+  }, chip(!corpSalesMode, '完全匿名モード', () => setCorpSalesMode(false)), chip(corpSalesMode, '法人営業モード（法人名を出力）', () => setCorpSalesMode(true))), React.createElement("div", {
+    style: { fontSize: 11.5, color: 'var(--text-sub)', marginTop: 4 }
+  }, "法人営業モードでも、個人の氏名・電話番号・メールアドレス・詳細な自宅住所・証券番号は出力されません。"));
   const modeRow = filterGroup("抽出方法", [chip(selectionMode === 'filter', '条件で絞り込む', () => setSelectionMode('filter')), chip(selectionMode === 'manual', '顧客を選んで指定する', () => setSelectionMode('manual'))]);
   // 「顧客を選んで指定する」は、既存の顧客選択ピッカー（名前・AI分析用IDでの検索、複数選択対応済み）
   // をそのまま流用する。1名だけを選ぶ（単体）場合もこのピッカーで1件だけチェックすればよい。
@@ -12305,7 +12584,7 @@ function NexusCustomerAiExportScreen({ customers, activityLogs, nexusFanFollows,
   const selectedCategoryKeys = NEXUS_COVERAGE_TYPE_OPTIONS.map(o => o.key).filter(k => categorySelection[k]);
   const detailCategoryKeys = selectedCategoryKeys.filter(k => effectiveDetail(k));
   const groupFieldCount = g => selectedFieldDefs.filter(d => d.group === g).length;
-  const outputSummaryText = `基本情報${groupFieldCount('basic')}項目／関係性${groupFieldCount('relation')}項目／契約概要${groupFieldCount('contractSummary')}項目／保障詳細${detailCategoryKeys.length > 0 ? 'ON（' + detailCategoryKeys.length + '種類）' : 'OFF'}`;
+  const outputSummaryText = `基本情報${groupFieldCount('basic')}項目／関係性${groupFieldCount('relation')}項目／契約概要${groupFieldCount('contractSummary')}項目／法人・紹介分析${groupFieldCount('corpAnalysis')}項目／保障詳細${detailCategoryKeys.length > 0 ? 'ON（' + detailCategoryKeys.length + '種類）' : 'OFF'}${corpSalesMode ? '／法人名を出力' : ''}`;
   const fieldCheckRow = d => React.createElement("label", {
     key: d.key,
     style: { display: 'flex', alignItems: 'center', gap: 8, padding: '6px 2px', fontSize: 13.5 }
@@ -12371,14 +12650,18 @@ function NexusCustomerAiExportScreen({ customers, activityLogs, nexusFanFollows,
     style: { marginTop: 16 }
   }, React.createElement("div", { style: { fontSize: 15, fontWeight: 700, marginBottom: 4 } }, "出力する情報"), React.createElement("div", {
     style: { fontSize: 12.5, color: 'var(--text-sub)', marginBottom: 10, lineHeight: 1.6 }
-  }, "AIに渡す情報を選択できます。必要な情報だけ出力することで、データ量を抑えながら分析できます。"), presetRow, groupCard('basic', NEXUS_AI_EXPORT_FIELD_GROUP_LABELS.basic, NEXUS_AI_EXPORT_FIELD_DEFS.filter(d => d.group === 'basic')), groupCard('relation', NEXUS_AI_EXPORT_FIELD_GROUP_LABELS.relation, NEXUS_AI_EXPORT_FIELD_DEFS.filter(d => d.group === 'relation')), groupCard('contractSummary', NEXUS_AI_EXPORT_FIELD_GROUP_LABELS.contractSummary, NEXUS_AI_EXPORT_FIELD_DEFS.filter(d => d.group === 'contractSummary')), coverageCard);
+  }, "AIに渡す情報を選択できます。必要な情報だけ出力することで、データ量を抑えながら分析できます。"), presetRow, groupCard('basic', NEXUS_AI_EXPORT_FIELD_GROUP_LABELS.basic, NEXUS_AI_EXPORT_FIELD_DEFS.filter(d => d.group === 'basic')), groupCard('relation', NEXUS_AI_EXPORT_FIELD_GROUP_LABELS.relation, NEXUS_AI_EXPORT_FIELD_DEFS.filter(d => d.group === 'relation')), groupCard('contractSummary', NEXUS_AI_EXPORT_FIELD_GROUP_LABELS.contractSummary, NEXUS_AI_EXPORT_FIELD_DEFS.filter(d => d.group === 'contractSummary')), groupCard('corpAnalysis', NEXUS_AI_EXPORT_FIELD_GROUP_LABELS.corpAnalysis, NEXUS_AI_EXPORT_FIELD_DEFS.filter(d => d.group === 'corpAnalysis')), coverageCard);
   const runAnonymize = () => {
     const anonRows = filteredCustomers.map((c, i) => nexusAnonymizeCustomerForAnalysis(c, i, {
       includeCity,
       fields: fieldSelection,
       coverageCategoryKeys: selectedCategoryKeys,
-      coverageDetailKeys: detailCategoryKeys
+      coverageDetailKeys: detailCategoryKeys,
+      corpSalesMode
     }, ctx));
+    // nexusScanForResidualPii（変更しない）は登録済みの氏名・法人名が出力文中に現れると
+    // 常に検知する設計。法人営業モードで意図的に含めた法人名は、ボタンの出力可否判定
+    // （canOutputBlockingIssues、下記）でのみ別扱いし、検知自体・警告表示は一切変更しない。
     const scan = nexusScanForResidualPii(anonRows, customers);
     setRows(anonRows);
     setScanResult(scan);
@@ -12389,7 +12672,7 @@ function NexusCustomerAiExportScreen({ customers, activityLogs, nexusFanFollows,
   }, React.createElement("div", {
     className: "card",
     style: { marginBottom: 12, fontSize: 12.5, color: 'var(--text-sub)', lineHeight: 1.6 }
-  }, "氏名・電話番号・メールアドレス・詳細住所・証券番号など、個人を特定できる情報は一切出力されません。自由記述（メモ）も出力しません。外部のAI（ChatGPT・Claude・Gemini等）へ自動送信することもありません。"), modeRow, selectionMode === 'manual' ? manualPickerBlock : React.createElement(React.Fragment, null, segmentRow, ageBandRow, lineRow, lastContactRow, flagsRow, rankRow), cityToggleRow, outputFieldsSection, React.createElement("div", {
+  }, "氏名・電話番号・メールアドレス・詳細住所・証券番号など、個人を特定できる情報は一切出力されません。自由記述（メモ）も出力しません。外部のAI（ChatGPT・Claude・Gemini等）へ自動送信することもありません。"), modeRow, selectionMode === 'manual' ? manualPickerBlock : React.createElement(React.Fragment, null, segmentRow, ageBandRow, lineRow, lastContactRow, flagsRow, rankRow), cityToggleRow, corpSalesModeRow, outputFieldsSection, React.createElement("div", {
     className: "card",
     style: { marginTop: 12, textAlign: 'center' }
   }, React.createElement("div", {
@@ -12433,6 +12716,13 @@ function NexusCustomerAiExportScreen({ customers, activityLogs, nexusFanFollows,
       legacyCopyText(text);
     }
   };
+  // nexusScanForResidualPii（変更しない）は登録済みの法人名が出力文中に出現すると常に
+  // 「氏名」として検知する。法人営業モードで、実際にこの出力対象の法人名として意図的に
+  // 含めた値だけは「想定内」として区別し、出力可否の判定からは除外する（それ以外の
+  // 氏名・電話番号・メール等の検知は一切変更せず、従来通り出力をブロックする）。
+  const expectedCorpNames = corpSalesMode ? new Set(rows.map(r => r.corpName).filter(Boolean)) : new Set();
+  const blockingIssues = scanResult ? scanResult.issues.filter(issue => !(corpSalesMode && issue.pattern === '氏名' && expectedCorpNames.has(issue.sample))) : [];
+  const canOutput = !!scanResult && blockingIssues.length === 0;
   const scanBox = scanResult && (scanResult.ok ? React.createElement("div", {
     className: "card",
     style: { marginBottom: 10, background: '#E8F5E9', color: '#2E7D32', fontWeight: 700, fontSize: 13 }
@@ -12441,10 +12731,14 @@ function NexusCustomerAiExportScreen({ customers, activityLogs, nexusFanFollows,
     style: { marginBottom: 10, background: '#FEF2F2', border: '1.5px solid var(--danger)' }
   }, React.createElement("div", {
     style: { color: 'var(--danger)', fontWeight: 700, fontSize: 13, marginBottom: 6 }
-  }, "⚠️ 個人情報らしき情報が残っています。出力できません。"), scanResult.issues.map((issue, i) => React.createElement("div", {
+  }, canOutput ? "⚠️ 法人名が検出されています（法人営業モードのため想定内です）。内容をご確認のうえ出力してください。" : "⚠️ 個人情報らしき情報が残っています。出力できません。"), scanResult.issues.map((issue, i) => React.createElement("div", {
     key: i,
     style: { fontSize: 12, color: 'var(--danger)' }
   }, "・", issue.pattern, "：", issue.sample))));
+  const corpSalesModeNote = corpSalesMode && React.createElement("div", {
+    className: "card",
+    style: { marginBottom: 10, background: '#FFFBEB', fontSize: 12, lineHeight: 1.6 }
+  }, "法人営業モードでは法人名が意図的に含まれる場合があります。個人情報が混入していないか確認してください。");
   const previewCard = c => React.createElement("div", {
     key: c.analysisId,
     className: "card",
@@ -12452,7 +12746,7 @@ function NexusCustomerAiExportScreen({ customers, activityLogs, nexusFanFollows,
   }, React.createElement("div", { style: { fontWeight: 700, marginBottom: 4 } }, "AI ID：", c.analysisId), selectedFieldDefs.map(d => React.createElement("div", { key: d.key }, d.label, "：", d.csv(c) === '' || d.csv(c) === null || d.csv(c) === undefined ? '—' : String(d.csv(c)))), selectedCategoryKeys.length > 0 && React.createElement("div", { style: { marginTop: 4, paddingTop: 4, borderTop: '1px dashed var(--border)' } }, selectedCategoryKeys.map(k => React.createElement("div", { key: k }, (NEXUS_COVERAGE_TYPE_OPTIONS.find(o => o.key === k) || {}).label, "：", c.coverageStates && c.coverageStates[k] || '未確認')), (c.coverageDetails || []).length > 0 && React.createElement("div", { style: { marginTop: 2, color: 'var(--text-sub)' } }, "契約明細：", c.coverageDetails.length, "件（1契約＝1件）")));
   const previewScreen = phase === 'preview' && React.createElement("div", {
     style: { padding: 16 }
-  }, scanBox, React.createElement("div", {
+  }, scanBox, corpSalesModeNote, React.createElement("div", {
     className: "card",
     style: { marginBottom: 10, textAlign: 'center' }
   }, React.createElement("div", { style: { fontSize: 13, color: 'var(--text-sub)' } }, "対象"), React.createElement("div", { style: { fontSize: 26, fontWeight: 800, color: 'var(--accent)' } }, filteredCustomers.length, "名"), React.createElement("div", {
@@ -12466,12 +12760,12 @@ function NexusCustomerAiExportScreen({ customers, activityLogs, nexusFanFollows,
   React.createElement("button", {
     type: "button",
     className: "btn btn-primary btn-full",
-    disabled: !scanResult || !scanResult.ok,
-    onClick: () => copyText(nexusCustomerAnalysisCsvText(rows, selectedFieldDefs, selectedCategoryKeys, detailCategoryKeys.length > 0))
+    disabled: !canOutput,
+    onClick: () => copyText(nexusCustomerAnalysisCsvText(rows, selectedFieldDefs, selectedCategoryKeys, detailCategoryKeys.length > 0, corpSalesMode))
   }, "📋 CSVをコピー（推奨）"), React.createElement("button", {
     type: "button",
     className: "btn btn-outline btn-full",
-    disabled: !scanResult || !scanResult.ok,
+    disabled: !canOutput,
     onClick: () => copyText(JSON.stringify(rows, null, 2))
   }, "📋 JSONをコピー"), React.createElement("button", {
     type: "button",
@@ -12482,10 +12776,10 @@ function NexusCustomerAiExportScreen({ customers, activityLogs, nexusFanFollows,
   }, "コピーがうまくいかない場合は、下のダウンロードもお試しください"), React.createElement("button", {
     type: "button",
     className: "btn btn-outline btn-full",
-    disabled: !scanResult || !scanResult.ok,
+    disabled: !canOutput,
     onClick: () => {
       try {
-        const result = nexusDownloadCustomerAnalysisCsv(rows, selectedFieldDefs, selectedCategoryKeys, detailCategoryKeys.length > 0);
+        const result = nexusDownloadCustomerAnalysisCsv(rows, selectedFieldDefs, selectedCategoryKeys, detailCategoryKeys.length > 0, corpSalesMode);
         showToast(result === 'shared-file' || result === 'shared-text' ? '共有シートを開きました' : 'ダウンロードを開始しました');
       } catch (e) {
         showToast('ダウンロードに失敗しました：' + (e && e.message || e));
@@ -12494,7 +12788,7 @@ function NexusCustomerAiExportScreen({ customers, activityLogs, nexusFanFollows,
   }, "⬇️ CSVをダウンロード"), React.createElement("button", {
     type: "button",
     className: "btn btn-outline btn-full",
-    disabled: !scanResult || !scanResult.ok,
+    disabled: !canOutput,
     onClick: () => {
       try {
         const result = nexusDownloadCustomerAnalysisJson(rows);
@@ -16607,6 +16901,85 @@ function nexusOccupationCategory(occupationText) {
   return 'その他';
 }
 
+// ══════════════════════════════════════════════════════════════
+// ── 法人・紹介分析（AI営業本部向け拡張） ─────────────────────────
+// ══════════════════════════════════════════════════════════════
+// 従業員数の自由記述から、安全に読み取れる場合だけ法人規模の帯へ変換する。
+// 「10〜20名」「数名」「中規模」のような曖昧な表記は推測せずnull（＝不明）を返す。
+function nexusCorpRelationScaleFromEmployeeCount(text) {
+  const t = String(text || '').trim();
+  if (!t) return null;
+  const m = t.match(/^(\d+)\s*(名|人)?\s*(程度|前後)?$/);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  if (n === 1) return '1人';
+  if (n <= 5) return '2〜5人';
+  if (n <= 20) return '6〜20人';
+  if (n <= 50) return '21〜50人';
+  return '51人以上';
+}
+// linkedCorpIdが実在する法人タイプの顧客レコードを指している場合のみそのレコードを返す。
+// workplace等の文字列だけから法人を推測して自動的にリンクすることは一切しない
+// （リンクはCustomerForm側でユーザーが明示的に選択した場合のみ設定される）。
+function nexusFindLinkedCorp(customer, allCustomers) {
+  if (!customer || !customer.linkedCorpId) return null;
+  const linked = (allCustomers || []).find(c => c.id === customer.linkedCorpId);
+  return linked && linked.customerType === '法人' ? linked : null;
+}
+// 1顧客分の「法人・紹介分析」プロフィールを組み立てる。既存データ（customerType===法人の
+// corporateName／industry／employeeCount／businessDescription／住所、個人のworkplace、
+// linkedCorpIdで明示的にリンクされた法人レコード）の再利用を最優先し、未設定の項目を
+// ユーザーに代わって推測することは一切しない（変換できない場合は必ず「不明」「未確認」）。
+function nexusCorpRelationAnalysisProfile(customer, allCustomers) {
+  const isCorp = customer.customerType === '法人';
+  const linked = isCorp ? null : nexusFindLinkedCorp(customer, allCustomers);
+  const corpRelationType = isCorp ? '未確認' : customer.corpRelationType || '未確認';
+  const jobTitle = isCorp ? '' : customer.jobTitle || '';
+  const industryMajor = customer.industryMajor && customer.industryMajor !== '未確認' ? customer.industryMajor : '未確認';
+  let industryDetail = customer.industryDetail || '';
+  if (!industryDetail) {
+    if (isCorp && customer.industry) industryDetail = customer.industry;else if (!isCorp && linked && linked.industry) industryDetail = linked.industry;
+  }
+  const addrSource = isCorp ? customer.address : linked ? linked.address : '';
+  const corpPrefecture = addrSource ? nexusExtractPrefecture(addrSource) || '未確認' : '未確認';
+  const corpCity = addrSource ? nexusExtractCity(addrSource) || '未確認' : '未確認';
+  let corpRelationScale = customer.corpRelationScale && customer.corpRelationScale !== '不明' ? customer.corpRelationScale : null;
+  if (!corpRelationScale) {
+    const empSource = isCorp ? customer.employeeCount : linked ? linked.employeeCount : '';
+    corpRelationScale = nexusCorpRelationScaleFromEmployeeCount(empSource) || '不明';
+  }
+  const corpCustomerOrIndividual = isCorp ? '法人顧客' : '個人顧客';
+  const corpConsultationStatus = customer.corpConsultationStatus || '未確認';
+  const corpConsultationCount = nexusHasValue(customer.corpConsultationCount) && customer.corpConsultationCount !== '' ? customer.corpConsultationCount : '';
+  const corpContractStatus = customer.corpContractStatus || '未確認';
+  const corpLastContactBand = nexusLastContactBand(customer.corpLastContact, todayStr());
+  // 紹介可能性メモ・法人営業上の注意事項は自由記述（内部メモ）のため、AI分析用データには
+  // 本文を出さず「あり／なし」のみを反映する（第三者の氏名・具体的事情の漏洩を防ぐため）。
+  const corpReferralPotential = (customer.corpReferralMemo || '').trim() ? 'あり' : 'なし';
+  const corpSalesCautionFlag = (customer.corpSalesCaution || '').trim() ? 'あり' : 'なし';
+  const aiSalesEligibility = customer.aiSalesEligibility || '要確認';
+  const corpName = isCorp ? customer.corporateName || '' : linked ? linked.corporateName || customer.workplace || '' : customer.workplace || '';
+  return {
+    corpRelationType,
+    jobTitle,
+    industryMajor,
+    industryDetail,
+    corpPrefecture,
+    corpCity,
+    corpRelationScale,
+    corpCustomerOrIndividual,
+    corpConsultationStatus,
+    corpConsultationCount,
+    corpContractStatus,
+    corpLastContactBand,
+    corpReferralPotential,
+    corpSalesCautionFlag,
+    aiSalesEligibility,
+    corpName
+  };
+}
+
 // 実顧客ID→匿名ID（個人=顧客A001.. 法人=法人B001..）。同一エクスポート内では同じ顧客に同じIDを使う。
 function nexusBuildAnonymousCustomerMap(customers) {
   const map = {};
@@ -16886,6 +17259,25 @@ function nexusAnonymizeCustomerForAnalysis(customer, index, opts, ctx) {
   if (want('fanFollowReadCount')) out.fanFollowReadCount = fanFollow.readCount;
   if (want('fanFollowRepliedCount')) out.fanFollowRepliedCount = fanFollow.repliedCount;
   if (options.includeCity && want('city')) out.city = nexusExtractCity(customer.address);
+  // 法人・紹介分析（AI営業本部向け拡張）。法人名（corpName）はcorpSalesModeが
+  // trueの場合のみ出力する（完全匿名モードでは一切出力しない）。
+  const corp = nexusCorpRelationAnalysisProfile(customer, context.allCustomers);
+  if (want('corpRelationType')) out.corpRelationType = corp.corpRelationType;
+  if (want('jobTitle')) out.jobTitle = corp.jobTitle;
+  if (want('industryMajor')) out.industryMajor = corp.industryMajor;
+  if (want('industryDetail')) out.industryDetail = corp.industryDetail;
+  if (want('corpPrefecture')) out.corpPrefecture = corp.corpPrefecture;
+  if (want('corpCity')) out.corpCity = corp.corpCity;
+  if (want('corpRelationScale')) out.corpRelationScale = corp.corpRelationScale;
+  if (want('corpCustomerOrIndividual')) out.corpCustomerOrIndividual = corp.corpCustomerOrIndividual;
+  if (want('corpConsultationStatus')) out.corpConsultationStatus = corp.corpConsultationStatus;
+  if (want('corpConsultationCount')) out.corpConsultationCount = corp.corpConsultationCount;
+  if (want('corpContractStatus')) out.corpContractStatus = corp.corpContractStatus;
+  if (want('corpLastContactBand')) out.corpLastContactBand = corp.corpLastContactBand;
+  if (want('corpReferralPotential')) out.corpReferralPotential = corp.corpReferralPotential;
+  if (want('corpSalesCautionFlag')) out.corpSalesCautionFlag = corp.corpSalesCautionFlag;
+  if (want('aiSalesEligibility')) out.aiSalesEligibility = corp.aiSalesEligibility;
+  if (options.corpSalesMode) out.corpName = corp.corpName;
   // 保障カテゴリー：「④保障・契約詳細」で選択されたカテゴリーだけ、未確認／確認済み：あり／確認済み：なしの
   // 三値状態を出す（従来の○のみの表示より厳密に「未登録」と「確認済みでなし」を区別する）。
   const categoryKeys = options.coverageCategoryKeys || (fields ? [] : NEXUS_COVERAGE_TYPE_OPTIONS.map(o => o.key));
@@ -16938,6 +17330,9 @@ function nexusCustomerAnalysisFilterPredicate(customer, filters, ctx) {
     const rank = calcCustomerRank(customer, context.allCustomers);
     if (!f.ranks.includes(rank)) return false;
   }
+  // AI営業対象外（aiSalesEligibility==='不可'）の顧客を、この抽出（＝AI分析用データの
+  // 出力対象）からだけ除外する。NEXUS本体の顧客削除・通常の顧客検索には一切影響しない。
+  if (f.excludeAiSalesIneligible && customer.aiSalesEligibility === '不可') return false;
   return true;
 }
 // anonymizedRows（オブジェクトの配列。ネストした配列・オブジェクトも含む）から、
@@ -17021,9 +17416,26 @@ const NEXUS_AI_EXPORT_FIELD_DEFS = [
   { key: 'paymentCycleUnsetCount', group: 'contractSummary', label: '支払方法未設定件数', csv: r => r.paymentCycleUnsetCount },
   { key: 'earliestContractYearMonth', group: 'contractSummary', label: '最古契約年月', csv: r => r.earliestContractYearMonth || '' },
   { key: 'elapsedYearsSinceFirstContract', group: 'contractSummary', label: '契約経過年数', csv: r => r.elapsedYearsSinceFirstContract === null || r.elapsedYearsSinceFirstContract === undefined ? '' : r.elapsedYearsSinceFirstContract },
-  { key: 'responsibleSplit', group: 'contractSummary', label: '自分担当／他代理店の内訳', csv: r => r.responsibleSplit ? `当社担当${r.responsibleSplit.own}件・他代理店${r.responsibleSplit.other}件${r.responsibleSplit.unset ? '・未設定' + r.responsibleSplit.unset + '件' : ''}` : '', newField: true }
+  { key: 'responsibleSplit', group: 'contractSummary', label: '自分担当／他代理店の内訳', csv: r => r.responsibleSplit ? `当社担当${r.responsibleSplit.own}件・他代理店${r.responsibleSplit.other}件${r.responsibleSplit.unset ? '・未設定' + r.responsibleSplit.unset + '件' : ''}` : '', newField: true },
+  // ④ 法人・紹介分析（AI営業本部向け拡張）。法人名はこの一覧には含めず、法人営業モード選択時
+  // にのみnexusAiExportCsvBlockAが末尾へ別枠で追加する（通常のチェックボックス選択では出せない）。
+  { key: 'corpRelationType', group: 'corpAnalysis', label: '法人との関係', csv: r => r.corpRelationType || '', newField: true },
+  { key: 'jobTitle', group: 'corpAnalysis', label: '役職', csv: r => r.jobTitle || '', newField: true },
+  { key: 'industryMajor', group: 'corpAnalysis', label: '業種大分類', csv: r => r.industryMajor || '', newField: true },
+  { key: 'industryDetail', group: 'corpAnalysis', label: '詳細業種', csv: r => r.industryDetail || '', newField: true },
+  { key: 'corpPrefecture', group: 'corpAnalysis', label: '法人所在地（都道府県）', csv: r => r.corpPrefecture || '', newField: true },
+  { key: 'corpCity', group: 'corpAnalysis', label: '法人所在地（市区町村）', csv: r => r.corpCity || '', newField: true },
+  { key: 'corpRelationScale', group: 'corpAnalysis', label: '法人規模', csv: r => r.corpRelationScale || '', newField: true },
+  { key: 'corpCustomerOrIndividual', group: 'corpAnalysis', label: '法人顧客／個人顧客', csv: r => r.corpCustomerOrIndividual || '', newField: true },
+  { key: 'corpConsultationStatus', group: 'corpAnalysis', label: '法人相談歴', csv: r => r.corpConsultationStatus || '', newField: true },
+  { key: 'corpConsultationCount', group: 'corpAnalysis', label: '法人相談回数', csv: r => r.corpConsultationCount, newField: true },
+  { key: 'corpContractStatus', group: 'corpAnalysis', label: '法人契約歴', csv: r => r.corpContractStatus || '', newField: true },
+  { key: 'corpLastContactBand', group: 'corpAnalysis', label: '法人最終接触', csv: r => r.corpLastContactBand || '', newField: true },
+  { key: 'corpReferralPotential', group: 'corpAnalysis', label: '紹介可能性', csv: r => r.corpReferralPotential || '', newField: true },
+  { key: 'corpSalesCautionFlag', group: 'corpAnalysis', label: '法人営業注意フラグ', csv: r => r.corpSalesCautionFlag || '', newField: true },
+  { key: 'aiSalesEligibility', group: 'corpAnalysis', label: 'AI営業対象可否', csv: r => r.aiSalesEligibility || '', newField: true }
 ];
-const NEXUS_AI_EXPORT_FIELD_GROUP_LABELS = { basic: '① 基本情報', relation: '② 関係性・フォロー情報', contractSummary: '③ 契約概要' };
+const NEXUS_AI_EXPORT_FIELD_GROUP_LABELS = { basic: '① 基本情報', relation: '② 関係性・フォロー情報', contractSummary: '③ 契約概要', corpAnalysis: '④ 法人・紹介分析' };
 // おすすめプリセット（かんたん選択）。適用後も個々のチェックボックスでいつでも変更できる。
 const NEXUS_AI_EXPORT_PRESETS = {
   relation: {
@@ -17209,11 +17621,17 @@ function nexusResponsibleSplitForCustomer(customer) {
   return { own, other, unset };
 }
 // 顧客概要CSV（Aブロック）：選択された出力項目＋選択された保障カテゴリーの確認状態のみを列にする。
-function nexusAiExportCsvBlockA(rows, fieldDefs, categoryKeys) {
+// corpSalesMode（法人営業モード）がtrueの場合のみ、末尾に「法人名」列を追加する
+// （通常のチェックボックス選択（NEXUS_AI_EXPORT_FIELD_DEFS）には含めず、モード選択でのみ出す）。
+function nexusAiExportCsvBlockA(rows, fieldDefs, categoryKeys, corpSalesMode) {
   const defs = fieldDefs && fieldDefs.length ? fieldDefs : NEXUS_AI_EXPORT_FIELD_DEFS.filter(d => !d.newField);
   const cats = categoryKeys || [];
   const header = ['AI分析用ID', ...defs.map(d => d.label), ...cats.map(k => (NEXUS_COVERAGE_TYPE_OPTIONS.find(o => o.key === k) || {}).label || k)];
   const body = rows.map(r => [r.analysisId, ...defs.map(d => d.csv(r)), ...cats.map(k => r.coverageStates && r.coverageStates[k] || '未確認')]);
+  if (corpSalesMode) {
+    header.push('法人名');
+    body.forEach((row, i) => row.push(rows[i].corpName || ''));
+  }
   return [header, ...body];
 }
 // 契約詳細CSV（Bブロック）：1行＝1顧客の1契約（NEXUS内部の契約レコード基準）。複数の保障
@@ -17247,6 +17665,14 @@ const NEXUS_RELATIONSHIP_STATUSES = ['新規登録', 'まだ接点が浅い', '�
 const NEXUS_INTEREST_TAG_PRESETS = ['相続', '認知症', '介護', '親なきあと', '教育費', '老後資金', '資産形成', 'NISA', 'iDeCo', '住宅', '住宅ローン', '医療費', '退職', '年金', '法人', '事業承継', '自社株', '保険金請求', '保障内容確認', '保険契約整理', 'その他'];
 const NEXUS_PREFERRED_CONTACT_METHODS = ['LINE', 'SMS', '電話', 'メール', '郵送', '対面', '特に希望なし', '未確認'];
 const NEXUS_CONTACT_POLICY_OPTIONS = ['通常フォロー可', '情報提供のみ', '必要時のみ', '営業連絡NG', 'しばらく連絡を控える', '本人ではなく家族経由', 'その他', '未確認'];
+// ── 法人・紹介分析（AI営業本部向け拡張）の選択肢定義 ──────────────────
+// すべてユーザーが明示的に選択・入力するまで「未確認」「不明」のまま（自動推測はしない）。
+const NEXUS_CORP_RELATION_TYPES = ['代表者', '役員', '個人事業主', '従業員', '家族経営', 'その他', '未確認'];
+const NEXUS_INDUSTRY_MAJOR_OPTIONS = ['介護・福祉', '医療・病院', '動物病院', 'ペットホテル', 'ペット関連', '宿泊・ホテル', '不動産', '建設・工務店', '士業', '飲食', '美容', '小売', '製造', 'IT', '金融・保険', '運送', '教育', 'その他', '未確認'];
+const NEXUS_CORP_RELATION_SCALES = ['1人', '2〜5人', '6〜20人', '21〜50人', '51人以上', '不明'];
+const NEXUS_CORP_YES_NO_STATUSES = ['あり', 'なし', '未確認'];
+const NEXUS_AI_SALES_ELIGIBILITY_OPTIONS = ['可', '不可', '要確認'];
+const NEXUS_SALES_EXCLUSION_REASONS = ['担当変更済み', '他担当', '接触禁止', '営業対象外', '積極フォローしない', '本人希望による連絡制限', 'クレーム／要注意', 'その他', '未確認'];
 const NEXUS_COVERAGE_TYPE_OPTIONS = [{ key: 'death', label: '死亡保障' }, { key: 'medical', label: '医療保障' }, { key: 'cancer', label: 'がん保障' }, { key: 'care', label: '介護保障' }, { key: 'annuity', label: '個人年金' }, { key: 'variable', label: '変額保険' }, { key: 'foreignCurrency', label: '外貨建保険' }];
 
 // 生保／損保の判定：contract.categoryが設定されていればそれを使い、未設定の場合だけ
