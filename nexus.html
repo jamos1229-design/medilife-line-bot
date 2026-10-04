@@ -8786,6 +8786,13 @@ function NexusFanFollowRecordForm({
     memo: '',
     readAt: '',
     repliedAt: '',
+    // 電話フォロー：既存データ構造（活動履歴・最終接触・連絡方法等）を調査した結果、
+    // 「電話した／不通／折返し待ち」のような通話結果を記録できる既存項目が無かったため、
+    // 必要最小限のこの2項目のみを追加する。phoneFollowStatusが空文字＝「記録なし（未確認）」、
+    // '未実施'は「確認した結果、まだ電話していない」という明示的な状態として区別する
+    // （「記録が無い」と「まだ電話していない」を同じ意味にしない、という要件のため）。
+    phoneFollowStatus: '',
+    phoneFollowDate: '',
     relatedActivityLogId: '',
     nextFollowDate: '',
     nextFollowAction: '',
@@ -8848,6 +8855,30 @@ function NexusFanFollowRecordForm({
     className: `chip ${form.repliedAt ? 'active' : ''}`,
     onClick: () => s('repliedAt')(form.repliedAt ? '' : todayStr())
   }, form.repliedAt ? `✓ 返信あり（${form.repliedAt}）` : "返信あり"));
+  // 電話フォロー：ステータスチップ＋（電話を試みた場合のみ）実施日。未選択のまま＝「記録なし／
+  // 未確認」とし、「未実施」を明示的に選んだ場合と区別する（既存データの意味を勝手に決めつけない）。
+  const phoneFollowNeedsDate = ['電話した', '不通', '折返し待ち'].includes(form.phoneFollowStatus);
+  const phoneFollowChips = React.createElement("div", {
+    style: { display: 'flex', flexWrap: 'wrap', gap: 8 }
+  }, NEXUS_FAN_PHONE_FOLLOW_STATUSES.map(st => React.createElement("button", {
+    key: st,
+    type: "button",
+    className: `chip ${form.phoneFollowStatus === st ? 'active' : ''}`,
+    onClick: () => setForm(f => {
+      if (f.phoneFollowStatus === st) return { ...f, phoneFollowStatus: '', phoneFollowDate: '' };
+      const needsDate = ['電話した', '不通', '折返し待ち'].includes(st);
+      return { ...f, phoneFollowStatus: st, phoneFollowDate: needsDate ? (f.phoneFollowDate || todayStr()) : '' };
+    })
+  }, st)));
+  const phoneFollowSection = React.createElement("div", {
+    className: "form-group"
+  }, React.createElement("label", { className: "form-label" }, "電話フォロー（任意）"), phoneFollowChips, phoneFollowNeedsDate && React.createElement("input", {
+    type: "date",
+    className: "form-input",
+    style: { marginTop: 8 },
+    value: form.phoneFollowDate,
+    onChange: si('phoneFollowDate')
+  }));
   const handleBridgeSave = a => {
     if (setActivityLogs) {
       setActivityLogs(prev => {
@@ -8996,7 +9027,7 @@ function NexusFanFollowRecordForm({
     style: { resize: 'vertical', minHeight: 50 },
     value: form.memo,
     onChange: si('memo')
-  })), oneTapRow, React.createElement("div", {
+  })), phoneFollowSection, oneTapRow, React.createElement("div", {
     style: { marginTop: 12 }
   }, consultSection), downstreamSection, bridgeDrawer, React.createElement("div", {
     className: "form-group",
@@ -9135,7 +9166,7 @@ function NexusFanFollowRecordList({
   const badgeStyle = { fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 10, background: '#E3F2FD', color: '#1565C0' };
   const row = f => {
     const stage = nexusFanFollowDownstreamStage(f, activityLogs, customers);
-    const badges = [f.readAt && nexusFanCampaignTypeConfig(campaignType).reactionLabel, f.repliedAt && '返信', stage.consultedAt && '相談', stage.metAt && '面談', stage.proposedAt && '提案', stage.closedAt && '成約'].filter(Boolean);
+    const badges = [f.readAt && nexusFanCampaignTypeConfig(campaignType).reactionLabel, f.phoneFollowStatus && `電話：${f.phoneFollowStatus}`, f.repliedAt && '返信', stage.consultedAt && '相談', stage.metAt && '面談', stage.proposedAt && '提案', stage.closedAt && '成約'].filter(Boolean);
     const rowCustomer = f.customerId ? findCustomer(f.customerId) : null;
     return React.createElement("div", {
       key: f.id,
@@ -9195,9 +9226,17 @@ function NexusFanFollowRecordList({
     style: { marginBottom: 10 },
     onClick: () => setBulkSheetOpen(true)
   }, `📋 まとめて${nexusFanCampaignTypeConfig(campaignType).completedStatusLabel}にする（${scoped.length}件から選択）`);
-  const applyBulkSentDate = (ids, dateStr) => {
+  // nextFollowDate（任意）を指定した場合、既存の「今日フォロー」画面（nextFollowDate<=今日で
+  // 抽出する仕組み、変更なし）に乗るよう同時に設定する。発送から何日後、といった固定ルールは
+  // 作らず、指定された日付をそのまま反映するだけにとどめる。
+  const applyBulkSentDate = (ids, dateStr, nextFollowDateStr) => {
     const now = new Date().toISOString();
-    setFollows(prev => prev.map(f => ids.includes(f.id) ? { ...f, sentDate: dateStr, updatedAt: now } : f));
+    setFollows(prev => prev.map(f => ids.includes(f.id) ? {
+      ...f,
+      sentDate: dateStr,
+      ...(nextFollowDateStr ? { nextFollowDate: nextFollowDateStr } : {}),
+      updatedAt: now
+    } : f));
   };
   const bulkSheet = bulkSheetOpen && React.createElement(NexusFanBulkSentDateSheet, {
     records: scoped.map(f => ({ id: f.id, sentDate: f.sentDate, customerLabel: f.customerId ? customerName(f.customerId) : (f.customerNameText || '（名前未入力）') })),
@@ -9245,6 +9284,11 @@ function NexusFanBulkSentDateSheet({ records, campaignType, onApply, onClose }) 
   const typeConfig = nexusFanCampaignTypeConfig(campaignType);
   const [selectedIds, setSelectedIds] = useState(() => records.map(r => r.id));
   const [dateStr, setDateStr] = useState(todayStr());
+  // 次回電話フォロー予定日（任意）：指定した場合、選択した記録のnextFollowDateも同時に
+  // 設定し、既存の「今日フォロー」画面（nextFollowDate基準、変更なし）でそのまままとめて
+  // 電話フォロー対象として管理できるようにする。「発送から○日後」等の固定ルールは作らず、
+  // 手動で選んだ日付をそのまま使う。
+  const [nextFollowDateStr, setNextFollowDateStr] = useState('');
   const toggle = id => setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   const allSelected = records.length > 0 && selectedIds.length === records.length;
   return React.createElement("div", {
@@ -9264,6 +9308,15 @@ function NexusFanBulkSentDateSheet({ records, campaignType, onApply, onClose }) 
       React.createElement("input", {
         type: "date", className: "form-input", value: dateStr, onChange: e => setDateStr(e.target.value)
       })
+    ),
+    React.createElement("div", { className: "form-group" },
+      React.createElement("label", { className: "form-label" }, "次回電話フォロー予定日（任意）"),
+      React.createElement("input", {
+        type: "date", className: "form-input", value: nextFollowDateStr, onChange: e => setNextFollowDateStr(e.target.value)
+      }),
+      React.createElement("div", {
+        style: { fontSize: 11, color: 'var(--text-sub)', marginTop: 4 }
+      }, "設定すると、選択した記録が「今日フォロー」にその日付で表示されます。")
     ),
     React.createElement("div", {
       style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '10px 0' }
@@ -9292,7 +9345,7 @@ function NexusFanBulkSentDateSheet({ records, campaignType, onApply, onClose }) 
       React.createElement("button", {
         type: "button", className: "btn btn-primary btn-full",
         disabled: selectedIds.length === 0 || !dateStr,
-        onClick: () => { onApply(selectedIds, dateStr); onClose(); }
+        onClick: () => { onApply(selectedIds, dateStr, nextFollowDateStr); onClose(); }
       }, `選択した${selectedIds.length}件を更新`)
     )
   ));
@@ -16957,6 +17010,10 @@ function nexusMarketSourceBreakdown(activityLogs, periodStart, periodEnd) {
 const NEXUS_FAN_ATTRIBUTES = ['既契約者', '過去相談者', '見込客', '知人', '元同僚', '紹介者', 'その他'];
 const NEXUS_FAN_SEND_METHODS = ['LINE', 'SMS', 'Messenger', 'Instagram', 'Threads', 'メール', 'その他'];
 const NEXUS_FAN_CAMPAIGN_STATUSES = ['進行中', '終了', '一時停止'];
+// 電話フォローの状況。空文字列（未選択）は「記録なし／未確認」を表し、'未実施'（確認した結果
+// まだ電話していない、という明示的な状態）とは区別する。'電話した'/'不通'/'折返し待ち'は
+// いずれも実際に電話を試みた記録のため、phoneFollowDateに実施日を保存する。
+const NEXUS_FAN_PHONE_FOLLOW_STATUSES = ['未実施', '電話した', '不通', '折返し待ち'];
 // キャンペーン種類：記録する最初のアクション・表示名をキャンペーンごとに変えるための項目。
 // 既存キャンペーンにはこの項目が存在しない（undefined）ため、空文字列＝「未設定」のまま扱い、
 // 名前から自動判定することはしない（未設定の場合は従来通り「記事」前提の表示・項目のまま動く）。
@@ -16964,7 +17021,7 @@ const NEXUS_FAN_CAMPAIGN_TYPES = ['記事', 'ハガキ'];
 const NEXUS_FAN_CAMPAIGN_TYPE_LABELS = { '記事': '記事（note等）', 'ハガキ': 'ハガキ' };
 // キャンペーン種類ごとの「最初のアクション」の表示名・入力欄の構成。
 const NEXUS_FAN_CAMPAIGN_TYPE_CONFIG = {
-  'ハガキ': { sentDateLabel: '発送日', firstActionLabel: 'ハガキ発送', showArticleFields: false, reactionLabel: '反応あり', nextActionPlaceholder: '例：ハガキをもう一度送る', sentCountLabel: '発送', measureLabel: 'ハガキ', completedStatusLabel: '発送済み' },
+  'ハガキ': { sentDateLabel: '発送日', firstActionLabel: 'ハガキ発送', showArticleFields: false, reactionLabel: '反応あり', nextActionPlaceholder: '例：電話でフォローする', sentCountLabel: '発送', measureLabel: 'ハガキ', completedStatusLabel: '発送済み' },
   '記事': { sentDateLabel: '送信日', firstActionLabel: '記事送信', showArticleFields: true, reactionLabel: '既読', nextActionPlaceholder: '例：別の記事を送る', sentCountLabel: '送信', measureLabel: '記事', completedStatusLabel: '送信済み' }
 };
 // 未設定（既存キャンペーン・従来データ）は、これまでと完全に同じ「記事」前提の表示のまま動かす。
@@ -17163,8 +17220,11 @@ function nexusFanMethodBreakdown(follows, activityLogs, customers, tasks) {
 // 顧客登録済みでない記録（customerNameText手入力のみ）は、氏名を一切出力に含めず、
 // その記録自身の内部id（uid()生成のランダム文字列。個人情報と無関係）で区別できるようにする
 // （「未登録」という同一ラベルに複数人がまとまって、別人が同一人物に見えてしまうことを防ぐため）。
-// 電話フォローは、既存データ構造上これを独立して記録する項目が無いため、新しいKPI項目を
-// 増やさず常に「記録なし／未確認」を返す（「記録が無い」＝「実施していない」と断定しない）。
+// 電話フォローは、既存データ（活動履歴・最終接触・連絡方法等）を調査した結果、通話結果
+// （電話した／不通／折返し待ち）を記録できる既存項目が無かったため、record.phoneFollowStatus／
+// phoneFollowDateという必要最小限の2項目のみを追加している。空文字列＝「記録なし／未確認」、
+// '未実施'＝明示的にまだ電話していないことを確認済み、という状態を区別し、
+// 「記録が無い」＝「実施していない」と断定しない。
 // LINE登録は、ファン化フォロー独自の項目を増やさず、既存のcustomer.lineRegisteredをそのまま使う。
 // 相談／面談／提案／成約は、既存のnexusFanFollowDownstreamStage（PROTECTED、変更なし）の
 // 結果だけを使う。次回対応日・次回対応内容は既存のnextFollowDate／nextFollowActionをそのまま使う
@@ -17191,8 +17251,8 @@ function nexusFanFollowIndividualProgressRow(recordWithStage, campaign, customer
     status: typeConfig.completedStatusLabel,
     doneDate: record.sentDate || '',
     reaction: record.readAt ? `${typeConfig.reactionLabel}（${record.readAt}）` : '未確認',
-    phoneFollowStatus: '記録なし／未確認',
-    phoneFollowDate: '',
+    phoneFollowStatus: record.phoneFollowStatus ? (record.phoneFollowDate ? `${record.phoneFollowStatus}（${record.phoneFollowDate}）` : record.phoneFollowStatus) : '未確認',
+    phoneFollowDate: record.phoneFollowDate || '',
     lineRegistered,
     consulted: withDate(!!stage.consultedAt, 'あり', stage.consultedAt),
     met: withDate(!!stage.metAt, 'あり', stage.metAt),
