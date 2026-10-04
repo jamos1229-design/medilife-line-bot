@@ -1421,6 +1421,35 @@ function NexusFindingCard({
   })));
 }
 const CONTRACT_STATUSES = ['有効', '解約', '失効', '減額'];
+// ── 保険料の払込状況・払込免除（契約ステータスとは独立した別管理の項目） ──────────────
+// 「払込免除の保障・特約が付いている」ことと「実際に払込免除が適用されている」ことは別。
+// 払込状況を変更しても契約ステータス（有効・解約・失効・減額）は一切自動変更しない。
+const PREMIUM_PAYMENT_STATUSES = ['未設定', '通常払込', '払込免除中', '払込完了'];
+const WAIVER_BENEFIT_STATUSES = ['未確認', 'あり', 'なし'];
+// 「払込免除中」を選び、かつ①保険会社に全額免除を確認済み②免除開始日が入力済み③開始日が
+// 基準日（asOfDateStr）以前、の3条件をすべて満たす場合にのみ「実際に適用されている」とみなす。
+// 未確認・開始日不明・開始日が基準日より先（未到来）・一部免除の場合は、自動で適用扱いにしない。
+function nexusWaiverActiveAsOf(ct, asOfDateStr) {
+  if (!ct || ct.premiumPaymentStatus !== '払込免除中') return false;
+  if (!ct.waiverFullyConfirmed) return false;
+  if (!ct.waiverStartDate) return false;
+  return ct.waiverStartDate <= (asOfDateStr || todayStr());
+}
+// 「払込免除中」だが上の3条件をまだ満たさない場合に、何が未確認かを示す短い理由文。
+// 実際に適用されている場合・払込免除中以外の場合はnullを返す。
+function nexusWaiverPendingReason(ct, asOfDateStr) {
+  if (!ct || ct.premiumPaymentStatus !== '払込免除中') return null;
+  if (!ct.waiverFullyConfirmed) return '保険会社への全額免除の確認待ち';
+  if (!ct.waiverStartDate) return '免除開始日未確認';
+  if (ct.waiverStartDate > (asOfDateStr || todayStr())) return '免除開始日が未到来';
+  return null;
+}
+// 契約1件の「現在の支払負担」。baseAmountJpyは呼び出し元が算出済みの登録保険料（円換算後、
+// 減額後保険料などの既存の上書きはそのまま呼び出し元の計算に任せる）。免除が実際に適用されて
+// いる場合だけ0円を返し、登録保険料そのもの（ct.premium等）は一切書き換えない。
+function nexusCurrentPaymentBurdenJpy(ct, baseAmountJpy, asOfDateStr) {
+  return nexusWaiverActiveAsOf(ct, asOfDateStr) ? 0 : (baseAmountJpy || 0);
+}
 // 契約の目的（生保管理表の集計区分に合わせる。死亡保障系と医療保障系を明確に分離して集計するために使用）
 const CONTRACT_PURPOSES = ['死亡保障', '死亡時収入保障', '介護・就労不能保障', '医療保障', '特定疾病（ガン）', '年金・貯蓄型', '事業保障・退職金', '相続対策', 'その他'];
 // 集計上「死亡保険」として合算する目的
@@ -1585,6 +1614,120 @@ function ContractBlock({
       } : {})
     });
   };
+  // ── 保険料の払込状況・払込免除（契約ステータスとは別管理） ──
+  const pps = contract.premiumPaymentStatus || '未設定';
+  const wbs = contract.waiverBenefitStatus || '未確認';
+  const waiverAsOfToday = todayStr();
+  const waiverActiveNow = nexusWaiverActiveAsOf(contract, waiverAsOfToday);
+  const waiverPendingReason = nexusWaiverPendingReason(contract, waiverAsOfToday);
+  const registeredPremiumLabel = nexusPremiumLabel(contract.paymentCycle);
+  const registeredPremiumText = nexusContractPremiumText(contract) || '未入力';
+  const premiumStatusBlock = /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "保険料の払込状況"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, PREMIUM_PAYMENT_STATUSES.map(st => /*#__PURE__*/React.createElement("button", {
+    key: st,
+    type: "button",
+    className: `toggle-btn ${pps === st ? 'sel' : ''}`,
+    onClick: () => sv('premiumPaymentStatus')(st)
+  }, st))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "払込免除の保障・特約"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, WAIVER_BENEFIT_STATUSES.map(st => /*#__PURE__*/React.createElement("button", {
+    key: st,
+    type: "button",
+    className: `toggle-btn ${wbs === st ? 'sel' : ''}`,
+    onClick: () => sv('waiverBenefitStatus')(st)
+  }, st)))), pps === '払込免除中' && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: '#F5F3FF',
+      border: '1px solid #DDD6FE',
+      borderRadius: 10,
+      padding: '10px 12px',
+      marginTop: 10,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "免除開始日"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    type: "date",
+    value: contract.waiverStartDate || '',
+    onChange: s('waiverStartDate')
+  }), !contract.waiverStartDate && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      marginTop: 4
+    }
+  }, "開始日未確認")), /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'flex-start',
+      gap: 8,
+      fontSize: 13,
+      cursor: 'pointer'
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: !!contract.waiverFullyConfirmed,
+    onChange: e => sv('waiverFullyConfirmed')(e.target.checked),
+    style: {
+      marginTop: 2
+    }
+  }), /*#__PURE__*/React.createElement("span", null, "保険会社に全額免除を確認済み", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)'
+    }
+  }, "一部のみ免除・範囲が不明な場合はチェックしないでください"))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "免除に関するメモ（任意）"), /*#__PURE__*/React.createElement("textarea", {
+    className: "form-textarea",
+    style: {
+      minHeight: 50
+    },
+    placeholder: "例：入院による就業不能のため免除申請中",
+    value: contract.waiverMemo || '',
+    onChange: s('waiverMemo')
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      background: '#fff',
+      borderRadius: 8,
+      padding: '8px 10px'
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--text-sub)'
+    }
+  }, "免除前の登録", registeredPremiumLabel, "："), registeredPremiumText), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 4
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--text-sub)'
+    }
+  }, "現在の支払保険料："), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 700,
+      color: waiverActiveNow ? '#15803D' : 'var(--text)'
+    }
+  }, waiverActiveNow ? '0円（払込免除適用中）' : `${registeredPremiumText}${waiverPendingReason ? '（確認前の参考値：' + waiverPendingReason + '）' : ''}`)))));
   return /*#__PURE__*/React.createElement("div", {
     className: `contract-block${isInactive ? ' inactive' : ''}`,
     style: {
@@ -1670,7 +1813,7 @@ function ContractBlock({
     placeholder: cst === '解約' ? '例：転職のため保障見直し' : cst === '失効' ? '例：保険料未払いにより失効' : cst === '減額' ? '例：家計見直しのため減額' : '',
     value: contract.statusReason || '',
     onChange: s('statusReason')
-  }))), /*#__PURE__*/React.createElement("div", {
+  }))), premiumStatusBlock, /*#__PURE__*/React.createElement("div", {
     className: "form-group",
     style: {
       marginBottom: 10
@@ -6211,6 +6354,12 @@ function CustomerDetail({
       annualUsd = 0,
       lumpJpy = 0,
       lumpUsd = 0;
+    // 「現在の支払負担」（払込免除が実際に適用されている契約だけ0円として計算）。
+    // 元の保険料（annualJpy等）はそのまま残し、別枠で集計する（混同しないため）。
+    let annualJpyCurrent = 0,
+      annualUsdCurrent = 0,
+      lumpJpyCurrent = 0,
+      lumpUsdCurrent = 0;
     let recvJpy = 0,
       recvUsd = 0; // 定期支払金 年間合計
     // 担当区分別の年間保険料内訳（当社担当＋他代理店契約＋未設定＝全体合計になるようにする）。
@@ -6227,12 +6376,18 @@ function CustomerDetail({
       const isLumpLike = LUMP_LIKE_PAYMENT_CYCLES.includes(cyc);
       const annualAmt = cyc === '年払' ? amt : isLumpLike ? 0 : amt * 12;
       const annualJpyAmt = cyc === '年払' ? jpy : isLumpLike ? 0 : jpy * 12;
+      // この契約の「現在の支払負担」倍率（免除が実際に適用されていれば0、それ以外は1）。
+      // 円建て・ドル建てどちらの金額にも同じ倍率をかけるだけで、換算方法自体は変更しない。
+      const burdenMul = nexusWaiverActiveAsOf(ct, todayStr()) ? 0 : 1;
       if (isLumpLike) {
         if (cur === 'ドル') {
           lumpUsd += amt;
           lumpJpy += jpy || amt * rate;
+          lumpUsdCurrent += amt * burdenMul;
+          lumpJpyCurrent += (jpy || amt * rate) * burdenMul;
         } else {
           lumpJpy += amt;
+          lumpJpyCurrent += amt * burdenMul;
         }
       } else {
         const rt = ct.responsibleType === '当社担当' || ct.responsibleType === '他代理店契約' ? ct.responsibleType : '未設定';
@@ -6241,9 +6396,12 @@ function CustomerDetail({
           annualJpy += annualJpyAmt || annualAmt * rate;
           annualUsdByType[rt] += annualAmt;
           annualJpyByType[rt] += annualJpyAmt || annualAmt * rate;
+          annualUsdCurrent += annualAmt * burdenMul;
+          annualJpyCurrent += (annualJpyAmt || annualAmt * rate) * burdenMul;
         } else {
           annualJpy += annualAmt;
           annualJpyByType[rt] += annualAmt;
+          annualJpyCurrent += annualAmt * burdenMul;
         }
       }
       // 定期支払金
@@ -6263,6 +6421,10 @@ function CustomerDetail({
     const hasAnnual = annualJpy > 0 || annualUsd > 0;
     const hasLump = lumpJpy > 0 || lumpUsd > 0;
     const hasRecv = recvJpy > 0 || recvUsd > 0;
+    // 払込免除が実際に適用されている契約が1件でもあり、登録保険料の合計と現在の支払負担の
+    // 合計に差がある場合だけ「現在の支払負担」を別枠で表示する（免除が無い通常のケースでは
+    // 従来通りの表示のままにし、画面を必要以上に変えない）。
+    const hasWaiverReducingTotal = annualJpyCurrent !== annualJpy || annualUsdCurrent !== annualUsd || lumpJpyCurrent !== lumpJpy || lumpUsdCurrent !== lumpUsd;
     // 担当区分による絞り込み。このシステムは当社担当契約だけを管理するのではなく、他代理店契約も
     // 含めて一元管理することが目的のため、絞り込みは「除外」ではなくあくまで表示の切り替え。
     const filteredContracts = contractResponsibleFilter === 'すべて' ? c.contracts : c.contracts.filter(ct => ct.responsibleType === contractResponsibleFilter);
@@ -6391,7 +6553,54 @@ function CustomerDetail({
         fontWeight: 800,
         color: '#059669'
       }
-    }, "$", lumpUsd.toLocaleString()))), hasRecv && /*#__PURE__*/React.createElement("div", {
+    }, "$", lumpUsd.toLocaleString()))), hasWaiverReducingTotal && /*#__PURE__*/React.createElement("div", {
+      style: {
+        paddingTop: hasAnnual || hasLump ? 10 : 0,
+        borderTop: hasAnnual || hasLump ? '1px solid rgba(91,91,214,0.2)' : 'none'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: '#15803D',
+        fontWeight: 700,
+        marginBottom: 4
+      }
+    }, "💳 現在の支払負担（払込免除を反映）"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 10,
+        flexWrap: 'wrap',
+        alignItems: 'baseline'
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 20,
+        fontWeight: 800,
+        color: '#15803D'
+      }
+    }, "¥", Math.round(annualJpyCurrent).toLocaleString()), annualUsdCurrent > 0 && /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 16,
+        fontWeight: 800,
+        color: '#059669'
+      }
+    }, "$", Math.round(annualUsdCurrent).toLocaleString()), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 12,
+        color: 'var(--text-sub)'
+      }
+    }, "/ 年"), annualJpyCurrent > 0 && /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 12,
+        color: 'var(--text-sub)'
+      }
+    }, "（月割 ¥", Math.round(annualJpyCurrent / 12).toLocaleString(), "）")), (lumpJpyCurrent !== lumpJpy || lumpUsdCurrent !== lumpUsd) && /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: 'var(--text-sub)',
+        marginTop: 4
+      }
+    }, "一時払・前納（現在の負担）：¥", Math.round(lumpJpyCurrent).toLocaleString())), hasRecv && /*#__PURE__*/React.createElement("div", {
       style: {
         paddingTop: 10,
         borderTop: '1px solid rgba(91,91,214,0.2)'
@@ -6503,7 +6712,16 @@ function CustomerDetail({
         return /*#__PURE__*/React.createElement("span", {
           className: `cs-badge cs-${cst2}`
         }, cst2);
-      })()), ct.responsibleType === '他代理店契約' && /*#__PURE__*/React.createElement("div", {
+      })(), ct.premiumPaymentStatus === '払込免除中' && /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontSize: 10.5,
+          fontWeight: 700,
+          padding: '2px 8px',
+          borderRadius: 6,
+          background: nexusWaiverActiveAsOf(ct, todayStr()) ? '#DCFCE7' : '#FEF3C7',
+          color: nexusWaiverActiveAsOf(ct, todayStr()) ? '#15803D' : '#D97706'
+        }
+      }, nexusWaiverActiveAsOf(ct, todayStr()) ? '💳 払込免除中' : '💳 払込免除中（確認待ち）')), ct.responsibleType === '他代理店契約' && /*#__PURE__*/React.createElement("div", {
         style: {
           fontSize: 11,
           color: 'var(--text-sub)',
@@ -6808,7 +7026,33 @@ function CustomerDetail({
           padding: '1px 6px',
           marginLeft: 5
         }
-      }, ct.paymentCycle))) : null, ct.date && /*#__PURE__*/React.createElement("div", {
+      }, ct.paymentCycle))) : null, ct.premiumPaymentStatus && ct.premiumPaymentStatus !== '未設定' && /*#__PURE__*/React.createElement("div", {
+        className: "info-item",
+        style: {
+          gridColumn: '1/-1'
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "info-label"
+      }, "保険料の払込状況"), /*#__PURE__*/React.createElement("div", {
+        className: "info-value"
+      }, ct.premiumPaymentStatus), ct.premiumPaymentStatus === '払込免除中' && /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 13,
+          marginTop: 4,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 2
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          color: 'var(--text-sub)'
+        }
+      }, "登録", nexusPremiumLabel(ct.paymentCycle), "：", nexusContractPremiumText(ct) || '未入力'), /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontWeight: 700,
+          color: nexusWaiverActiveAsOf(ct, todayStr()) ? '#15803D' : 'var(--text)'
+        }
+      }, "現在の支払保険料：", nexusWaiverActiveAsOf(ct, todayStr()) ? '0円' : (nexusContractPremiumText(ct) || '未入力') + (nexusWaiverPendingReason(ct, todayStr()) ? `（確認前の参考値：${nexusWaiverPendingReason(ct, todayStr())}）` : '')))), ct.date && /*#__PURE__*/React.createElement("div", {
         className: "info-item"
       }, /*#__PURE__*/React.createElement("div", {
         className: "info-label"
