@@ -8650,6 +8650,15 @@ function NexusFanCampaignForm({ editing, onSave, onClose }) {
     className: `chip ${form.status === st ? 'active' : ''}`,
     onClick: () => s('status')(st)
   }, st)));
+  // キャンペーン種類：未設定のまま残すことも選べる（既存キャンペーンの自動分類はしない）。
+  const typeChips = React.createElement("div", {
+    style: { display: 'flex', flexWrap: 'wrap', gap: 8 }
+  }, NEXUS_FAN_CAMPAIGN_TYPES.map(t => React.createElement("button", {
+    key: t,
+    type: "button",
+    className: `chip ${form.campaignType === t ? 'active' : ''}`,
+    onClick: () => s('campaignType')(form.campaignType === t ? '' : t)
+  }, NEXUS_FAN_CAMPAIGN_TYPE_LABELS[t])));
   return React.createElement("div", {
     className: "overlay",
     onClick: onClose
@@ -8670,6 +8679,12 @@ function NexusFanCampaignForm({ editing, onSave, onClose }) {
     placeholder: "例：2026年9月 100人フォロー",
     onChange: si('name')
   })), React.createElement("div", {
+    className: "form-group"
+  }, React.createElement("label", {
+    className: "form-label"
+  }, "キャンペーン種類"), typeChips, React.createElement("div", {
+    style: { fontSize: 11, color: 'var(--text-sub)', marginTop: 4 }
+  }, !form.campaignType && "未設定のままでも作成できます（従来どおり「記事」の項目で記録します）。")), React.createElement("div", {
     style: { display: 'flex', gap: 8 }
   }, React.createElement("div", {
     className: "form-group",
@@ -8744,6 +8759,7 @@ function NexusFanCampaignForm({ editing, onSave, onClose }) {
 function NexusFanFollowRecordForm({
   editing,
   campaignId,
+  campaignType,
   customers,
   activityLogs,
   opportunities,
@@ -8784,6 +8800,10 @@ function NexusFanFollowRecordForm({
   const si = k => e => s(k)(e.target.value);
   const relatedCustomer = (customers || []).find(c => c.id === form.customerId);
   const stage = nexusFanFollowDownstreamStage(form, activityLogs, customers);
+  // キャンペーン種類（未設定の場合は従来通り「記事」前提のまま）に応じて、最初のアクションの
+  // ラベル・入力欄構成だけを切り替える。相談以降の判定・集計（stage／nexusFanFollowMetricsGroup）
+  // は種類に関係なく完全に同じ処理を使う。
+  const typeConfig = nexusFanCampaignTypeConfig(campaignType);
   const save = () => {
     if (!form.customerId && !(form.customerNameText || '').trim()) return;
     const now = new Date().toISOString();
@@ -8823,7 +8843,7 @@ function NexusFanFollowRecordForm({
     type: "button",
     className: `chip ${form.readAt ? 'active' : ''}`,
     onClick: () => s('readAt')(form.readAt ? '' : todayStr())
-  }, form.readAt ? `✓ 既読（${form.readAt}）` : "既読にする"), React.createElement("button", {
+  }, form.readAt ? `✓ ${typeConfig.reactionLabel}（${form.readAt}）` : `${typeConfig.reactionLabel}にする`), React.createElement("button", {
     type: "button",
     className: `chip ${form.repliedAt ? 'active' : ''}`,
     onClick: () => s('repliedAt')(form.repliedAt ? '' : todayStr())
@@ -8905,7 +8925,7 @@ function NexusFanFollowRecordForm({
     className: "drawer-handle"
   }), React.createElement("div", {
     className: "drawer-title"
-  }, editing ? "記録を編集" : "記録を追加"), React.createElement(CustomerSelect, {
+  }, editing ? `${typeConfig.firstActionLabel}の記録を編集` : `${typeConfig.firstActionLabel}を記録`), React.createElement(CustomerSelect, {
     label: "顧客（登録済みの方はこちらから選択）",
     value: form.customerId,
     onChange: v => setForm(f => ({ ...f, customerId: v, customerNameText: v ? '' : f.customerNameText })),
@@ -8930,12 +8950,12 @@ function NexusFanFollowRecordForm({
     className: "form-group"
   }, React.createElement("label", {
     className: "form-label"
-  }, "送信日"), React.createElement("input", {
+  }, typeConfig.sentDateLabel), React.createElement("input", {
     type: "date",
     className: "form-input",
     value: form.sentDate,
     onChange: si('sentDate')
-  })), React.createElement("div", {
+  })), typeConfig.showArticleFields && React.createElement(React.Fragment, null, React.createElement("div", {
     className: "form-group"
   }, React.createElement("label", {
     className: "form-label"
@@ -8953,7 +8973,7 @@ function NexusFanFollowRecordForm({
     value: form.articleUrl,
     placeholder: "https://...",
     onChange: si('articleUrl')
-  })), React.createElement("div", {
+  }))), React.createElement("div", {
     className: "form-group"
   }, React.createElement("label", {
     className: "form-label"
@@ -9012,7 +9032,7 @@ function NexusFanFollowRecordForm({
   }, "次にすること（任意）"), React.createElement("input", {
     className: "form-input",
     value: form.nextFollowAction,
-    placeholder: "例：別の記事を送る",
+    placeholder: typeConfig.nextActionPlaceholder,
     onChange: si('nextFollowAction')
   })), noFollowChip, React.createElement("div", {
     style: { display: 'flex', gap: 8, marginTop: 12 }
@@ -9074,6 +9094,7 @@ function NexusFanFollowRecordList({
   follows,
   setFollows,
   campaignId,
+  campaignType,
   filterRecordIds,
   hideAddButton,
   emptyText,
@@ -9113,7 +9134,7 @@ function NexusFanFollowRecordList({
   const badgeStyle = { fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 10, background: '#E3F2FD', color: '#1565C0' };
   const row = f => {
     const stage = nexusFanFollowDownstreamStage(f, activityLogs, customers);
-    const badges = [f.readAt && '既読', f.repliedAt && '返信', stage.consultedAt && '相談', stage.metAt && '面談', stage.proposedAt && '提案', stage.closedAt && '成約'].filter(Boolean);
+    const badges = [f.readAt && nexusFanCampaignTypeConfig(campaignType).reactionLabel, f.repliedAt && '返信', stage.consultedAt && '相談', stage.metAt && '面談', stage.proposedAt && '提案', stage.closedAt && '成約'].filter(Boolean);
     const rowCustomer = f.customerId ? findCustomer(f.customerId) : null;
     return React.createElement("div", {
       key: f.id,
@@ -9168,6 +9189,7 @@ function NexusFanFollowRecordList({
   const editSheet = editingRecord && React.createElement(NexusFanFollowRecordForm, {
     editing: editingRecord,
     campaignId: campaignId,
+    campaignType: campaignType,
     customers: customers,
     activityLogs: activityLogs,
     opportunities: opportunities,
@@ -9182,6 +9204,7 @@ function NexusFanFollowRecordList({
   });
   const addSheet = adding && React.createElement(NexusFanFollowRecordForm, {
     campaignId: campaignId,
+    campaignType: campaignType,
     customers: customers,
     activityLogs: activityLogs,
     opportunities: opportunities,
@@ -9230,7 +9253,9 @@ function NexusFanCampaignDashboardPanel({ campaign, follows, activityLogs, custo
   }, title), React.createElement("div", {
     style: { display: 'flex', flexWrap: 'wrap', gap: '4px 10px', fontSize: 11.5, color: 'var(--text-sub)' }
   }, React.createElement("span", null, "送信", r.sent), React.createElement("span", null, "返信", r.replied, "（", fmtRate(r.replyRate), "）"), React.createElement("span", null, "相談", r.consulted, "（", fmtRate(r.consultRate), "）"), React.createElement("span", null, "面談", r.met), React.createElement("span", null, "提案", r.proposed), React.createElement("span", null, "成約", r.closed), React.createElement("span", null, "確定売上", r.confirmedRevenue.toLocaleString(), "円")));
-  const articleRows = nexusFanArticleBreakdown(scopedFollows, activityLogs, customers, tasks);
+  // ハガキ等、記事単位の内訳が意味を持たないキャンペーン種類では「記事別の反応」自体を表示しない
+  // （articleTitle/articleUrlが入力されないため、全件が「（記事未設定）」にまとまってしまうのを防ぐ）。
+  const articleRows = campaign.campaignType && campaign.campaignType !== '記事' ? [] : nexusFanArticleBreakdown(scopedFollows, activityLogs, customers, tasks);
   const attributeRows = nexusFanAttributeBreakdown(scopedFollows, activityLogs, customers, tasks);
   const articleSection = articleRows.length > 0 && React.createElement("div", {
     style: { marginTop: 14 }
@@ -9266,6 +9291,22 @@ function NexusFanFollowScreen({
     if (!selectedCampaignId && campaigns && campaigns.length > 0) setSelectedCampaignId(campaigns[0].id);
   }, [campaigns && campaigns.length]);
   const selectedCampaign = (campaigns || []).find(c => c.id === selectedCampaignId);
+  // キャンペーンが増えても横スクロールだけで操作できるようにする。右端で次のキャンペーン名が
+  // 中途半端に見切れて「壊れている」ように見えないよう、スクロール可能な時だけ右端にヒントのフェードを
+  // 出し、選択中のキャンペーンのチップは常に全体が見える位置まで自動スクロールする。
+  const campaignPickerRef = React.useRef(null);
+  const [campaignPickerScrollable, setCampaignPickerScrollable] = useState(false);
+  React.useEffect(() => {
+    const el = campaignPickerRef.current;
+    if (!el) { setCampaignPickerScrollable(false); return; }
+    setCampaignPickerScrollable(el.scrollWidth > el.clientWidth + 1);
+  }, [campaigns && campaigns.length]);
+  React.useEffect(() => {
+    const el = campaignPickerRef.current;
+    if (!el) return;
+    const active = el.querySelector('button.active');
+    if (active && active.scrollIntoView) active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [selectedCampaignId]);
   const saveCampaign = c => {
     setCampaigns(prev => {
       const idx = prev.findIndex(x => x.id === c.id);
@@ -9274,6 +9315,9 @@ function NexusFanFollowScreen({
     setSelectedCampaignId(c.id);
   };
   const campaignPicker = campaigns && campaigns.length > 0 && React.createElement("div", {
+    style: { position: 'relative' }
+  }, React.createElement("div", {
+    ref: campaignPickerRef,
     style: { display: 'flex', gap: 8, overflowX: 'auto', padding: '0 0 4px' }
   }, campaigns.map(c => React.createElement("button", {
     key: c.id,
@@ -9281,7 +9325,13 @@ function NexusFanFollowScreen({
     className: `chip ${selectedCampaignId === c.id ? 'active' : ''}`,
     style: { flexShrink: 0 },
     onClick: () => setSelectedCampaignId(c.id)
-  }, c.name)));
+  }, c.name))), campaignPickerScrollable && React.createElement("div", {
+    "aria-hidden": "true",
+    style: {
+      position: 'absolute', top: 0, right: 0, bottom: 4, width: 28, pointerEvents: 'none',
+      background: 'linear-gradient(to right, transparent, var(--bg, #F2F2F7))'
+    }
+  }));
   const emptyState = (!campaigns || campaigns.length === 0) && React.createElement(EmptyState, {
     icon: "📣",
     text: "まだキャンペーンがありません。まず「＋キャンペーンを追加」から作成してください。"
@@ -9308,6 +9358,7 @@ function NexusFanFollowScreen({
     follows: follows,
     setFollows: setFollows,
     campaignId: selectedCampaign.id,
+    campaignType: selectedCampaign.campaignType,
     filterRecordIds: todayList.map(r => r.record.id),
     hideAddButton: true,
     emptyText: "今日フォローする人はいません",
@@ -9324,6 +9375,7 @@ function NexusFanFollowScreen({
     follows: follows,
     setFollows: setFollows,
     campaignId: selectedCampaign.id,
+    campaignType: selectedCampaign.campaignType,
     customers: customers,
     activityLogs: activityLogs,
     setActivityLogs: setActivityLogs,
@@ -9461,7 +9513,7 @@ function NexusFanFollowAiExportScreen({ campaigns, follows, activityLogs, custom
     }, "顧客の氏名・連絡先・実際に送った文章は一切出力されません。キャンペーン単位・記事単位・属性単位・送信方法単位の集計数値（送信数・既読数・返信数・各種転換率・見込/確定売上）のみが対象です。外部のAIへ自動送信することもありません。"),
     campaignChips, periodRow,
     React.createElement("div", { className: "card", style: { marginTop: 12, textAlign: 'center' } },
-      React.createElement("div", { style: { fontSize: 13, color: 'var(--text-sub)' } }, "対象送信数"),
+      React.createElement("div", { style: { fontSize: 13, color: 'var(--text-sub)' } }, "対象", nexusFanSentCountLabel(previewData.campaigns), "数"),
       React.createElement("div", { style: { fontSize: 28, fontWeight: 800, color: 'var(--accent)' } }, previewData.overall.sent, "件"),
       React.createElement("div", { style: { fontSize: 11.5, color: 'var(--text-sub)', marginTop: 4 } }, previewData.campaigns.length, "キャンペーンが対象")
     ),
@@ -9510,7 +9562,7 @@ function NexusFanFollowAiExportScreen({ campaigns, follows, activityLogs, custom
     key: i, style: { fontSize: 12, color: 'var(--danger)' }
   }, "・", issue.pattern, "：", issue.sample))));
   const metricsTiles = exportData && React.createElement("div", { className: "stat-grid" }, [
-    ['送信', exportData.overall.sent], ['既読', exportData.overall.read], ['返信', exportData.overall.replied],
+    [nexusFanSentCountLabel(exportData.campaigns), exportData.overall.sent], ['既読', exportData.overall.read], ['返信', exportData.overall.replied],
     ['返信率', fmtPct(exportData.overall.replyRate)], ['相談', exportData.overall.consulted], ['相談化率', fmtPct(exportData.overall.consultRate)],
     ['面談', exportData.overall.met], ['提案', exportData.overall.proposed], ['成約', exportData.overall.closed],
     ['見込売上', `${exportData.overall.expectedRevenue.toLocaleString()}円`], ['確定売上', `${exportData.overall.confirmedRevenue.toLocaleString()}円`]
@@ -9520,14 +9572,14 @@ function NexusFanFollowAiExportScreen({ campaigns, follows, activityLogs, custom
     key: c.name, className: "card", style: { marginBottom: 8, fontSize: 12.5, lineHeight: 1.8 }
   },
     React.createElement("div", { style: { fontWeight: 700, marginBottom: 4 } }, c.name),
-    React.createElement("div", null, "送信", c.metrics.sent, "／既読", c.metrics.read, "／返信", c.metrics.replied, "（", fmtPct(c.metrics.replyRate), "）"),
+    React.createElement("div", null, nexusFanCampaignTypeConfig(c.campaignType).sentCountLabel, c.metrics.sent, "／", nexusFanCampaignTypeConfig(c.campaignType).reactionLabel, c.metrics.read, "／返信", c.metrics.replied, "（", fmtPct(c.metrics.replyRate), "）"),
     React.createElement("div", null, "相談", c.metrics.consulted, "／面談", c.metrics.met, "／成約", c.metrics.closed),
     c.articles.length > 0 && React.createElement("div", { style: { marginTop: 4, color: 'var(--text-sub)' } }, "記事：", c.articles.map(a => `${a.articleTitle}(${a.sent}件)`).join('、')),
     c.attributes.length > 0 && React.createElement("div", { style: { color: 'var(--text-sub)' } }, "属性：", c.attributes.map(a => `${a.attribute}(${a.sent}件)`).join('、'))
   );
   const previewScreen = phase === 'preview' && React.createElement("div", { style: { padding: 16 } },
     scanBox,
-    React.createElement("div", { style: { fontSize: 12.5, color: 'var(--text-sub)', marginBottom: 10 } }, exportData.campaigns.length, "キャンペーン（送信", exportData.overall.sent, "件）を集計しました。内容を確認してください。"),
+    React.createElement("div", { style: { fontSize: 12.5, color: 'var(--text-sub)', marginBottom: 10 } }, exportData.campaigns.length, "キャンペーン（", nexusFanSentCountLabel(exportData.campaigns), exportData.overall.sent, "件）を集計しました。内容を確認してください。"),
     metricsTiles,
     React.createElement("div", { style: { marginTop: 12 } }, exportData.campaigns.map(campaignPreviewCard)),
     React.createElement("div", { style: { display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 } },
@@ -16806,6 +16858,25 @@ function nexusMarketSourceBreakdown(activityLogs, periodStart, periodEnd) {
 const NEXUS_FAN_ATTRIBUTES = ['既契約者', '過去相談者', '見込客', '知人', '元同僚', '紹介者', 'その他'];
 const NEXUS_FAN_SEND_METHODS = ['LINE', 'SMS', 'Messenger', 'Instagram', 'Threads', 'メール', 'その他'];
 const NEXUS_FAN_CAMPAIGN_STATUSES = ['進行中', '終了', '一時停止'];
+// キャンペーン種類：記録する最初のアクション・表示名をキャンペーンごとに変えるための項目。
+// 既存キャンペーンにはこの項目が存在しない（undefined）ため、空文字列＝「未設定」のまま扱い、
+// 名前から自動判定することはしない（未設定の場合は従来通り「記事」前提の表示・項目のまま動く）。
+const NEXUS_FAN_CAMPAIGN_TYPES = ['記事', 'ハガキ'];
+const NEXUS_FAN_CAMPAIGN_TYPE_LABELS = { '記事': '記事（note等）', 'ハガキ': 'ハガキ' };
+// キャンペーン種類ごとの「最初のアクション」の表示名・入力欄の構成。
+const NEXUS_FAN_CAMPAIGN_TYPE_CONFIG = {
+  'ハガキ': { sentDateLabel: '発送日', firstActionLabel: 'ハガキ発送', showArticleFields: false, reactionLabel: '反応あり', nextActionPlaceholder: '例：ハガキをもう一度送る', sentCountLabel: '発送' },
+  '記事': { sentDateLabel: '送信日', firstActionLabel: '記事送信', showArticleFields: true, reactionLabel: '既読', nextActionPlaceholder: '例：別の記事を送る', sentCountLabel: '送信' }
+};
+// 未設定（既存キャンペーン・従来データ）は、これまでと完全に同じ「記事」前提の表示のまま動かす。
+const nexusFanCampaignTypeConfig = campaignType => NEXUS_FAN_CAMPAIGN_TYPE_CONFIG[campaignType] || NEXUS_FAN_CAMPAIGN_TYPE_CONFIG['記事'];
+// 複数キャンペーンの合計件数を表示する際のラベル（ハガキ→発送、記事→送信）。
+// 対象キャンペーンの種類が1種類に揃っていればそのラベル、混在・不明の場合は両方の意味を明示した
+// 「送信/発送」とし、ハガキ発送分を「記事送信」であるかのように見せない（件数自体は一切変更しない）。
+function nexusFanSentCountLabel(campaignList) {
+  const labels = Array.from(new Set((campaignList || []).map(c => nexusFanCampaignTypeConfig(c.campaignType).sentCountLabel)));
+  return labels.length === 1 ? labels[0] : '送信/発送';
+}
 // ソフトデリートフィルタ（既存のnexusActiveLogsと同じ規約）
 function nexusFanActiveFollows(follows) {
   return (follows || []).filter(f => !f.deletedAt);
@@ -16994,13 +17065,17 @@ function nexusFanFollowAnonymizedExport({ campaigns, follows, activityLogs, cust
     const metrics = nexusFanFollowMetricsGroup(nexusFanBuildRecordsWithStage(scoped, activityLogs, customers, tasks));
     return {
       name: c.name || '（名称未設定）',
+      campaignType: c.campaignType || '',
       purpose: c.purpose || '',
       status: c.status || '',
       startDate: c.startDate || '',
       endDate: c.endDate || '',
       targetCount: c.targetCount || 0,
       metrics,
-      articles: nexusFanArticleBreakdown(scoped, activityLogs, customers, tasks),
+      // ハガキ等、記事単位の内訳が意味を持たないキャンペーン種類では記事別内訳を出力しない
+      // （articleTitle/articleUrl未入力のため「（記事未設定）」にまとまってしまうのを防ぐ。
+      // ダッシュボード表示側の同様のガードと揃えている）。
+      articles: c.campaignType && c.campaignType !== '記事' ? [] : nexusFanArticleBreakdown(scoped, activityLogs, customers, tasks),
       attributes: nexusFanAttributeBreakdown(scoped, activityLogs, customers, tasks),
       methods: nexusFanMethodBreakdown(scoped, activityLogs, customers, tasks)
     };
@@ -17060,7 +17135,7 @@ function nexusFanFollowScanForResidualPii(exportData, allCustomers) {
     (c.suspects || []).forEach(sp => { if (sp.name) names.add(sp.name); });
   });
   names.forEach(name => {
-    if (name && name.trim().length >= 2 && text.includes(name)) issues.push({ pattern: '氏名', sample: name });
+    if (name && name.trim().length >= 2 && !NEXUS_PII_SCAN_GENERIC_ROLE_NAMES.has(name.trim()) && text.includes(name)) issues.push({ pattern: '氏名', sample: name });
   });
   return { ok: issues.length === 0, issues };
 }
@@ -17579,6 +17654,13 @@ function nexusCustomerAnalysisFilterPredicate(customer, filters, ctx) {
   if (f.excludeAiSalesIneligible && customer.aiSalesEligibility === '不可') return false;
   return true;
 }
+// 「契約者」「被保険者」「契約者本人」等は、NEXUS自身が使う役割・項目名であり、実在する個人の
+// 氏名として使われることは通常ない。データ取込（生保管理表の取込など）の不具合等でこれらの語が
+// そのまま顧客の氏名欄・サスペクト名欄に入ってしまった場合に、実際の個人名が存在しないにもかかわらず
+// 出力を止めてしまう「誤検知」を防ぐため、これらの一般的な役割名「のみ」が氏名として完全一致する
+// 場合に限って検知対象から除外する。「契約者：山田太郎」のように実際の氏名が含まれる場合は、
+// 「山田太郎」の方が別途Setに入っている実名として引き続き検知されるため、安全性は下がらない。
+const NEXUS_PII_SCAN_GENERIC_ROLE_NAMES = new Set(['契約者', '被保険者', '契約者本人', '受取人', '指定代理請求人', '契約者代理人']);
 // anonymizedRows（オブジェクトの配列。ネストした配列・オブジェクトも含む）から、
 // 文字列型の値だけを再帰的に集める。数値フィールド（保険料合計等の正当な集計値）と
 // 文字列フィールドを区別せずにJSON文字列全体を走査すると、7桁以上の保険料（100万円以上、
@@ -17620,7 +17702,7 @@ function nexusScanForResidualPii(anonymizedRows, allCustomers) {
     (c.suspects || []).forEach(sp => { if (sp.name) names.add(sp.name); });
   });
   names.forEach(name => {
-    if (name && name.trim().length >= 2 && text.includes(name)) issues.push({ pattern: '氏名', sample: name });
+    if (name && name.trim().length >= 2 && !NEXUS_PII_SCAN_GENERIC_ROLE_NAMES.has(name.trim()) && text.includes(name)) issues.push({ pattern: '氏名', sample: name });
   });
   return { ok: issues.length === 0, issues };
 }
