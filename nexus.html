@@ -1478,9 +1478,11 @@ const FINANCIAL_PRODUCT_CONFIRM_STATUSES = ['未確認', '該当確認済み', '
 const NEXUS_WITHHOLDING_TAX_RATE_TABLE = [
   { from: '2013-01-01', to: '2037-12-31', rate: 0.20315, label: '20.315%（国税15.315%＝所得税15%＋復興特別所得税0.315%、地方税5%。根拠：国税庁No.1520・租税特別措置法第41条の10、復興特別所得税の適用期間は平成25年(2013年)1月1日〜令和19年(2037年)12月31日支払分）' }
 ];
+// asOfDateStrが未指定の場合、本日の日付等を暗黙に代用しない（null）。参考源泉税額の算出に
+// 使われるため、「基準日が分からない＝税率も分からない」を明示的にする。
 function nexusWithholdingTaxRateInfo(asOfDateStr) {
-  const d = asOfDateStr || todayStr();
-  return NEXUS_WITHHOLDING_TAX_RATE_TABLE.find(r => d >= r.from && d <= r.to) || null;
+  if (!asOfDateStr) return null;
+  return NEXUS_WITHHOLDING_TAX_RATE_TABLE.find(r => asOfDateStr >= r.from && asOfDateStr <= r.to) || null;
 }
 // 源泉分離課税5年判定の起算日から5年経過日を計算する（あくまで参考値。保険期間等の
 // 起算日は契約転換等により契約日と異なる場合があるため、起算日自体は手動修正可能にする）。
@@ -1502,8 +1504,11 @@ function nexusWithholdingFiveYearStatus(startDateStr, asOfDateStr) {
 // （＝呼び出し側では「参考試算を表示しない」）。
 // ①税務確認済み ②解約時の税務区分＝源泉分離課税（金融類似商品） ③金融類似商品：該当確認済み
 // ④現在の解約返戻金が入力済み ⑤税務上の元本相当額が入力済み ⑥5年判定起算日が確認できる
-// ⑦基準日時点の参考税率が定義されている
+// ⑦税務試算基準日（asOfDateStr）が明示的に入力されている ⑧その基準日時点の参考税率が定義されている
 // 差益がマイナス（元本相当額の方が大きい）の場合は差益0円・税額0円とする（損失への課税はしない）。
+// 【重要】asOfDateStrが未入力の場合、本日の日付・契約日・起算日等を暗黙に代用しない。
+// 「来年解約したら」等の相談で基準日の入力を忘れた場合に、本日時点の税率で誤った参考税額を
+// 表示してしまうことを防ぐため。
 function nexusWithholdingEstimate(ct, asOfDateStr) {
   if (!ct) return null;
   if (ct.taxConfirmStatus !== '確認済み') return null;
@@ -1512,6 +1517,7 @@ function nexusWithholdingEstimate(ct, asOfDateStr) {
   if (!nexusHasValue(ct.currentSurrenderValue)) return null;
   if (!nexusHasValue(ct.taxPrincipalAmount)) return null;
   if (!ct.withholdingFiveYearStartDate) return null;
+  if (!asOfDateStr) return null;
   const rateInfo = nexusWithholdingTaxRateInfo(asOfDateStr);
   if (!rateInfo) return null;
   const surrenderValue = Number(ct.currentSurrenderValue) || 0;
@@ -1833,13 +1839,15 @@ function ContractBlock({
   // 終了日を自動確定しない）。
   const contractDateFiveYearRef = nexusWithholdingFiveYearDate(contract.date);
   const confirmedFiveYearEndDate = contract.financialProductConfirmStatus === '該当確認済み' ? nexusWithholdingFiveYearDate(contract.withholdingFiveYearStartDate) : null;
-  // 「税率基準日」：参考源泉税額の税率テーブルをどの日付で引くかを明示的に管理する。NEXUSには
-  // 実際の解約日・受取日の確定データが無いため、契約日や起算日を無断で代用しない。ユーザーが
-  // 「税務試算基準日」を明示的に入力した場合はその日付を使用し、未入力の場合のみ本日時点の
-  // 日付を使う（その場合も画面上にどちらを使ったか必ず明示する）。
-  const taxEstimateAsOfDate = contract.taxEstimateAsOfDate || todayStr();
-  const taxEstimateAsOfDateIsExplicit = !!contract.taxEstimateAsOfDate;
-  const confirmedFiveYearStatus = contract.financialProductConfirmStatus === '該当確認済み' ? nexusWithholdingFiveYearStatus(contract.withholdingFiveYearStartDate, taxEstimateAsOfDate) : null;
+  // 「税務試算基準日」：参考源泉税額の税率テーブルをどの日付で引くかを明示的に管理する。NEXUSには
+  // 実際の解約日・受取日の確定データが無いため、契約日・起算日・本日の日付のいずれも無断で
+  // 代用しない。未入力の場合は参考源泉税額を計算しない（nexusWithholdingEstimateが必須化）。
+  // 「来年解約したら」等の相談で基準日の入力を忘れた場合に、本日時点の税率で誤った参考税額を
+  // 表示してしまうことを防ぐため。
+  const taxEstimateAsOfDate = contract.taxEstimateAsOfDate || null;
+  // 5年判定（5年以内／5年経過）は参考源泉税額のような金額を伴わない参考情報のため、従来通り
+  // 基準日未入力時は本日時点で判定する（nexusWithholdingFiveYearStatus自身の既定動作）。
+  const confirmedFiveYearStatus = contract.financialProductConfirmStatus === '該当確認済み' ? nexusWithholdingFiveYearStatus(contract.withholdingFiveYearStartDate, contract.taxEstimateAsOfDate) : null;
   const principalAmountInput = /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
   }, "収入を得るために支出した金額（取得費相当額。源泉分離課税の元本相当額・一時所得の支出金額として共通利用します）"), /*#__PURE__*/React.createElement(AmountInput, {
@@ -1850,7 +1858,7 @@ function ContractBlock({
   }));
   const taxEstimateAsOfDateInput = /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "税務試算基準日（任意。解約予定日・受取日が確定している場合に入力してください。未入力の場合は本日時点の税率で試算します）"), /*#__PURE__*/React.createElement("input", {
+  }, "税務試算基準日（参考源泉税額の計算に必須。解約予定日・受取日等、税率を確認したい日付を入力してください）"), /*#__PURE__*/React.createElement("input", {
     type: "date",
     className: "form-input",
     value: contract.taxEstimateAsOfDate || '',
@@ -1861,7 +1869,7 @@ function ContractBlock({
       color: 'var(--text-sub)',
       marginTop: 4
     }
-  }, "参考源泉税額は", taxEstimateAsOfDateIsExplicit ? `ご入力の税務試算基準日（${taxEstimateAsOfDate}）` : `本日時点（${taxEstimateAsOfDate}）`, "の税率で試算しています"));
+  }, taxEstimateAsOfDate ? `入力された税務試算基準日（${taxEstimateAsOfDate}）の税率で参考源泉税額を試算します` : "未入力の場合、参考源泉税額は計算されません（本日の日付を自動的に使用することはありません）"));
   const temporaryIncomeEstimateVal = nexusTemporaryIncomeEstimate(contract);
   const temporaryIncomeBlock = taxConfirmed && isTemporaryIncomeCategory && /*#__PURE__*/React.createElement("div", {
     style: {
@@ -7165,19 +7173,26 @@ function CustomerDetail({
         style: { color: 'var(--text-sub)' }
       }, "金融類似商品該当確認：", ct.financialProductConfirmStatus || '未確認'), ct.date && /*#__PURE__*/React.createElement("div", { style: { color: 'var(--text-sub)', fontSize: 12 } }, "参考：契約日から5年後の参考日は", nexusWithholdingFiveYearDate(ct.date), "（契約日のみに基づく単純計算であり、正式な源泉分離課税対象期間の終了日ではありません）"), ct.financialProductConfirmStatus === '該当確認済み' && /*#__PURE__*/React.createElement(React.Fragment, null,
         (() => {
-          const taxEstimateAsOfDate = ct.taxEstimateAsOfDate || todayStr();
-          const taxEstimateAsOfDateIsExplicit = !!ct.taxEstimateAsOfDate;
+          // 税務試算基準日が未入力の場合、本日の日付・契約日・起算日のいずれも代用せず、
+          // 参考源泉税額を計算しない（「来年解約したら」等の相談で基準日入力を忘れた際に、
+          // 本日時点の税率で誤った参考税額を表示してしまうことを防ぐため）。
+          const taxEstimateAsOfDate = ct.taxEstimateAsOfDate || null;
           const fiveYearDate = nexusWithholdingFiveYearDate(ct.withholdingFiveYearStartDate);
-          const fiveYearStatus = nexusWithholdingFiveYearStatus(ct.withholdingFiveYearStartDate, taxEstimateAsOfDate);
+          const fiveYearStatus = nexusWithholdingFiveYearStatus(ct.withholdingFiveYearStartDate, ct.taxEstimateAsOfDate);
           const estimate = nexusWithholdingEstimate(ct, taxEstimateAsOfDate);
+          const rateInfoForAsOfDate = taxEstimateAsOfDate ? nexusWithholdingTaxRateInfo(taxEstimateAsOfDate) : null;
+          const inputsOtherwiseComplete = nexusHasValue(ct.currentSurrenderValue) && nexusHasValue(ct.taxPrincipalAmount) && !!ct.withholdingFiveYearStartDate;
           return /*#__PURE__*/React.createElement(React.Fragment, null,
             fiveYearDate ? /*#__PURE__*/React.createElement("div", null, "5年判定：", /*#__PURE__*/React.createElement("span", { style: { fontWeight: 700 } }, fiveYearStatus), "（確認済みの源泉分離課税対象期間終了日（参考）：", fiveYearDate, "・起算日に基づく参考計算。要件確認が必要）") : /*#__PURE__*/React.createElement("div", { style: { color: 'var(--text-sub)' } }, "5年判定：起算日未確認のため判定不能"),
             estimate ? /*#__PURE__*/React.createElement(React.Fragment, null,
-              /*#__PURE__*/React.createElement("div", { style: { fontSize: 11, color: 'var(--text-sub)' } }, "税率基準日：", taxEstimateAsOfDate, taxEstimateAsOfDateIsExplicit ? "（ご入力の税務試算基準日）" : "（本日時点。実際の解約日・受取日が確定したら「税務試算基準日」をご入力ください）"),
+              /*#__PURE__*/React.createElement("div", { style: { fontSize: 11, color: 'var(--text-sub)' } }, "税率基準日：", taxEstimateAsOfDate, "（ご入力の税務試算基準日）"),
               /*#__PURE__*/React.createElement("div", null, "差益（参考）：¥", estimate.gain.toLocaleString()),
               /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, color: '#92400E' } }, "参考源泉税額：¥", estimate.tax.toLocaleString(), "（", estimate.rateInfo.label, "で試算）"),
               /*#__PURE__*/React.createElement("div", null, "参考手取額：¥", estimate.net.toLocaleString())
-            ) : (nexusHasValue(ct.currentSurrenderValue) && nexusHasValue(ct.taxPrincipalAmount) && ct.withholdingFiveYearStartDate && !nexusWithholdingTaxRateInfo(taxEstimateAsOfDate)) ? /*#__PURE__*/React.createElement("div", { style: { color: 'var(--text-sub)' } }, "税率基準日（", taxEstimateAsOfDate, "）に対応する税率情報が登録されていないため、参考試算を表示できません（登録済みの適用期間：2013-01-01〜2037-12-31）") : /*#__PURE__*/React.createElement("div", { style: { color: 'var(--text-sub)' } }, "参考試算には税務上の元本相当額・現在の解約返戻金・起算日がすべて必要です（未入力の項目があります）")
+            ) : !taxEstimateAsOfDate ? /*#__PURE__*/React.createElement(React.Fragment, null,
+              /*#__PURE__*/React.createElement("div", { style: { color: 'var(--text-sub)' } }, "参考源泉税額：税務試算基準日を入力してください"),
+              /*#__PURE__*/React.createElement("div", { style: { color: 'var(--text-sub)' } }, "税率：未判定")
+            ) : (inputsOtherwiseComplete && !rateInfoForAsOfDate) ? /*#__PURE__*/React.createElement("div", { style: { color: 'var(--text-sub)' } }, "この基準日（", taxEstimateAsOfDate, "）に適用する税率情報が登録されていません（登録済みの適用期間：2013-01-01〜2037-12-31）") : /*#__PURE__*/React.createElement("div", { style: { color: 'var(--text-sub)' } }, "参考試算には税務上の元本相当額・現在の解約返戻金・起算日がすべて必要です（未入力の項目があります）")
           );
         })()
       )), ct.taxCategoryAtSurrender === '一時所得' && /*#__PURE__*/React.createElement("div", {
