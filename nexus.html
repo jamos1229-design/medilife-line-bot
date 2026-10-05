@@ -9613,8 +9613,31 @@ function nexusFanFollowAnalysisCsvText(rows, overview, individualProgress) {
 function nexusDownloadFanFollowAnalysisCsv(rows, overview, individualProgress) {
   return nexusShareOrDownloadFile(`NEXUS_FANFOLLOW_ANALYSIS_${todayStr()}.csv`, nexusFanFollowAnalysisCsvText(rows, overview, individualProgress), 'text/csv;charset=utf-8');
 }
+// AI向けJSON出力専用に、ハガキ等「既読」を計測できない種類のキャンペーンのreadを
+// 文字列「計測対象外」に差し替えた複製を作る。exportData自体（元のオブジェクト）は
+// 一切書き換えないため、ダッシュボード・プレビュー画面側の数値表示（c.metrics.read等）や
+// 内部の集計処理（nexusFanFollowMetricsGroup等、PROTECTED）には何の影響もない。
+function nexusFanFollowAiFacingExport(exportData) {
+  const patchMetrics = (m, measurable) => measurable ? m : { ...m, read: '計測対象外' };
+  const campaigns = (exportData.campaigns || []).map(c => {
+    const measurable = nexusFanFollowReadMeasurable([c.campaignType]);
+    return {
+      ...c,
+      metrics: patchMetrics(c.metrics, measurable),
+      articles: (c.articles || []).map(a => patchMetrics(a, measurable)),
+      attributes: (c.attributes || []).map(a => patchMetrics(a, measurable)),
+      methods: (c.methods || []).map(a => patchMetrics(a, measurable))
+    };
+  });
+  const overallMeasurable = nexusFanFollowReadMeasurable((exportData.campaigns || []).map(c => c.campaignType));
+  return {
+    ...exportData,
+    overall: patchMetrics(exportData.overall, overallMeasurable),
+    campaigns
+  };
+}
 function nexusDownloadFanFollowAnalysisJson(exportData) {
-  return nexusShareOrDownloadFile(`NEXUS_FANFOLLOW_ANALYSIS_${todayStr()}.json`, JSON.stringify(exportData, null, 2), 'application/json');
+  return nexusShareOrDownloadFile(`NEXUS_FANFOLLOW_ANALYSIS_${todayStr()}.json`, JSON.stringify(nexusFanFollowAiFacingExport(exportData), null, 2), 'application/json');
 }
 // ユーザーが指定した固定プロンプト文言（既存の顧客AI分析用・営業KPI用のプロンプトとは別物）。
 function nexusFanFollowAnalysisPromptTemplate() {
@@ -9753,7 +9776,7 @@ function NexusFanFollowAiExportScreen({ campaigns, follows, activityLogs, custom
       React.createElement("button", {
         type: "button", className: "btn btn-outline btn-full",
         disabled: !scanResult || !scanResult.ok,
-        onClick: () => copyText(JSON.stringify(exportData, null, 2))
+        onClick: () => copyText(JSON.stringify(nexusFanFollowAiFacingExport(exportData), null, 2))
       }, "📋 JSONをコピー"),
       React.createElement("button", {
         type: "button", className: "btn btn-outline btn-full",
@@ -17043,6 +17066,13 @@ function nexusFanSentCountLabel(campaignList) {
   const labels = Array.from(new Set((campaignList || []).map(c => nexusFanCampaignTypeConfig(c.campaignType).sentCountLabel)));
   return labels.length === 1 ? labels[0] : '送信/発送';
 }
+// 「既読」は記事（note等）のデジタル配信でのみ計測できる概念で、ハガキ等の物理送付では
+// そもそも開封・既読を記録する手段が無い。渡された種類の配列（対象キャンペーン群）が
+// すべて「記事」（または未設定＝記事扱い）の場合だけtrueを返す。1件でも記事以外が
+// 混ざっている場合は、複数キャンペーンを合算した「既読」が意味を持たないためfalseとする。
+function nexusFanFollowReadMeasurable(campaignTypeList) {
+  return (campaignTypeList || []).every(t => !t || t === '記事');
+}
 // ソフトデリートフィルタ（既存のnexusActiveLogsと同じ規約）
 function nexusFanActiveFollows(follows) {
   return (follows || []).filter(f => !f.deletedAt);
@@ -17327,22 +17357,29 @@ function nexusFanFollowAnonymizedExport({ campaigns, follows, activityLogs, cust
 }
 // CSV出力用に1行＝1グループへフラット化する（キャンペーン全体／記事別／属性別／送信方法別。
 // 複数キャンペーンを選んだ場合のみ、末尾に全体合計の行を追加する）。
+// 内部の集計処理（nexusFanFollowMetricsGroup等、PROTECTED）は一切変更していない。
+// ハガキ等「既読」を計測できない種類のキャンペーンに属する行だけ、出力直前にこの関数の中で
+// readの値を文字列「計測対象外」に差し替える（内部の数値0はexportData側に残したまま、
+// この関数が返す行＝CSV専用の表示データだけを書き換えるため、画面側の数値表示
+// （campaignPreviewCard等）には一切影響しない）。
 function nexusFanFollowExportRows(exportData) {
   const rows = [];
-  const pushRow = (group, name, campaignName, m) => rows.push({
+  const pushRow = (group, name, campaignName, m, measurable) => rows.push({
     group, name, campaignName,
-    sent: m.sent, read: m.read, replied: m.replied, replyRate: m.replyRate,
+    sent: m.sent, read: measurable ? m.read : '計測対象外', replied: m.replied, replyRate: m.replyRate,
     consulted: m.consulted, consultRate: m.consultRate, met: m.met, proposed: m.proposed,
     closed: m.closed, expectedRevenue: m.expectedRevenue, confirmedRevenue: m.confirmedRevenue
   });
   (exportData.campaigns || []).forEach(c => {
-    pushRow('キャンペーン全体', c.name, c.name, c.metrics);
-    (c.articles || []).forEach(a => pushRow('記事別', a.articleTitle, c.name, a));
-    (c.attributes || []).forEach(a => pushRow('属性別', a.attribute, c.name, a));
-    (c.methods || []).forEach(a => pushRow('送信方法別', a.method, c.name, a));
+    const measurable = nexusFanFollowReadMeasurable([c.campaignType]);
+    pushRow('キャンペーン全体', c.name, c.name, c.metrics, measurable);
+    (c.articles || []).forEach(a => pushRow('記事別', a.articleTitle, c.name, a, measurable));
+    (c.attributes || []).forEach(a => pushRow('属性別', a.attribute, c.name, a, measurable));
+    (c.methods || []).forEach(a => pushRow('送信方法別', a.method, c.name, a, measurable));
   });
   if ((exportData.campaigns || []).length > 1) {
-    pushRow('合計', '選択した全キャンペーン合計', '（複数キャンペーン合計）', exportData.overall);
+    const overallMeasurable = nexusFanFollowReadMeasurable((exportData.campaigns || []).map(c => c.campaignType));
+    pushRow('合計', '選択した全キャンペーン合計', '（複数キャンペーン合計）', exportData.overall, overallMeasurable);
   }
   return rows;
 }
