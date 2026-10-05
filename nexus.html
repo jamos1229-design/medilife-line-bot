@@ -1450,6 +1450,68 @@ function nexusWaiverPendingReason(ct, asOfDateStr) {
 function nexusCurrentPaymentBurdenJpy(ct, baseAmountJpy, asOfDateStr) {
   return nexusWaiverActiveAsOf(ct, asOfDateStr) ? 0 : (baseAmountJpy || 0);
 }
+// ── 現在の積立金・解約控除・解約時税務情報（契約ステータス・解約返戻金とは独立した別管理の項目） ──
+// 積立金と解約返戻金は別データであり、どちらからどちらかを自動計算・逆算しない。
+// 未登録・未確認の場合は0円ではなく「未登録」「未確認」として扱う（falsy=未登録という既存の
+// ct.currentSurrenderValue等の慣習に合わせる）。
+const SURRENDER_CHARGE_STATUSES = ['未確認', 'なし', 'あり'];
+// 税務確認状況：NEXUSが税理士判断を代替しないよう、「確認済み」を選ぶまでは税務区分自体を
+// 選択させない（未確認のまま区分だけ先に決まってしまうことを防ぐ）。
+const TAX_CONFIRM_STATUSES = ['未確認', '確認済み'];
+// 解約時の税務区分の候補。既存の「金融類似商品」等の文言（国税庁No.1520の表記）に合わせる。
+const TAX_CATEGORIES_AT_SURRENDER = ['一時所得', '源泉分離課税（金融類似商品）', '雑所得', 'その他', '要個別確認'];
+// 金融類似商品に実際に該当するかどうかの確認状況。商品名・契約日・保険種類だけからの
+// 自動判定は一切行わない（ユーザーが明示的に選択した場合のみ値が入る）。
+const FINANCIAL_PRODUCT_CONFIRM_STATUSES = ['未確認', '該当確認済み', '非該当確認済み'];
+// 源泉分離課税の参考税率。令和8年（2026年）時点の値のみを対象期間付きで保持し、
+// 税制改正に対応できるよう計算ロジックと表示を分離する。将来の税制改正が確認できるまでは、
+// この期間外の日付に対しては税率を返さない（無条件に2026年の税率を将来へ適用しない）。
+const NEXUS_WITHHOLDING_TAX_RATE_TABLE = [
+  { from: '2026-01-01', to: '2026-12-31', rate: 0.20315, label: '20.315%（令和8年時点。所得税・復興特別所得税15.315%＋地方税5%）' }
+];
+function nexusWithholdingTaxRateInfo(asOfDateStr) {
+  const d = asOfDateStr || todayStr();
+  return NEXUS_WITHHOLDING_TAX_RATE_TABLE.find(r => d >= r.from && d <= r.to) || null;
+}
+// 源泉分離課税5年判定の起算日から5年経過日を計算する（あくまで参考値。保険期間等の
+// 起算日は契約転換等により契約日と異なる場合があるため、起算日自体は手動修正可能にする）。
+function nexusWithholdingFiveYearDate(startDateStr) {
+  if (!startDateStr) return null;
+  const d = new Date(startDateStr + 'T00:00:00');
+  if (isNaN(d.getTime())) return null;
+  d.setFullYear(d.getFullYear() + 5);
+  return d.toISOString().slice(0, 10);
+}
+// 基準日時点で5年以内／5年経過／判定不能（起算日未確認）のいずれかを参考表示する。
+// 「5年以内」であることは金融類似商品への該当を意味しない（呼び出し側で別途確認状況と組み合わせる）。
+function nexusWithholdingFiveYearStatus(startDateStr, asOfDateStr) {
+  const fiveYearDate = nexusWithholdingFiveYearDate(startDateStr);
+  if (!fiveYearDate) return '判定不能';
+  return (asOfDateStr || todayStr()) < fiveYearDate ? '5年以内' : '5年経過';
+}
+// 源泉分離課税の参考試算。以下をすべて満たす場合のみ値を返し、1つでも欠ける場合はnull
+// （＝呼び出し側では「参考試算を表示しない」）。
+// ①税務確認済み ②解約時の税務区分＝源泉分離課税（金融類似商品） ③金融類似商品：該当確認済み
+// ④現在の解約返戻金が入力済み ⑤税務上の元本相当額が入力済み ⑥5年判定起算日が確認できる
+// ⑦基準日時点の参考税率が定義されている
+// 差益がマイナス（元本相当額の方が大きい）の場合は差益0円・税額0円とする（損失への課税はしない）。
+function nexusWithholdingEstimate(ct, asOfDateStr) {
+  if (!ct) return null;
+  if (ct.taxConfirmStatus !== '確認済み') return null;
+  if (ct.taxCategoryAtSurrender !== '源泉分離課税（金融類似商品）') return null;
+  if (ct.financialProductConfirmStatus !== '該当確認済み') return null;
+  if (!nexusHasValue(ct.currentSurrenderValue)) return null;
+  if (!nexusHasValue(ct.taxPrincipalAmount)) return null;
+  if (!ct.withholdingFiveYearStartDate) return null;
+  const rateInfo = nexusWithholdingTaxRateInfo(asOfDateStr);
+  if (!rateInfo) return null;
+  const surrenderValue = Number(ct.currentSurrenderValue) || 0;
+  const principal = Number(ct.taxPrincipalAmount) || 0;
+  const gain = Math.max(0, surrenderValue - principal);
+  const tax = Math.round(gain * rateInfo.rate);
+  const net = surrenderValue - tax;
+  return { gain, tax, net, rateInfo, surrenderValue, principal };
+}
 // 契約の目的（生保管理表の集計区分に合わせる。死亡保障系と医療保障系を明確に分離して集計するために使用）
 const CONTRACT_PURPOSES = ['死亡保障', '死亡時収入保障', '介護・就労不能保障', '医療保障', '特定疾病（ガン）', '年金・貯蓄型', '事業保障・退職金', '相続対策', 'その他'];
 // 集計上「死亡保険」として合算する目的
@@ -1728,6 +1790,88 @@ function ContractBlock({
       color: waiverActiveNow ? '#15803D' : 'var(--text)'
     }
   }, waiverActiveNow ? '0円（払込免除適用中）' : `${registeredPremiumText}${waiverPendingReason ? '（確認前の参考値：' + waiverPendingReason + '）' : ''}`)))));
+  // ── 解約時税務情報（契約ステータス・解約返戻金とは独立した別管理の項目） ──────────────
+  // NEXUSは税理士判断を代替しない。「税務確認状況＝確認済み」を選ぶまでは税務区分自体を
+  // 選択させず、「源泉分離課税（金融類似商品）」を選んでも、金融類似商品該当確認が
+  // 「該当確認済み」になるまでは参考試算を一切表示しない（nexusWithholdingEstimateのガード）。
+  const taxConfirmed = (contract.taxConfirmStatus || '未確認') === '確認済み';
+  const isWithholdingCategory = contract.taxCategoryAtSurrender === '源泉分離課税（金融類似商品）';
+  const fiveYearDate = nexusWithholdingFiveYearDate(contract.withholdingFiveYearStartDate);
+  const fiveYearStatus = nexusWithholdingFiveYearStatus(contract.withholdingFiveYearStartDate, todayStr());
+  const taxInfoBlock = /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "解約時の税務情報（税理士判断の代わりにはなりません。確認できた内容のみ記録してください）"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, TAX_CONFIRM_STATUSES.map(st => /*#__PURE__*/React.createElement("button", {
+    key: st,
+    type: "button",
+    className: `toggle-btn ${(contract.taxConfirmStatus || '未確認') === st ? 'sel' : ''}`,
+    onClick: () => sv('taxConfirmStatus')(st)
+  }, st))), taxConfirmed && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "解約時の税務区分"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, TAX_CATEGORIES_AT_SURRENDER.map(cat2 => /*#__PURE__*/React.createElement("button", {
+    key: cat2,
+    type: "button",
+    className: `toggle-btn ${contract.taxCategoryAtSurrender === cat2 ? 'sel' : ''}`,
+    onClick: () => sv('taxCategoryAtSurrender')(contract.taxCategoryAtSurrender === cat2 ? '' : cat2)
+  }, cat2)))), taxConfirmed && isWithholdingCategory && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: '#FFFBEB',
+      border: '1px solid #FDE68A',
+      borderRadius: 10,
+      padding: '10px 12px',
+      marginTop: 10,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "金融類似商品該当確認（商品名や契約日だけからの自動判定は行いません）"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, FINANCIAL_PRODUCT_CONFIRM_STATUSES.map(st => /*#__PURE__*/React.createElement("button", {
+    key: st,
+    type: "button",
+    className: `toggle-btn ${(contract.financialProductConfirmStatus || '未確認') === st ? 'sel' : ''}`,
+    onClick: () => sv('financialProductConfirmStatus')(st)
+  }, st)))), contract.financialProductConfirmStatus === '該当確認済み' && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "源泉分離課税5年判定の起算日（保険期間等の起算日。契約転換等で契約日と異なる場合は手動で修正してください）"), /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    className: "form-input",
+    value: contract.withholdingFiveYearStartDate || '',
+    onChange: s('withholdingFiveYearStartDate')
+  }), contract.date && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      marginTop: 4
+    }
+  }, "参考：契約日は", contract.date), fiveYearDate && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--text-sub)',
+      marginTop: 4
+    }
+  }, "5年経過日の参考：", fiveYearDate, "（", fiveYearStatus, "・要件確認が必要）")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "税務上の元本相当額（参考試算用。確実に分かる場合のみ入力）"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
+    value: contract.taxPrincipalAmount || '',
+    onChange: s('taxPrincipalAmount'),
+    placeholder: "例：5000000"
+  })))));
   return /*#__PURE__*/React.createElement("div", {
     className: `contract-block${isInactive ? ' inactive' : ''}`,
     style: {
@@ -1813,7 +1957,7 @@ function ContractBlock({
     placeholder: cst === '解約' ? '例：転職のため保障見直し' : cst === '失効' ? '例：保険料未払いにより失効' : cst === '減額' ? '例：家計見直しのため減額' : '',
     value: contract.statusReason || '',
     onChange: s('statusReason')
-  }))), premiumStatusBlock, /*#__PURE__*/React.createElement("div", {
+  }))), premiumStatusBlock, taxInfoBlock, /*#__PURE__*/React.createElement("div", {
     className: "form-group",
     style: {
       marginBottom: 10
@@ -2220,6 +2364,67 @@ function ContractBlock({
     value: contract.ridersPremiumTotal || '',
     onChange: s('ridersPremiumTotal'),
     placeholder: "例：4439（入力すると上の特約ごとの保険料の代わりに使用されます）"
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "現在の積立金（解約返戻金とは別の値。保険会社の運用報告書等で確認できる場合のみ入力／解約返戻金から自動計算はしません）"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
+    value: contract.currentAccumulationValue || '',
+    onChange: s('currentAccumulationValue'),
+    placeholder: "例：520000（未登録の場合は空欄のまま）"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "評価基準日（積立金・解約返戻金を確認した時点）"), /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    className: "form-input",
+    value: contract.valuationDate || '',
+    onChange: s('valuationDate')
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "解約控除（保険会社資料等で確認できた金額を記録する項目。積立金－解約返戻金から自動算出はしません）"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, SURRENDER_CHARGE_STATUSES.map(st => /*#__PURE__*/React.createElement("button", {
+    key: st,
+    type: "button",
+    className: `toggle-btn ${(contract.surrenderChargeStatus || '未確認') === st ? 'sel' : ''}`,
+    onClick: () => sv('surrenderChargeStatus')(st)
+  }, st))), contract.surrenderChargeStatus === 'あり' && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "現在の解約控除額"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
+    value: contract.surrenderChargeAmount || '',
+    onChange: s('surrenderChargeAmount'),
+    placeholder: "例：22023"
+  }), /*#__PURE__*/React.createElement("label", {
+    className: "form-label",
+    style: {
+      marginTop: 8
+    }
+  }, "解約控除に関するメモ（任意）"), /*#__PURE__*/React.createElement("textarea", {
+    className: "form-textarea",
+    style: {
+      minHeight: 50
+    },
+    value: contract.surrenderChargeMemo || '',
+    onChange: s('surrenderChargeMemo')
   }))), /*#__PURE__*/React.createElement("div", {
     className: "form-group",
     style: {
@@ -6802,7 +7007,27 @@ function CustomerDetail({
           fontWeight: 400,
           marginLeft: 6
         }
-      }, "（＝¥", Number(ct.coverageAmountJpy).toLocaleString(), "）"))), ct.currentSurrenderValue && /*#__PURE__*/React.createElement("div", {
+      }, "（＝¥", Number(ct.coverageAmountJpy).toLocaleString(), "）"))), (nexusHasValue(ct.currentAccumulationValue) || ct.surrenderChargeStatus || ct.currentSurrenderValue) && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+        className: "info-item",
+        style: {
+          gridColumn: '1/-1'
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "info-label"
+      }, "現在の積立金", ct.valuationDate && ` （${ct.valuationDate}時点）`), /*#__PURE__*/React.createElement("div", {
+        className: "info-value",
+        style: nexusHasValue(ct.currentAccumulationValue) ? { color: 'var(--accent)', fontWeight: 700 } : { color: 'var(--text-sub)' }
+      }, nexusHasValue(ct.currentAccumulationValue) ? `¥${Number(ct.currentAccumulationValue).toLocaleString()}` : '未登録')), /*#__PURE__*/React.createElement("div", {
+        className: "info-item",
+        style: {
+          gridColumn: '1/-1'
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "info-label"
+      }, "解約控除"), /*#__PURE__*/React.createElement("div", {
+        className: "info-value",
+        style: ct.surrenderChargeStatus === 'あり' ? { color: 'var(--danger)', fontWeight: 700 } : { color: 'var(--text-sub)' }
+      }, ct.surrenderChargeStatus === 'あり' ? `あり（${nexusHasValue(ct.surrenderChargeAmount) ? '¥' + Number(ct.surrenderChargeAmount).toLocaleString() : '金額未登録'}）` : (ct.surrenderChargeStatus || '未確認'))), ct.currentSurrenderValue && /*#__PURE__*/React.createElement("div", {
         className: "info-item",
         style: {
           gridColumn: '1/-1'
@@ -6815,7 +7040,38 @@ function CustomerDetail({
           color: 'var(--accent)',
           fontWeight: 700
         }
-      }, "¥", Number(ct.currentSurrenderValue).toLocaleString())), ct.memo && /*#__PURE__*/React.createElement("div", {
+      }, "¥", Number(ct.currentSurrenderValue).toLocaleString()))), ct.taxConfirmStatus === '確認済み' && ct.taxCategoryAtSurrender && /*#__PURE__*/React.createElement("div", {
+        className: "info-item",
+        style: {
+          gridColumn: '1/-1',
+          background: '#FFFBEB',
+          border: '1px solid #FDE68A'
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "info-label",
+        style: { color: '#92400E' }
+      }, "解約時の税務（参考情報・確定税額ではありません）"), /*#__PURE__*/React.createElement("div", {
+        className: "info-value",
+        style: { fontWeight: 700 }
+      }, ct.taxCategoryAtSurrender), ct.taxCategoryAtSurrender === '源泉分離課税（金融類似商品）' && /*#__PURE__*/React.createElement("div", {
+        style: { fontSize: 13, marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: { color: 'var(--text-sub)' }
+      }, "金融類似商品該当確認：", ct.financialProductConfirmStatus || '未確認'), ct.financialProductConfirmStatus === '該当確認済み' && /*#__PURE__*/React.createElement(React.Fragment, null,
+        (() => {
+          const fiveYearDate = nexusWithholdingFiveYearDate(ct.withholdingFiveYearStartDate);
+          const fiveYearStatus = nexusWithholdingFiveYearStatus(ct.withholdingFiveYearStartDate, todayStr());
+          const estimate = nexusWithholdingEstimate(ct, todayStr());
+          return /*#__PURE__*/React.createElement(React.Fragment, null,
+            fiveYearDate ? /*#__PURE__*/React.createElement("div", null, "5年判定：", /*#__PURE__*/React.createElement("span", { style: { fontWeight: 700 } }, fiveYearStatus), "（参考5年経過日：", fiveYearDate, "・要件確認が必要）") : /*#__PURE__*/React.createElement("div", { style: { color: 'var(--text-sub)' } }, "5年判定：起算日未確認のため判定不能"),
+            estimate ? /*#__PURE__*/React.createElement(React.Fragment, null,
+              /*#__PURE__*/React.createElement("div", null, "差益（参考）：¥", estimate.gain.toLocaleString()),
+              /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, color: '#92400E' } }, "参考源泉税額：¥", estimate.tax.toLocaleString(), "（", estimate.rateInfo.label, "で試算）"),
+              /*#__PURE__*/React.createElement("div", null, "参考手取額：¥", estimate.net.toLocaleString())
+            ) : /*#__PURE__*/React.createElement("div", { style: { color: 'var(--text-sub)' } }, "参考試算には税務上の元本相当額・現在の解約返戻金・起算日がすべて必要です（未入力の項目があります）")
+          );
+        })()
+      ))), ct.memo && /*#__PURE__*/React.createElement("div", {
         className: "info-item",
         style: {
           gridColumn: '1/-1'
