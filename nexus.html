@@ -8669,7 +8669,7 @@ function NexusFanCampaignForm({ editing, onSave, onClose }) {
     className: "drawer-handle"
   }), React.createElement("div", {
     className: "drawer-title"
-  }, editing ? "キャンペーンを編集" : "キャンペーンを追加"), React.createElement("div", {
+  }, editing ? `「${editing.name || '（名称未設定）'}」を編集` : "キャンペーンを追加"), React.createElement("div", {
     className: "form-group"
   }, React.createElement("label", {
     className: "form-label"
@@ -9415,6 +9415,8 @@ function NexusFanFollowScreen({
   onClose
 }) {
   const [selectedCampaignId, setSelectedCampaignId] = useState(() => (campaigns && campaigns[0] && campaigns[0].id) || '');
+  // false＝閉じている／true＝新規作成モード／キャンペーンオブジェクト＝そのキャンペーンを編集中。
+  // 既存のNexusFanCampaignForm・saveCampaignをそのまま流用し、呼び出し方だけを拡張している。
   const [campaignFormOpen, setCampaignFormOpen] = useState(false);
   const [aiExportOpen, setAiExportOpen] = useState(false);
   const [registerCustomerName, setRegisterCustomerName] = useState(null);
@@ -9517,7 +9519,10 @@ function NexusFanFollowScreen({
     setTasks: setTasks,
     onRegisterCustomer: setRegisterCustomerName
   });
+  // campaignFormOpenはfalse（閉じている）／true（新規作成）／既存キャンペーンオブジェクト（編集）の
+  // いずれか。editingには、実際に編集対象がある場合（true以外のオブジェクト）だけを渡す。
   const campaignFormSheet = campaignFormOpen && React.createElement(NexusFanCampaignForm, {
+    editing: campaignFormOpen === true ? null : campaignFormOpen,
     onSave: saveCampaign,
     onClose: () => setCampaignFormOpen(false)
   });
@@ -9548,7 +9553,12 @@ function NexusFanFollowScreen({
     style: { flex: 1, fontSize: 16, fontWeight: 700 }
   }, "📣 ファン化フォロー")), React.createElement("div", {
     style: { padding: 16 }
-  }, campaignPicker, React.createElement("button", {
+  }, campaignPicker, selectedCampaign && React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: { marginTop: 8 },
+    onClick: () => setCampaignFormOpen(selectedCampaign)
+  }, `✏️ 「${selectedCampaign.name}」を編集`), React.createElement("button", {
     type: "button",
     className: "btn btn-outline btn-full",
     style: { marginTop: 8 },
