@@ -21384,6 +21384,14 @@ function importJSON(file, handlers) {
         if (data.nexusAiIdMigrationDone !== undefined && handlers.setNexusAiIdMigrationDone) handlers.setNexusAiIdMigrationDone(data.nexusAiIdMigrationDone);
         if (data.nexusAiContractIdCounter !== undefined && handlers.setNexusAiContractIdCounter) handlers.setNexusAiContractIdCounter(data.nexusAiContractIdCounter);
         if (data.nexusAiContractIdMigrationDone !== undefined && handlers.setNexusAiContractIdMigrationDone) handlers.setNexusAiContractIdMigrationDone(data.nexusAiContractIdMigrationDone);
+        // Dot連携（第1段階）の外向け参照ID対応表。古いバックアップ（この項目を持たない）
+        // の復元時は何もしない（復元後に再度Dot用JSONを確認した際、新しい参照IDが
+        // 発行されるだけで、既存の記憶・タスク本体やその関連付けは失われない）。
+        if (data.nexusDotRefMap) {
+          try {
+            localStorage.setItem('ml_dot_ref_map_v1', JSON.stringify(data.nexusDotRefMap));
+          } catch (e) {}
+        }
         alert('✅ 全データを復元しました');
         return;
       }
@@ -23629,10 +23637,18 @@ function importShodanCSV(file, setMemos) {
   reader.readAsText(file, 'UTF-8');
 }
 function exportJSON(state) {
+  // Dot連携（第1段階）の外向け参照ID対応表。useLSの反応state経由ではなく、常に
+  // localStorageの現在値を直接読む（この対応表自体は非リアクティブな単純ストアのため）。
+  let nexusDotRefMap = null;
+  try {
+    const raw = localStorage.getItem('ml_dot_ref_map_v1');
+    if (raw) nexusDotRefMap = JSON.parse(raw);
+  } catch (e) {}
   const data = JSON.stringify({
     __medilifeBackup: true,
     version: 1,
     exportedAt: new Date().toISOString(),
+    nexusDotRefMap: nexusDotRefMap,
     customers: state.customers,
     memos: state.memos,
     kpiSettings: state.kpiSettings,
@@ -39593,7 +39609,8 @@ const MemoryService = {
       autoProcessedAt: p.autoProcessedAt || null,
       manualCategoryConfirmed: !!p.manualCategoryConfirmed,
       manualTagsConfirmed: !!p.manualTagsConfirmed,
-      manualPrivateConfirmed: !!p.manualPrivateConfirmed
+      manualPrivateConfirmed: !!p.manualPrivateConfirmed,
+      privacyConfirmedContentFingerprint: p.privacyConfirmedContentFingerprint || null
     };
     return nexusMemoryPutRaw(memory).then(() => memory);
   },
@@ -40519,9 +40536,497 @@ function nexusMemoryWithDefaults(m) {
     manualCategoryConfirmed: false,
     manualTagsConfirmed: false,
     manualPrivateConfirmed: false,
+    privacyConfirmedContentFingerprint: null,
     attachmentIds: [],
+    // Dot連携（第1段階）：この記憶と関連付けた既存タスクのID（今回は1件のみ）。
+    linkedTaskIds: [],
     ...m
   };
+}
+
+// ══════════════════════════════════════════════════════════════
+// ── Dot連携（第1段階）：記憶↔既存タスクの橋渡し＋安全なDot出力 ──────
+// ・NEXUSが入力・保存の唯一の場所であることは変えない（別の入力アプリ／別のタスク
+//   管理システムは作らない）。既存のtasks（ml_tasks_v1）・MemoryServiceをそのまま使う。
+// ・ここで作るDot用JSONは「許可した項目だけ」から新しく組み立てる（既存オブジェクトを
+//   コピーして不要なキーを消す、という作り方は禁止）。
+// ・PRIVATE・由来不明・未確認の記憶は、確認ボックスの有無にかかわらず出力できない。
+// ══════════════════════════════════════════════════════════════
+
+const NEXUS_DOT_SCHEMA_VERSION = 1;
+const NEXUS_DOT_ACTION_VALUES = ['customer_followup', 'prepare_material', 'learning', 'other'];
+const NEXUS_DOT_ACTION_LABELS = {
+  customer_followup: '顧客フォロー',
+  prepare_material: '資料・準備',
+  learning: '学習・情報収集',
+  other: 'その他'
+};
+const NEXUS_DOT_STATUS_VALUES = ['open', 'done'];
+const NEXUS_DOT_TAG_VALUES = ['follow_up', 'preparation', 'review'];
+const NEXUS_DOT_TAG_LABELS = {
+  follow_up: 'フォロー',
+  preparation: '準備',
+  review: '見直し'
+};
+const NEXUS_DOT_BASIS_VALUES = ['user_confirmed', 'existing_explicit', 'unknown'];
+const NEXUS_DOT_BLOCK_REASON_LABELS = {
+  memory_private: 'この記憶はPRIVATE設定のため出力できません。',
+  privacy_unconfirmed: 'PRIVATE候補として検出されたまま未確認のため出力できません。',
+  derivation_unknown: '由来となる記憶が見つからない、または参照が壊れているため出力できません。'
+};
+
+// 暗号学的な強度は求めない（外部に渡す参照IDの衝突回避のみが目的）。
+function nexusSecureRandomId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  return 'id-' + Array.from({
+    length: 4
+  }, () => Math.random().toString(36).slice(2, 10)).join('');
+}
+
+// 変更検知専用の非暗号ハッシュ（FNV-1a風）。内容そのものは外に出さない。
+function nexusSimpleFingerprint(input) {
+  const s = JSON.stringify(input === undefined ? null : input);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36);
+}
+
+// Dot出力の安全性・内容に関係する項目だけを対象にした「内部指紋」（updatedAtだけに頼らない）。
+// 原文由来のハッシュであり、この値自体は絶対に外部（Dot用JSON）へ出力しない。
+// NEXUS内部での変更検知（プレビューと最新状態の比較）にのみ使う。
+function nexusMemorySourceFingerprint(memory) {
+  if (!memory) return '';
+  return nexusSimpleFingerprint([memory.content, memory.isPrivate, memory.parentMemoryId, memory.relatedMemoryIds || [], memory.suggestedPrivate, memory.manualPrivateConfirmed, memory.privacyConfirmedContentFingerprint, memory.source, memory.linkedTaskIds || []]);
+}
+function nexusTaskFingerprintForDot(task) {
+  if (!task) return '';
+  return nexusSimpleFingerprint([task.title, task.date, task.completed, task.kind, task.customerId, task.method, task.time, task.waitingFrom, task.sourceMemoryId || '', task.dotAction || null, task.dotDurationMinutes || null, task.dotTags || []]);
+}
+// 外向けに出す「版番号」（sourceRevision／taskRevision）は、内容から直接計算した値を
+// 絶対に出力しない。内部指紋が変化した時だけ新しい無意味な乱数トークンを発行し、
+// 変化していなければ前回と同じトークンを再利用する（対応表はNEXUS内部にのみ保持）。
+function nexusDotRevisionTokenEnsure(map, kind, internalId, fingerprint) {
+  const safeMap = map || {};
+  const revBucket = (safeMap.revisions && safeMap.revisions[kind]) || {};
+  const existing = revBucket[internalId];
+  if (existing && existing.fp === fingerprint) {
+    return {
+      map: safeMap,
+      version: existing.version
+    };
+  }
+  const version = nexusSecureRandomId();
+  const nextRevBucket = {
+    ...revBucket,
+    [internalId]: {
+      fp: fingerprint,
+      version
+    }
+  };
+  const nextRevisions = {
+    ...(safeMap.revisions || {}),
+    [kind]: nextRevBucket
+  };
+  return {
+    map: {
+      ...safeMap,
+      revisions: nextRevisions
+    },
+    version
+  };
+}
+
+// 指定した記憶が「PRIVATE／PRIVATE由来／由来不明・未確認」のいずれかで外部出力を
+// 止めるべきかを判定する。通常のAI Insightのrelatedメモは「由来」として辿るが、
+// 通常メモの単なる関連リンク（relatedMemoryIds）は由来ではないため対象にしない。
+// 循環参照があっても停止しないよう、訪問済みIDはこれ以上辿らない（＝ブロックしない）。
+function nexusMemoryPrivacyConfirmationIsStale(m) {
+  // manualPrivateConfirmedは本文が変わっても自動では落ちないフラグなので、確認した時点の
+  // 本文指紋（privacyConfirmedContentFingerprint）と現在の本文指紋を比較し、変わっていれば
+  // 古い確認済み状態として扱う（未確認と同じ扱いに戻す）。
+  if (!m.manualPrivateConfirmed) return false;
+  if (!m.privacyConfirmedContentFingerprint) return true;
+  return m.privacyConfirmedContentFingerprint !== nexusSimpleFingerprint(m.content);
+}
+function nexusMemoryPrivacyBlockReason(memoryId, memoriesById, visited) {
+  const seen = visited || new Set();
+  if (!memoryId || seen.has(memoryId)) return null;
+  seen.add(memoryId);
+  const m = memoriesById instanceof Map ? memoriesById.get(memoryId) : memoriesById[memoryId];
+  if (!m) return 'derivation_unknown';
+  if (m.isPrivate) return 'memory_private';
+  const confirmationStale = nexusMemoryPrivacyConfirmationIsStale(m);
+  if (m.suggestedPrivate && (!m.manualPrivateConfirmed || confirmationStale)) return 'privacy_unconfirmed';
+  const sources = [];
+  if (m.parentMemoryId) sources.push(m.parentMemoryId);
+  if (m.source === 'ai-insight') {
+    // 由来情報を持たない（relatedMemoryIdsが空／未設定の）AI Insightは、由来が安全だと
+    // 分かっているわけではなく「分からない」だけなので、安全と推定せず出力保留にする。
+    const relatedIds = m.relatedMemoryIds || [];
+    if (relatedIds.length === 0) return 'derivation_unknown';
+    relatedIds.forEach(id => sources.push(id));
+  }
+  for (const sid of sources) {
+    const reason = nexusMemoryPrivacyBlockReason(sid, memoriesById, seen);
+    if (reason) return reason;
+  }
+  return null;
+}
+
+// 記憶↔タスクの関連付けが可能かどうかの事前判定（純粋関数、副作用なし）。
+// 既に別の相手と関連付け済みの場合は上書きせず保留する（第1段階は1記憶↔1タスクのみ）。
+function nexusLinkMemoryToTask(memory, task) {
+  if (!memory || !task) return {
+    ok: false,
+    reason: 'missing_target'
+  };
+  const memLinked = (memory.linkedTaskIds || [])[0];
+  if (memLinked && memLinked !== task.id) {
+    return {
+      ok: false,
+      reason: 'memory_already_linked_to_other_task'
+    };
+  }
+  if (task.sourceMemoryId && task.sourceMemoryId !== memory.id) {
+    return {
+      ok: false,
+      reason: 'task_already_linked_to_other_memory'
+    };
+  }
+  return {
+    ok: true
+  };
+}
+
+// 外向け参照ID（記憶参照ID／タスク参照ID）の対応表。内部IDとは別の乱数を1回だけ発行し、
+// 以後は同じ内部IDに対して同じ外向けIDを再利用する（既存IDの再採番は行わない）。
+function nexusDotRefMapEnsure(map, kind, internalId) {
+  const safeMap = map || {};
+  const bucket = safeMap[kind] || {};
+  if (bucket[internalId]) return {
+    map: safeMap,
+    refId: bucket[internalId]
+  };
+  const refId = nexusSecureRandomId();
+  return {
+    map: {
+      ...safeMap,
+      [kind]: {
+        ...bucket,
+        [internalId]: refId
+      }
+    },
+    refId
+  };
+}
+
+// ══════════════════════════════════════════════════════════════
+// ── Dot連携：保存の成功・失敗を確実に判定するための共有ヘルパー ──────
+// useLSの「localStorage.setItemの例外をcatchで握りつぶす」という既存の制約を、
+// Dot連携の成功判定には持ち込まない。ここではすべての書込を「書込後に読み直して
+// 実際に反映されたことを確認する」まで行い、確認できなければ失敗として扱う。
+// 保存先の読込失敗・不正データは空配列／空オブジェクトとして扱わず、明確に区別して
+// 返す（既存タスクを誤って上書きしないため）。
+// ══════════════════════════════════════════════════════════════
+
+// ml_tasks_v1の安全な読み込み。キー自体が無い（＝本当に空）場合だけ空配列を返し、
+// 読込失敗・不正データ（配列でない等）は別のreasonで区別して返す。
+function nexusReadTasksRawSafe() {
+  let raw;
+  try {
+    raw = localStorage.getItem('ml_tasks_v1');
+  } catch (e) {
+    return {
+      ok: false,
+      reason: 'read_failed'
+    };
+  }
+  if (raw === null) return {
+    ok: true,
+    tasks: []
+  };
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    return {
+      ok: false,
+      reason: 'corrupt_data'
+    };
+  }
+  if (!Array.isArray(parsed)) return {
+    ok: false,
+    reason: 'corrupt_data'
+  };
+  return {
+    ok: true,
+    tasks: parsed
+  };
+}
+// ml_tasks_v1への書込＋読み直しによる反映確認。setItem自体が例外を投げない環境でも、
+// 書込が実際に反映されなかった場合を検出する。
+function nexusWriteTasksRawVerified(tasks) {
+  const serialized = JSON.stringify(tasks);
+  try {
+    localStorage.setItem('ml_tasks_v1', serialized);
+  } catch (e) {
+    return {
+      ok: false,
+      reason: 'write_failed'
+    };
+  }
+  let verify;
+  try {
+    verify = localStorage.getItem('ml_tasks_v1');
+  } catch (e) {
+    return {
+      ok: false,
+      reason: 'verify_failed'
+    };
+  }
+  if (verify !== serialized) return {
+    ok: false,
+    reason: 'write_not_persisted'
+  };
+  return {
+    ok: true
+  };
+}
+// ml_dot_ref_map_v1（外向け参照ID・版トークンの対応表）の安全な読み込み。
+function nexusReadDotRefMapSafe() {
+  let raw;
+  try {
+    raw = localStorage.getItem('ml_dot_ref_map_v1');
+  } catch (e) {
+    return {
+      ok: false,
+      reason: 'ref_map_read_failed'
+    };
+  }
+  if (raw === null) return {
+    ok: true,
+    map: {}
+  };
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    return {
+      ok: false,
+      reason: 'ref_map_corrupt'
+    };
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {
+    ok: false,
+    reason: 'ref_map_corrupt'
+  };
+  return {
+    ok: true,
+    map: parsed
+  };
+}
+function nexusWriteDotRefMapVerified(map) {
+  const serialized = JSON.stringify(map);
+  try {
+    localStorage.setItem('ml_dot_ref_map_v1', serialized);
+  } catch (e) {
+    return {
+      ok: false,
+      reason: 'ref_map_write_failed'
+    };
+  }
+  let verify;
+  try {
+    verify = localStorage.getItem('ml_dot_ref_map_v1');
+  } catch (e) {
+    return {
+      ok: false,
+      reason: 'ref_map_verify_failed'
+    };
+  }
+  if (verify !== serialized) return {
+    ok: false,
+    reason: 'ref_map_not_persisted'
+  };
+  return {
+    ok: true
+  };
+}
+// 処理中マーカー（ml_dot_link_pending_v1）。複数の関連付け操作が同時に進行している
+// 可能性があるため、単一レコードではなく「記憶ID::タスクID」ごとのマップとして持ち、
+// 別々の同時操作が互いの記録を上書きしないようにする。
+function nexusDotLinkPendingKey(memoryId, taskId) {
+  return memoryId + '::' + taskId;
+}
+function nexusReadDotLinkPendingMapSafe() {
+  let raw;
+  try {
+    raw = localStorage.getItem('ml_dot_link_pending_v1');
+  } catch (e) {
+    return {
+      ok: false,
+      reason: 'pending_read_failed'
+    };
+  }
+  if (raw === null) return {
+    ok: true,
+    map: {}
+  };
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    return {
+      ok: false,
+      reason: 'pending_corrupt'
+    };
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {
+    ok: false,
+    reason: 'pending_corrupt'
+  };
+  return {
+    ok: true,
+    map: parsed
+  };
+}
+// 処理中マーカーの書込を確認してから、呼び出し側はタスク作成・関連付けを開始する
+// （書込自体が確認できない場合は、そもそも処理を始めない）。
+function nexusSetDotLinkPendingVerified(memoryId, taskId) {
+  const read = nexusReadDotLinkPendingMapSafe();
+  if (!read.ok) return read;
+  const key = nexusDotLinkPendingKey(memoryId, taskId);
+  const nextMap = {
+    ...read.map,
+    [key]: {
+      memoryId,
+      taskId,
+      startedAt: new Date().toISOString()
+    }
+  };
+  const serialized = JSON.stringify(nextMap);
+  try {
+    localStorage.setItem('ml_dot_link_pending_v1', serialized);
+  } catch (e) {
+    return {
+      ok: false,
+      reason: 'write_failed'
+    };
+  }
+  let verify;
+  try {
+    verify = localStorage.getItem('ml_dot_link_pending_v1');
+  } catch (e) {
+    return {
+      ok: false,
+      reason: 'verify_failed'
+    };
+  }
+  if (verify !== serialized) return {
+    ok: false,
+    reason: 'write_not_persisted'
+  };
+  return {
+    ok: true
+  };
+}
+// マーカーは「確定した成功」または「確定した失敗（何も保存されていないと分かっている）」
+// の時だけ消す。保存の結果が分からない失敗（書込確認に失敗した等）では消さず、
+// 次回の再読込・再試行での復旧に委ねる。
+function nexusClearDotLinkPendingEntry(memoryId, taskId) {
+  const read = nexusReadDotLinkPendingMapSafe();
+  if (!read.ok) return;
+  const key = nexusDotLinkPendingKey(memoryId, taskId);
+  if (!(key in read.map)) return;
+  const nextMap = {
+    ...read.map
+  };
+  delete nextMap[key];
+  try {
+    localStorage.setItem('ml_dot_link_pending_v1', JSON.stringify(nextMap));
+  } catch (e) {}
+}
+
+// 既存タスクのdateが「単純な期限」として確定しているかどうか。kind指定のある商談メモ発の
+// タスク（自分がやること／返事待ち／次の面談）は、同じdateが期限・確認日・面談日時など
+// 複数の意味を持ちうるため、今回のdueDateには変換しない（対象外として理由を保持）。
+function nexusDotDueDateEligibility(task) {
+  if (!task) return {
+    eligible: false,
+    reason: 'no_task'
+  };
+  if (task.kind) return {
+    eligible: false,
+    reason: 'unsupported_kind'
+  };
+  if (!task.date || !/^\d{4}-\d{2}-\d{2}$/.test(task.date)) return {
+    eligible: false,
+    reason: 'no_plain_date'
+  };
+  return {
+    eligible: true,
+    reason: null
+  };
+}
+function nexusDotStatusForTask(task) {
+  return task && task.completed ? 'done' : 'open';
+}
+
+const NEXUS_DOT_EXPORT_ALLOWED_KEYS = ['schemaVersion', 'memoryRefId', 'taskRefId', 'sourceRevision', 'taskRevision', 'action', 'actionBasis', 'status', 'statusBasis', 'dueDate', 'dueDateBasis', 'durationMinutes', 'durationBasis', 'timezone', 'tags', 'tagsBasis'];
+
+// 許可した項目だけから新しいJSONを組み立てる（既存オブジェクトのコピー＆キー削除は使わない）。
+function nexusBuildDotExportJson(input) {
+  const out = {
+    schemaVersion: NEXUS_DOT_SCHEMA_VERSION,
+    memoryRefId: input.memoryRefId,
+    taskRefId: input.taskRefId,
+    sourceRevision: input.sourceRevision,
+    taskRevision: input.taskRevision,
+    action: input.action,
+    actionBasis: input.actionBasis,
+    status: input.status,
+    statusBasis: input.statusBasis,
+    dueDate: input.dueDate,
+    dueDateBasis: input.dueDateBasis,
+    durationMinutes: input.durationMinutes,
+    durationBasis: input.durationBasis,
+    timezone: input.timezone,
+    tags: input.tags,
+    tagsBasis: input.tagsBasis
+  };
+  const errors = nexusValidateDotExportJson(out);
+  if (errors.length) throw new Error('DOT_EXPORT_INVALID: ' + errors.join(', '));
+  return out;
+}
+
+// 未知キー・不正な値を拒否する（キー名だけでなく値の型・形式・列挙も検証する）。
+function nexusValidateDotExportJson(obj) {
+  const errors = [];
+  if (!obj || typeof obj !== 'object') return ['not_object'];
+  if (obj.schemaVersion !== NEXUS_DOT_SCHEMA_VERSION) errors.push('schemaVersion');
+  if (typeof obj.memoryRefId !== 'string' || obj.memoryRefId.length < 8) errors.push('memoryRefId');
+  if (typeof obj.taskRefId !== 'string' || obj.taskRefId.length < 8) errors.push('taskRefId');
+  if (typeof obj.sourceRevision !== 'string' || !obj.sourceRevision) errors.push('sourceRevision');
+  if (typeof obj.taskRevision !== 'string' || !obj.taskRevision) errors.push('taskRevision');
+  if (obj.action !== null && !NEXUS_DOT_ACTION_VALUES.includes(obj.action)) errors.push('action');
+  if (!NEXUS_DOT_BASIS_VALUES.includes(obj.actionBasis)) errors.push('actionBasis');
+  if (obj.status !== null && !NEXUS_DOT_STATUS_VALUES.includes(obj.status)) errors.push('status');
+  if (!NEXUS_DOT_BASIS_VALUES.includes(obj.statusBasis)) errors.push('statusBasis');
+  if (obj.dueDate !== null && !/^\d{4}-\d{2}-\d{2}$/.test(obj.dueDate)) errors.push('dueDate');
+  if (!NEXUS_DOT_BASIS_VALUES.includes(obj.dueDateBasis)) errors.push('dueDateBasis');
+  if (obj.durationMinutes !== null && !(Number.isInteger(obj.durationMinutes) && obj.durationMinutes > 0 && obj.durationMinutes <= 480)) errors.push('durationMinutes');
+  if (!NEXUS_DOT_BASIS_VALUES.includes(obj.durationBasis)) errors.push('durationBasis');
+  if (obj.timezone !== null && obj.timezone !== 'Asia/Tokyo') errors.push('timezone');
+  if (!Array.isArray(obj.tags) || obj.tags.some(t => !NEXUS_DOT_TAG_VALUES.includes(t))) errors.push('tags');
+  if (!NEXUS_DOT_BASIS_VALUES.includes(obj.tagsBasis)) errors.push('tagsBasis');
+  const allowed = new Set(NEXUS_DOT_EXPORT_ALLOWED_KEYS);
+  Object.keys(obj).forEach(k => {
+    if (!allowed.has(k)) errors.push('unknown_key:' + k);
+  });
+  return errors;
 }
 
 // ── 匿名化・仮名化サービス層 ────────────────────────────────────
@@ -42011,7 +42516,9 @@ function MemoryTab({
   onClearEntityFilter,
   customers,
   onOpenAiPack,
-  initialSearch
+  initialSearch,
+  dotBridgeEnabled,
+  onToggleDotBridge
 }) {
   const [search, setSearch] = useState(initialSearch || '');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -42248,7 +42755,23 @@ function MemoryTab({
       setReanalyzing(true);
       Promise.resolve(onReanalyzeAll()).finally(() => setReanalyzing(false));
     }
-  }, reanalyzing ? "整理中..." : "🧹 記憶を整理する（カテゴリ・タグ・関連候補を再生成）"), !personFilterCustomer && /*#__PURE__*/React.createElement("div", {
+  }, reanalyzing ? "整理中..." : "🧹 記憶を整理する（カテゴリ・タグ・関連候補を再生成）"), /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      fontSize: 11.5,
+      color: 'var(--text-sub)',
+      marginBottom: 10,
+      padding: '8px 2px',
+      minHeight: 28,
+      cursor: 'pointer'
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: !!dotBridgeEnabled,
+    onChange: e => onToggleDotBridge(e.target.checked)
+  }), "📌 Dotタスク連携機能を使う（停止してもデータは消えません）"), !personFilterCustomer && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12,
       color: 'var(--text-sub)',
@@ -42494,11 +43017,14 @@ function MemoryManualLinkPicker({
 function MemoryAutoSuggestionCard({
   memory,
   onAdopt,
+  onDismissPrivacySuggestion,
   onSearchTheme
 }) {
   const hasCategory = !!memory.suggestedCategory;
   const hasTags = (memory.suggestedTags || []).length > 0;
-  const hasPrivacy = !!memory.suggestedPrivate;
+  // 確認済みでも、確認した時点から本文が変わっていれば古い確認済み状態として扱い、
+  // 再度「PRIVATE候補」として表示する（nexusMemoryPrivacyBlockReasonと同じ判定）。
+  const hasPrivacy = !!memory.suggestedPrivate && (!memory.manualPrivateConfirmed || nexusMemoryPrivacyConfirmationIsStale(memory));
   if (!hasCategory && !hasTags && !hasPrivacy) return null;
   return /*#__PURE__*/React.createElement("div", {
     className: "card",
@@ -42575,7 +43101,22 @@ function MemoryAutoSuggestionCard({
       marginTop: 4
     },
     onClick: () => onAdopt(memory)
-  }, "この分類を採用"));
+  }, "この分類を採用"), hasPrivacy && onDismissPrivacySuggestion && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: {
+      fontSize: 13,
+      marginTop: 6
+    },
+    onClick: () => onDismissPrivacySuggestion(memory)
+  }, "🔍 自動判定の候補を確認：この内容はPRIVATEに該当しない"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--text-sub)',
+      marginTop: 4,
+      lineHeight: 1.5
+    }
+  }, "※ この操作はNEXUS内部の判定候補を確認するだけで、外部へ情報を出す許可ではありません。"));
 }
 // ── 🔗 NEXUSが見つけた関連候補（自動候補。手動関連付け・AI分析パックへの追加はユーザー操作のみ）──
 function MemoryRelatedCandidateCard({
@@ -43017,7 +43558,13 @@ function MemoryDetail({
   onLinkEntity,
   onSearchTheme,
   onExplore,
-  onDeleteAttachment
+  onDeleteAttachment,
+  onDismissPrivacySuggestion,
+  dotBridgeEnabled,
+  linkedTask,
+  onOpenTaskLink,
+  onUnlinkTask,
+  onOpenDotExport
 }) {
   const [confirmDel, setConfirmDel] = useState(false);
   return /*#__PURE__*/React.createElement("div", {
@@ -43152,7 +43699,56 @@ function MemoryDetail({
       fontWeight: 700
     },
     onClick: () => onExplore(memory)
-  }, "🔗 この記憶から広げる"), memory.source === 'ai-insight' && (memory.relatedMemoryIds || []).length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  }, "🔗 この記憶から広げる"), dotBridgeEnabled && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "📌 タスク連携（Dot）"), linkedTask ? /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginBottom: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13.5,
+      fontWeight: 600,
+      marginBottom: 8
+    }
+  }, "関連タスク：", linkedTask.title), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-sm btn-primary",
+    onClick: () => onOpenDotExport(linkedTask)
+  }, "📤 Dot用JSONを確認"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-sm btn-outline",
+    onClick: onUnlinkTask
+  }, "関連付けを解除"))) : (memory.linkedTaskIds || []).length > 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginBottom: 14,
+      fontSize: 12.5,
+      color: 'var(--text-sub)'
+    }
+  }, "関連付けていたタスクが見つかりません（削除された可能性があります）。", /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-sm btn-outline",
+    style: {
+      marginTop: 8
+    },
+    onClick: onUnlinkTask
+  }, "関連付けを解除")) : /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: {
+      marginBottom: 14,
+      fontSize: 13.5,
+      fontWeight: 700
+    },
+    onClick: onOpenTaskLink
+  }, "📌 タスクと関連付ける")), memory.source === 'ai-insight' && (memory.relatedMemoryIds || []).length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "section-header"
   }, "🧠 元になった記憶"), /*#__PURE__*/React.createElement("div", {
     className: "card",
@@ -43166,6 +43762,7 @@ function MemoryDetail({
   })))), /*#__PURE__*/React.createElement(MemoryAutoSuggestionCard, {
     memory: memory,
     onAdopt: onAdoptSuggestions,
+    onDismissPrivacySuggestion: onDismissPrivacySuggestion,
     onSearchTheme: onSearchTheme
   }), /*#__PURE__*/React.createElement("div", {
     className: "section-header"
@@ -43260,8 +43857,14 @@ function NexusAiPackScreen({
   }).filter(m => !selectedIds.includes(m.id)) : [], [primaryMemory, memories, selectedIds]);
   const addCandidates = addSearch.trim() ? memories.filter(m => !selectedIds.includes(m.id) && (m.content || '').includes(addSearch.trim())).slice(0, 8) : [];
   const hasPrivate = selectedMemories.some(m => m.isPrivate);
+  // 既存のhasPrivate（ソフトな注意表示用）に加えて、PRIVATE由来・参照切れ・未確認も
+  // 含めた厳密なブロック判定（チェックボックスでは解除できない）。
+  const memoriesById = useMemo(() => new Map((memories || []).map(m => [m.id, m])), [memories]);
+  const privacyBlockReason = selectedMemories.map(m => nexusMemoryPrivacyBlockReason(m.id, memoriesById)).find(Boolean) || null;
+  const privacyBlocked = !!privacyBlockReason;
   const toggleRemove = id => setSelectedIds(prev => prev.filter(x => x !== id));
   const addId = id => setSelectedIds(prev => prev.includes(id) ? prev : [...prev, id]);
+  const [previewFingerprints, setPreviewFingerprints] = useState(null);
   const runAnonymize = () => {
     let map = pseudonymMap;
     const results = selectedMemories.map(m => {
@@ -43278,6 +43881,12 @@ function NexusAiPackScreen({
     });
     onSavePseudonymMap(map);
     setAnonymizedResults(results);
+    // コピー直前の鮮度確認用に、匿名化した時点の各記憶の指紋（本文等）を記録しておく
+    // （この指紋自体はコピーするテキストには一切含めない。内部比較専用）。
+    setPreviewFingerprints(selectedMemories.map(m => ({
+      id: m.id,
+      fp: nexusMemorySourceFingerprint(m)
+    })));
     setConfirmedRisk(false);
     setStep('preview');
   };
@@ -43300,8 +43909,41 @@ function NexusAiPackScreen({
     if (step === 'prompt') setEditedPromptText(promptText);
   }, [promptText, step]);
   const doCopy = () => {
-    nexusCopyToClipboard(editedPromptText).then(ok => {
-      showToast(ok ? '📋 コピーしました！ChatGPTやClaudeに貼り付けてください' : '⚠️ コピーに失敗しました');
+    if (privacyBlocked) {
+      showToast('⛔ PRIVATEのためコピーできません');
+      return;
+    }
+    // コピー直前に、別タブでの変更（PRIVATE化・本文変更・由来の変化・参照削除等）が
+    // 無いか必ず再確認する。ボタンの見た目を無効にするだけでなく、ここで最新のIndexedDBを
+    // 読み直して判定する。読込に失敗したら出力を止め、古い内容へは絶対に戻さない。
+    MemoryService.getAll().then(freshList => {
+      const freshById = new Map(freshList.map(m => [m.id, m]));
+      const freshBlock = selectedIds.map(id => nexusMemoryPrivacyBlockReason(id, freshById)).find(Boolean) || null;
+      if (freshBlock) {
+        setStep('select');
+        setConfirmedRisk(false);
+        showToast('⛔ ' + (NEXUS_DOT_BLOCK_REASON_LABELS[freshBlock] || 'PRIVATEのため出力できません'));
+        return;
+      }
+      const changed = (previewFingerprints || []).some(({
+        id,
+        fp
+      }) => {
+        const fresh = freshById.get(id);
+        if (!fresh) return true;
+        return nexusMemorySourceFingerprint(fresh) !== fp;
+      });
+      if (changed) {
+        setStep('select');
+        setConfirmedRisk(false);
+        showToast('⚠️ 内容が変わったため、もう一度確認し直してください');
+        return;
+      }
+      nexusCopyToClipboard(editedPromptText).then(ok => {
+        showToast(ok ? '📋 コピーしました！ChatGPTやClaudeに貼り付けてください' : '⚠️ コピーに失敗しました');
+      });
+    }).catch(() => {
+      showToast('⚠️ 確認に失敗したためコピーを中止しました');
     });
   };
   const stepTitle = {
@@ -43481,10 +44123,21 @@ function NexusAiPackScreen({
     key: p.key,
     className: `chip ${purposeKey === p.key ? 'active' : ''}`,
     onClick: () => setPurposeKey(p.key)
-  }, p.label))), /*#__PURE__*/React.createElement("button", {
+  }, p.label))), privacyBlocked && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 10,
+      background: '#FEF2F2',
+      border: '1px solid #FECACA',
+      borderRadius: 10,
+      padding: '10px 12px',
+      fontSize: 12.5,
+      color: 'var(--danger)',
+      fontWeight: 700
+    }
+  }, "⛔ ", NEXUS_DOT_BLOCK_REASON_LABELS[privacyBlockReason] || 'PRIVATEのため出力できません。'), /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "btn btn-primary btn-full",
-    disabled: selectedMemories.length === 0,
+    disabled: selectedMemories.length === 0 || privacyBlocked,
     onClick: runAnonymize
   }, "次へ（匿名化する）")), step === 'preview' && /*#__PURE__*/React.createElement(React.Fragment, null, hasPrivate && /*#__PURE__*/React.createElement("div", {
     style: {
@@ -43596,7 +44249,7 @@ function NexusAiPackScreen({
   }, "戻る"), /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "btn btn-primary btn-full",
-    disabled: !confirmedRisk,
+    disabled: !confirmedRisk || privacyBlocked,
     onClick: () => setStep('prompt')
   }, "次へ（プロンプトを作成）"))), step === 'prompt' && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "card",
@@ -43663,9 +44316,21 @@ function NexusAiPackScreen({
       marginBottom: 12,
       lineHeight: 1.6
     }
-  }, "🔒 仮名対応表（PERSON_001＝実名 等）はこの端末内だけに保存され、コピーされる文章には含まれません。"), /*#__PURE__*/React.createElement("button", {
+  }, "🔒 仮名対応表（PERSON_001＝実名 等）はこの端末内だけに保存され、コピーされる文章には含まれません。"), privacyBlocked && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 10,
+      background: '#FEF2F2',
+      border: '1px solid #FECACA',
+      borderRadius: 10,
+      padding: '10px 12px',
+      fontSize: 12.5,
+      color: 'var(--danger)',
+      fontWeight: 700
+    }
+  }, "⛔ ", NEXUS_DOT_BLOCK_REASON_LABELS[privacyBlockReason] || 'PRIVATEのためコピーできません。'), /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "btn btn-primary btn-full",
+    disabled: privacyBlocked,
     style: {
       marginBottom: 10,
       fontSize: 15,
@@ -43709,11 +44374,16 @@ function NexusAiPackScreen({
 // 蓄積できるようにするため）。
 function NexusAiInsightForm({
   relatedMemoryIds,
+  memories,
   onSave,
   onClose
 }) {
   const [content, setContent] = useState('');
   const canSave = content.trim().length > 0;
+  // isPrivate:false固定で安全扱いにしない。元にした記憶（relatedMemoryIds）のいずれかが
+  // PRIVATE／PRIVATE由来／由来不明・未確認であれば、新しいAI Insightも同じ制約を継承する。
+  const memoriesById = useMemo(() => new Map((memories || []).map(m => [m.id, m])), [memories]);
+  const inheritedPrivate = (relatedMemoryIds || []).some(id => !!nexusMemoryPrivacyBlockReason(id, memoriesById));
   return /*#__PURE__*/React.createElement("div", {
     className: "full-screen"
   }, /*#__PURE__*/React.createElement("div", {
@@ -43744,7 +44414,7 @@ function NexusAiInsightForm({
       relatedMemoryIds: relatedMemoryIds || [],
       category: '',
       tags: [],
-      isPrivate: false
+      isPrivate: inheritedPrivate
     })
   }, "保存")), /*#__PURE__*/React.createElement("div", {
     className: "full-content"
@@ -43755,7 +44425,18 @@ function NexusAiInsightForm({
       marginBottom: 10,
       lineHeight: 1.6
     }
-  }, "ChatGPTやClaudeから返ってきた分析結果を、そのまま貼り付けて保存できます。", (relatedMemoryIds || []).length > 0 && ` 今回の分析に使った記録${relatedMemoryIds.length}件と自動的に関連付けられます。`), /*#__PURE__*/React.createElement("div", {
+  }, "ChatGPTやClaudeから返ってきた分析結果を、そのまま貼り付けて保存できます。", (relatedMemoryIds || []).length > 0 && ` 今回の分析に使った記録${relatedMemoryIds.length}件と自動的に関連付けられます。`), inheritedPrivate && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 10,
+      background: '#FEF2F2',
+      border: '1px solid #FECACA',
+      borderRadius: 10,
+      padding: '10px 12px',
+      fontSize: 12.5,
+      color: 'var(--danger)',
+      fontWeight: 600
+    }
+  }, "🔒 元になった記憶にPRIVATEが含まれるため、このAI Insightも自動的にPRIVATEとして保存されます。"), /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement("textarea", {
     className: "form-textarea",
@@ -43767,6 +44448,512 @@ function NexusAiInsightForm({
     value: content,
     onChange: e => setContent(e.target.value)
   }))));
+}
+
+// ── Dot連携（第1段階）：記憶とタスクを関連付ける画面 ────────────────
+// 既存タスク一覧から1件選ぶ、または既存のTaskForm（タスク作成画面そのもの）で
+// 新規作成してから関連付ける。原文を別画面へ再入力させることはしない
+// （参考として記憶本文を表示するだけで、タスク名へ自動コピーはしない）。
+function NexusMemoryTaskLinkScreen({
+  memory,
+  tasks,
+  clients,
+  customers,
+  onOpenCustomer,
+  onPickExisting,
+  onCreateAndLink,
+  onClose
+}) {
+  const [search, setSearch] = useState('');
+  const [showCreate, setShowCreate] = useState(false);
+  const [busyId, setBusyId] = useState('');
+  const [blockedInfo, setBlockedInfo] = useState(null);
+  // Web Locksに対応していない環境では複数タブ間の安全性を保証できないため、
+  // 新しい関連付け操作だけを止める（既存のタスク機能自体は止めない）。
+  const locksSupported = typeof navigator !== 'undefined' && !!(navigator.locks && navigator.locks.request);
+  const q = search.trim();
+  const candidates = (tasks || []).filter(t => !t.completed).filter(t => !q || (t.title || '').includes(q)).slice(0, 30);
+  const blockedLabel = {
+    task_already_linked_to_other_memory: 'このタスクは既に別の記憶と関連付けられているため、今回は変更しません。',
+    memory_already_linked_to_other_task: 'この記憶は既に別のタスクと関連付けられています。'
+  };
+  const pick = task => {
+    const decision = nexusLinkMemoryToTask(memory, task);
+    if (!decision.ok) {
+      setBlockedInfo({
+        taskId: task.id,
+        reason: decision.reason
+      });
+      return;
+    }
+    setBlockedInfo(null);
+    setBusyId(task.id);
+    Promise.resolve(onPickExisting(task)).finally(() => setBusyId(''));
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: "full-screen"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "full-header"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    style: {
+      background: 'none',
+      border: 'none',
+      cursor: 'pointer',
+      fontSize: 15,
+      color: 'var(--text-sub)',
+      fontWeight: 600,
+      padding: '4px 8px'
+    }
+  }, "← 戻る"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      fontWeight: 700,
+      fontSize: 15
+    }
+  }, "📌 タスクと関連付ける")), /*#__PURE__*/React.createElement("div", {
+    className: "full-content"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "info-label",
+    style: {
+      marginBottom: 4
+    }
+  }, "関連付ける記憶（参考表示のみ・このままタスク名にはなりません）"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      color: 'var(--text-sub)',
+      whiteSpace: 'pre-wrap',
+      wordBreak: 'break-word'
+    }
+  }, (memory.content || '').slice(0, 200))), !locksSupported && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 12,
+      background: '#FEF2F2',
+      border: '1px solid #FECACA',
+      borderRadius: 10,
+      padding: '10px 12px',
+      fontSize: 12.5,
+      color: 'var(--danger)',
+      fontWeight: 600
+    }
+  }, "⛔ この環境（ブラウザ）では複数タブでの安全性を保証できないため、新しい関連付け操作を停止しています。他のタブを閉じてページを再読み込みしてからお試しください。"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-full",
+    disabled: !locksSupported,
+    style: {
+      marginBottom: 14
+    },
+    onClick: () => setShowCreate(true)
+  }, "＋ 新しいタスクを作成して関連付ける"), /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "既存のタスクから選ぶ"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    style: {
+      marginBottom: 10
+    },
+    placeholder: "タスク名で検索...",
+    value: search,
+    onChange: e => setSearch(e.target.value)
+  }), candidates.length === 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--text-sub)'
+    }
+  }, "未完了のタスクが見つかりません。"), candidates.map(t => /*#__PURE__*/React.createElement("div", {
+    key: t.id,
+    className: "card",
+    style: {
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      fontSize: 13.5,
+      fontWeight: 600
+    }
+  }, t.title, t.date && /*#__PURE__*/React.createElement("span", {
+    style: {
+      marginLeft: 8,
+      fontSize: 11.5,
+      color: 'var(--text-sub)',
+      fontWeight: 400
+    }
+  }, "期限：", t.date), t.sourceMemoryId && t.sourceMemoryId !== memory.id && /*#__PURE__*/React.createElement("span", {
+    style: {
+      marginLeft: 8,
+      fontSize: 11,
+      color: 'var(--danger)',
+      fontWeight: 600
+    }
+  }, "🔗 別の記憶と関連付け済み")), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-sm btn-outline",
+    disabled: busyId === t.id || !locksSupported,
+    onClick: () => pick(t)
+  }, "選ぶ")), blockedInfo && blockedInfo.taskId === t.id && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8,
+      fontSize: 12,
+      color: 'var(--danger)',
+      fontWeight: 600
+    }
+  }, "⚠️ ", blockedLabel[blockedInfo.reason] || '関連付けできません。')))), showCreate && /*#__PURE__*/React.createElement("div", {
+    className: "overlay",
+    onClick: () => setShowCreate(false)
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "drawer",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "drawer-handle"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "drawer-title"
+  }, "タスクを作成して関連付ける"), /*#__PURE__*/React.createElement(TaskForm, {
+    editing: null,
+    clients: clients,
+    customers: customers,
+    onOpenCustomer: onOpenCustomer,
+    onSave: taskData => {
+      setShowCreate(false);
+      onCreateAndLink(taskData);
+    },
+    onClose: () => setShowCreate(false)
+  }))));
+}
+
+// ── Dot連携（第1段階）：安全なDot用JSONプレビュー画面 ───────────────
+// 許可した項目だけを使ってJSONを組み立て、PRIVATE／由来不明／版の変化を
+// プレビュー生成時・コピー直前の両方で確認する。JSON自体は編集不可（修正は
+// 上の安全な入力UIからのみ行う）。外部AIへの自動送信・Googleカレンダー登録は行わない。
+function NexusMemoryDotExportScreen({
+  memory,
+  task,
+  onSaveTaskDotFields,
+  onClose
+}) {
+  const [action, setAction] = useState(task.dotAction || null);
+  const [duration, setDuration] = useState(task.dotDurationMinutes != null ? String(task.dotDurationMinutes) : '');
+  const [tags, setTags] = useState(task.dotTags || []);
+  const [preview, setPreview] = useState(null);
+  const [toast, setToast] = useState('');
+  const showToast = msg => {
+    setToast(msg);
+    setTimeout(() => setToast(''), 3000);
+  };
+  const dueEligibility = nexusDotDueDateEligibility(task);
+  const durationNum = (() => {
+    const n = parseInt(duration, 10);
+    return Number.isInteger(n) && n > 0 && n <= 480 ? n : null;
+  })();
+  const toggleTag = key => setTags(prev => prev.includes(key) ? prev.filter(x => x !== key) : [...prev, key]);
+  // 外部へ出すsourceRevision/taskRevisionは、本文等から直接計算した指紋をそのまま出さない。
+  // 指紋はml_dot_ref_map_v1（NEXUS内部）にだけ保持し、変化していなければ前回と同じ
+  // 無意味な乱数トークンを再利用、変化していれば新しいトークンを発行してそれだけを出力する。
+  // 参照ID・版トークンの書込も、読み直しで確認できた時だけ成功として扱う。
+  const buildJsonFor = (m, t) => {
+    const readResult = nexusReadDotRefMapSafe();
+    if (!readResult.ok) return readResult;
+    const step1 = nexusDotRefMapEnsure(readResult.map, 'memory', m.id);
+    const step2 = nexusDotRefMapEnsure(step1.map, 'task', t.id);
+    const sourceFingerprint = nexusMemorySourceFingerprint(m);
+    const taskFingerprint = nexusTaskFingerprintForDot(t);
+    const step3 = nexusDotRevisionTokenEnsure(step2.map, 'memory', m.id, sourceFingerprint);
+    const step4 = nexusDotRevisionTokenEnsure(step3.map, 'task', t.id, taskFingerprint);
+    if (step4.map !== readResult.map) {
+      const writeResult = nexusWriteDotRefMapVerified(step4.map);
+      if (!writeResult.ok) return writeResult;
+    }
+    const eligibility = nexusDotDueDateEligibility(t);
+    let json;
+    try {
+      json = nexusBuildDotExportJson({
+        memoryRefId: step1.refId,
+        taskRefId: step2.refId,
+        sourceRevision: step3.version,
+        taskRevision: step4.version,
+        action: action || null,
+        actionBasis: action ? 'user_confirmed' : 'unknown',
+        status: nexusDotStatusForTask(t),
+        statusBasis: 'existing_explicit',
+        dueDate: eligibility.eligible ? t.date : null,
+        dueDateBasis: eligibility.eligible ? 'existing_explicit' : 'unknown',
+        durationMinutes: durationNum,
+        durationBasis: durationNum != null ? 'user_confirmed' : 'unknown',
+        timezone: eligibility.eligible ? 'Asia/Tokyo' : null,
+        tags,
+        tagsBasis: tags.length > 0 ? 'user_confirmed' : 'unknown'
+      });
+    } catch (e) {
+      return {
+        ok: false,
+        reason: 'json_build_failed'
+      };
+    }
+    return {
+      ok: true,
+      json,
+      sourceFingerprint,
+      taskFingerprint
+    };
+  };
+  const dotSaveFailureMessages = {
+    missing_target: '保存されたタスクが見つからないため中止しました。',
+    read_failed: 'タスク一覧の読み込みに失敗したため中止しました。',
+    corrupt_data: 'タスク一覧のデータが読み取れないため中止しました（既存データを保護するため上書きしません）。',
+    write_failed: '保存に失敗しました。もう一度お試しください。',
+    write_not_persisted: '保存の確認ができませんでした。もう一度お試しください。',
+    verify_failed: '保存の確認ができませんでした。もう一度お試しください。',
+    ref_map_read_failed: '参照ID対応表の読み込みに失敗したため中止しました。',
+    ref_map_corrupt: '参照ID対応表が読み取れないため中止しました。',
+    ref_map_write_failed: '参照ID・版情報の保存に失敗しました。もう一度お試しください。',
+    ref_map_not_persisted: '参照ID・版情報の保存を確認できませんでした。もう一度お試しください。',
+    ref_map_verify_failed: '参照ID・版情報の保存を確認できませんでした。もう一度お試しください。',
+    json_build_failed: '生成に失敗しました。'
+  };
+  const generatePreview = () => {
+    MemoryService.getAll().then(allMemoriesFresh => {
+      const memoriesById = new Map(allMemoriesFresh.map(m => [m.id, m]));
+      const freshMemory = memoriesById.get(memory.id);
+      if (!freshMemory) {
+        showToast('⚠️ 記憶が見つからないため中止しました');
+        return;
+      }
+      const block = nexusMemoryPrivacyBlockReason(memory.id, memoriesById);
+      if (block) {
+        showToast('⛔ ' + (NEXUS_DOT_BLOCK_REASON_LABELS[block] || '出力できません'));
+        return;
+      }
+      // 構造化項目（action／所要時間／タグ）の永続保存が確認できるまでは、
+      // Dot用JSONの生成・表示には進めない（Reactの画面更新だけで成功とみなさない）。
+      Promise.resolve(onSaveTaskDotFields({
+        dotAction: action || null,
+        dotDurationMinutes: durationNum,
+        dotTags: tags
+      })).then(saveResult => {
+        if (!saveResult || !saveResult.ok) {
+          showToast('⚠️ ' + (dotSaveFailureMessages[saveResult && saveResult.reason] || '保存に失敗したため中止しました'));
+          return;
+        }
+        const built = buildJsonFor(freshMemory, task);
+        if (!built.ok) {
+          showToast('⚠️ ' + (dotSaveFailureMessages[built.reason] || '生成に失敗しました'));
+          return;
+        }
+        setPreview({
+          json: built.json,
+          sourceFingerprint: built.sourceFingerprint,
+          taskFingerprint: built.taskFingerprint
+        });
+      });
+    });
+  };
+  const doCopy = () => {
+    if (!preview) return;
+    // コピー直前に最新の記憶・タスク・由来を再確認し、変化があれば古い内容のままコピーしない
+    // （プレビュー生成後の別タブでの編集・PRIVATE化・関連解除なども検出する）。
+    // 比較はNEXUS内部の指紋同士で行い、出力JSON自体の値は比較に使わない。
+    MemoryService.getAll().then(allMemoriesFresh => {
+      const memoriesById = new Map(allMemoriesFresh.map(m => [m.id, m]));
+      const freshMemory = memoriesById.get(memory.id);
+      const readResult = nexusReadTasksRawSafe();
+      if (!readResult.ok) {
+        setPreview(null);
+        showToast('⚠️ タスク一覧の確認に失敗したため中止しました');
+        return;
+      }
+      const freshTask = readResult.tasks.find(t => t.id === task.id);
+      if (!freshMemory || !freshTask) {
+        setPreview(null);
+        showToast('⚠️ 記憶またはタスクが見つからないため中止しました');
+        return;
+      }
+      const block = nexusMemoryPrivacyBlockReason(memory.id, memoriesById);
+      if (block) {
+        setPreview(null);
+        showToast('⛔ ' + (NEXUS_DOT_BLOCK_REASON_LABELS[block] || '出力できません'));
+        return;
+      }
+      if ((freshMemory.linkedTaskIds || [])[0] !== freshTask.id || freshTask.sourceMemoryId !== freshMemory.id) {
+        setPreview(null);
+        showToast('⚠️ 関連付けが変わったため、もう一度確認してください');
+        return;
+      }
+      const curSourceFingerprint = nexusMemorySourceFingerprint(freshMemory);
+      const curTaskFingerprint = nexusTaskFingerprintForDot(freshTask);
+      if (curSourceFingerprint !== preview.sourceFingerprint || curTaskFingerprint !== preview.taskFingerprint) {
+        setPreview(null);
+        showToast('⚠️ 内容が変わったため、もう一度プレビューを作成してください');
+        return;
+      }
+      nexusCopyToClipboard(JSON.stringify(preview.json, null, 2)).then(ok => {
+        showToast(ok ? '📋 コピーしました' : '⚠️ コピーに失敗しました');
+      });
+    }).catch(() => {
+      showToast('⚠️ 確認に失敗したためコピーを中止しました');
+    });
+  };
+  const chipStyle = active => ({
+    padding: '7px 12px',
+    borderRadius: 999,
+    border: `1.5px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+    background: active ? 'var(--accent-light)' : 'var(--bg)',
+    color: active ? 'var(--accent)' : 'var(--text-sub)',
+    fontSize: 12.5,
+    fontWeight: 600,
+    cursor: 'pointer'
+  });
+  return /*#__PURE__*/React.createElement("div", {
+    className: "full-screen"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "full-header"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    style: {
+      background: 'none',
+      border: 'none',
+      cursor: 'pointer',
+      fontSize: 15,
+      color: 'var(--text-sub)',
+      fontWeight: 600,
+      padding: '4px 8px'
+    }
+  }, "← 戻る"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      fontWeight: 700,
+      fontSize: 15
+    }
+  }, "📤 Dot用JSONを確認")), /*#__PURE__*/React.createElement("div", {
+    className: "full-content"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--text-sub)',
+      marginBottom: 10,
+      lineHeight: 1.7,
+      background: '#FFFBEB',
+      border: '1px solid #FDE68A',
+      borderRadius: 10,
+      padding: '10px 12px'
+    }
+  }, "このJSONだけではDotに記憶の全文や神メモ全体の文脈は伝わりません。今回はユーザーが確認した分類・期限・所要時間だけを連携します。乱数の参照IDを使っていますが、記憶同士の関連付けから推測される可能性があるため、完全に匿名・安全とは言い切れません。"), /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "関連タスク"), /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13.5,
+      fontWeight: 600
+    }
+  }, task.title)), /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "行動（action）"), /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 6,
+      marginBottom: 12
+    }
+  }, NEXUS_DOT_ACTION_VALUES.map(v => /*#__PURE__*/React.createElement("span", {
+    key: v,
+    style: chipStyle(action === v),
+    onClick: () => setAction(action === v ? null : v)
+  }, NEXUS_DOT_ACTION_LABELS[v]))), /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "所要時間（任意・分）"), /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    type: "number",
+    min: "1",
+    max: "480",
+    placeholder: "未確認のままなら空欄",
+    value: duration,
+    onChange: e => setDuration(e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "タグ（任意）"), /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 6,
+      marginBottom: 12
+    }
+  }, NEXUS_DOT_TAG_VALUES.map(v => /*#__PURE__*/React.createElement("span", {
+    key: v,
+    style: chipStyle(tags.includes(v)),
+    onClick: () => toggleTag(v)
+  }, NEXUS_DOT_TAG_LABELS[v]))), !dueEligibility.eligible && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--text-sub)',
+      marginBottom: 12
+    }
+  }, "ℹ️ このタスクの期限は種類上、単純な期限として出力できないため、dueDateは対象外（null）になります。"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-full",
+    style: {
+      marginBottom: 12
+    },
+    onClick: generatePreview
+  }, "プレビューを作成"), preview && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "Dot用JSON（編集不可）"), /*#__PURE__*/React.createElement("textarea", {
+    className: "form-textarea",
+    readOnly: true,
+    value: JSON.stringify(preview.json, null, 2),
+    style: {
+      width: '100%',
+      boxSizing: 'border-box',
+      fontFamily: 'monospace',
+      fontSize: 11.5,
+      minHeight: 260,
+      marginBottom: 12,
+      background: 'var(--bg)'
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-full",
+    style: {
+      marginBottom: 10,
+      fontWeight: 800
+    },
+    onClick: doCopy
+  }, "📋 コピー"))), toast && /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: 'fixed',
+      bottom: 'calc(var(--safe-b) + 16px)',
+      left: '50%',
+      transform: 'translateX(-50%)',
+      background: '#22C55E',
+      color: '#fff',
+      borderRadius: 12,
+      padding: '12px 20px',
+      fontSize: 14,
+      fontWeight: 600,
+      boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
+      zIndex: 100,
+      whiteSpace: 'nowrap'
+    }
+  }, toast));
 }
 
 function App() {
@@ -43897,13 +45084,21 @@ function App() {
   const [showMemoryQuickAdd, setShowMemoryQuickAdd] = useState(false);
   const [aiPackMemoryIds, setAiPackMemoryIds] = useState(null);
   const [insightFormRelatedIds, setInsightFormRelatedIds] = useState(null);
+  // Dot連携（第1段階）。安全ガード（PRIVATE判定等）とは別の、機能そのものの停止スイッチ。
+  // 停止してもmemories／tasksの既存データ・既存の関連付け情報は一切消さない。
+  const [nexusDotBridgeEnabled, setNexusDotBridgeEnabled] = useLS('ml_dot_bridge_enabled_v1', true);
+  const [taskLinkMemoryTarget, setTaskLinkMemoryTarget] = useState(null);
+  const [dotExportTarget, setDotExportTarget] = useState(null);
   // ユーザーが実際に入力したcategory/tags/isPrivateは「確定済み」として扱い、自動整理で
   // 上書きされないようにフラグを立てる（値そのものは書き換えない。あくまでフラグのみ追加）。
   const nexusWithManualConfirmedFlags = data => ({
     ...data,
     manualCategoryConfirmed: data.manualCategoryConfirmed || !!data.category,
     manualTagsConfirmed: data.manualTagsConfirmed || !!(data.tags && data.tags.length > 0),
-    manualPrivateConfirmed: data.manualPrivateConfirmed || !!data.isPrivate
+    manualPrivateConfirmed: data.manualPrivateConfirmed || !!data.isPrivate,
+    // isPrivate:trueを明示的に保存した時点の本文指紋を記録する。これが無いと、本文を書き換えても
+    // 古い確認済み状態が残り続けてしまう（nexusMemoryPrivacyConfirmationIsStaleが参照する）。
+    privacyConfirmedContentFingerprint: data.isPrivate ? nexusSimpleFingerprint(data.content) : data.privacyConfirmedContentFingerprint
   });
   // 画像添付はMemory本体の保存が確定した後に書き込む（Memoryが先に存在しない状態で
   // attachmentIdsだけ増える、という中途半端な状態を避けるため）。
@@ -43925,6 +45120,276 @@ function App() {
   const handleMemoryDelete = id => {
     memoryStore.remove(id);
     setSelectedMemory(null);
+  };
+  // PRIVATE候補の提案を「見て、PRIVATEではないと確認した」という状態にする（isPrivateはfalseのまま）。
+  // これが無いと、ヒューリスティックで一度でもPRIVATE候補に引っかかった記憶が、実際には
+  // PRIVATEでなくてもAI分析パック・Dot出力から永久にブロックされ続けてしまう。
+  const handleMemoryDismissPrivacySuggestion = memory => {
+    memoryStore.update(memory.id, {
+      manualPrivateConfirmed: true,
+      privacyConfirmedContentFingerprint: nexusSimpleFingerprint(memory.content)
+    }).then(m => setSelectedMemory(prev => prev && prev.id === memory.id ? m : prev));
+  };
+  // Dot連携（第1段階）：記憶とタスクの関連付けを冪等に行う。MemoryはIndexedDB、taskは
+  // localStorageで別々に保存されるため「同時に1つのトランザクション」にはできない前提で、
+  // 常に最新状態を読み直してから不足している側だけを補う（連打・複数タブ・途中失敗に対応）。
+  // 大規模な汎用同期基盤は作らず、この1件の関連付け操作だけをWeb Locksで直列化する。
+  // ロックはmemoryId・taskIdの両方に対して取る（別々の記憶が同じ既存タスクを同時に選ぶ
+  // ケースも、別々のタブが同じ記憶を操作するケースも、どちらも直列化されるようにする）。
+  const nexusDotLinkWebLocksSupported = () => typeof navigator !== 'undefined' && !!(navigator.locks && navigator.locks.request);
+  // Web Locksに対応していない環境では複数タブ間の安全性を保証できないため、既存の
+  // タスク機能全体は止めず、この「新しい関連付け操作」だけを止める（理由を表示する）。
+  const nexusDotLinkWithLocks = (memoryId, taskId, fn) => navigator.locks.request('nexus-dot-link:memory:' + memoryId, () => navigator.locks.request('nexus-dot-link:task:' + taskId, fn));
+  const nexusDotLinkFailureMessages = {
+    locks_unsupported: 'この環境では複数タブでの安全性を保証できないため、新しい関連付け操作を停止しています。他のタブを閉じてページを再読み込みしてからお試しください。',
+    save_failed: '保存に失敗しました。もう一度お試しください（入力内容は保持されます）。',
+    memory_save_failed: 'タスク側は保存できましたが、記憶側の保存に失敗しました。もう一度お試しください（タスクが重複することはありません）。',
+    write_failed: '保存に失敗しました。もう一度お試しください。',
+    write_not_persisted: '保存の確認ができませんでした。もう一度お試しください。',
+    verify_failed: '保存の確認ができませんでした。もう一度お試しください。',
+    read_failed: 'タスク一覧の読み込みに失敗したため、処理を中止しました。',
+    corrupt_data: 'タスク一覧のデータが読み取れないため、処理を中止しました（既存データを保護するため上書きしません）。',
+    pending_marker_failed: '処理記録の保存に失敗したため、開始できませんでした。もう一度お試しください。',
+    missing_target: '記憶またはタスクが見つからないため、関連付けできませんでした。'
+  };
+  // 記憶↔タスクの関連付け（既存タスクを選ぶ場合）。永続保存を書込後の読み直しで
+  // 確認してから成功を返す。Reactの画面状態が更新されたことだけでは成功と判定しない。
+  const nexusPerformMemoryTaskLink = (memoryId, taskId) => {
+    const run = () => {
+      const pendingWrite = nexusSetDotLinkPendingVerified(memoryId, taskId);
+      if (!pendingWrite.ok) {
+        // 処理中記録を保存できなければ、関連付け自体を開始しない。
+        return Promise.resolve(pendingWrite);
+      }
+      return memoryStore.reload().then(freshMemories => {
+        const freshMemory = freshMemories.find(m => m.id === memoryId);
+        const readResult = nexusReadTasksRawSafe();
+        if (!freshMemory) {
+          nexusClearDotLinkPendingEntry(memoryId, taskId);
+          return {
+            ok: false,
+            reason: 'missing_target'
+          };
+        }
+        if (!readResult.ok) {
+          // 読込失敗・不正データは結果不明の失敗として扱い、マーカーは消さない
+          // （既存タスクを空配列扱いで上書きすることも絶対にしない）。
+          return readResult;
+        }
+        const freshTask = readResult.tasks.find(t => t.id === taskId);
+        if (!freshTask) {
+          nexusClearDotLinkPendingEntry(memoryId, taskId);
+          return {
+            ok: false,
+            reason: 'missing_target'
+          };
+        }
+        const decision = nexusLinkMemoryToTask(freshMemory, freshTask);
+        if (!decision.ok) {
+          nexusClearDotLinkPendingEntry(memoryId, taskId);
+          return decision;
+        }
+        const taskAlready = freshTask.sourceMemoryId === freshMemory.id;
+        const memoryAlready = (freshMemory.linkedTaskIds || [])[0] === freshTask.id;
+        if (!taskAlready) {
+          const nextTasks = readResult.tasks.map(t => t.id === taskId ? {
+            ...t,
+            sourceMemoryId: freshMemory.id
+          } : t);
+          const taskWrite = nexusWriteTasksRawVerified(nextTasks);
+          if (!taskWrite.ok) {
+            // 保存が確認できない＝結果不明。マーカーは残し、確定失敗として処理中記録から消さない。
+            return taskWrite;
+          }
+          setTasks(prev => prev.some(t => t.id === taskId && t.sourceMemoryId === freshMemory.id) ? prev : prev.map(t => t.id === taskId ? {
+            ...t,
+            sourceMemoryId: freshMemory.id
+          } : t));
+        }
+        const memoryWrite = memoryAlready ? Promise.resolve(freshMemory) : memoryStore.update(freshMemory.id, {
+          linkedTaskIds: [freshTask.id]
+        });
+        return memoryWrite.then(() => {
+          nexusClearDotLinkPendingEntry(memoryId, taskId);
+          return {
+            ok: true
+          };
+        }).catch(() => ({
+          // タスク側は確認済みだが記憶側が未確定。マーカーは残し、再試行で記憶側だけ補完する。
+          ok: false,
+          reason: 'memory_save_failed'
+        }));
+      });
+    };
+    if (!nexusDotLinkWebLocksSupported()) {
+      return Promise.resolve({
+        ok: false,
+        reason: 'locks_unsupported'
+      });
+    }
+    return nexusDotLinkWithLocks(memoryId, taskId, run);
+  };
+  const handleMemoryTaskPickExisting = task => {
+    if (!selectedMemory) return Promise.resolve();
+    return nexusPerformMemoryTaskLink(selectedMemory.id, task.id).then(result => {
+      if (result.ok) {
+        setTaskLinkMemoryTarget(null);
+        memoryStore.reload().then(list => {
+          const updated = list.find(m => m.id === selectedMemory.id);
+          if (updated) setSelectedMemory(updated);
+        });
+      } else if (result.reason !== 'task_already_linked_to_other_memory' && result.reason !== 'memory_already_linked_to_other_task') {
+        alert(nexusDotLinkFailureMessages[result.reason] || '関連付けできませんでした。');
+      }
+      return result;
+    });
+  };
+  // 新規タスク作成＋関連付け。作成も含めてmemoryIdのロック内で行う（ロック取得前に
+  // 他タブが同じ記憶へ関連付けてしまっていないか、ロック内で再確認してから作成する）。
+  // タスクIDは処理中記録を書く前に確定させ、再試行時に同じIDで冪等に収束させる
+  // （タスク側だけ保存済みの状態から再試行しても、タスクが重複して作られない）。
+  const nexusPerformMemoryTaskCreateAndLink = (memoryId, taskData) => {
+    if (!nexusDotLinkWebLocksSupported()) {
+      return Promise.resolve({
+        ok: false,
+        reason: 'locks_unsupported'
+      });
+    }
+    return navigator.locks.request('nexus-dot-link:memory:' + memoryId, () => memoryStore.reload().then(freshMemories => {
+      const freshMemory = freshMemories.find(m => m.id === memoryId);
+      if (!freshMemory) return {
+        ok: false,
+        reason: 'missing_target'
+      };
+      if ((freshMemory.linkedTaskIds || [])[0]) {
+        return {
+          ok: false,
+          reason: 'memory_already_linked_to_other_task'
+        };
+      }
+      const newTaskId = taskData.id || uid();
+      const pendingWrite = nexusSetDotLinkPendingVerified(memoryId, newTaskId);
+      if (!pendingWrite.ok) {
+        // 処理中記録を保存できなければ、タスク作成自体を開始しない。
+        return pendingWrite;
+      }
+      const readResult = nexusReadTasksRawSafe();
+      if (!readResult.ok) {
+        return readResult;
+      }
+      const already = readResult.tasks.find(t => t.id === newTaskId);
+      const nextTasks = already ? readResult.tasks : [{
+        ...taskData,
+        id: newTaskId,
+        sourceMemoryId: memoryId
+      }, ...readResult.tasks];
+      const taskWrite = nexusWriteTasksRawVerified(nextTasks);
+      if (!taskWrite.ok) {
+        // 保存が確認できない＝結果不明。マーカーは残し、確定失敗として処理中記録から消さない。
+        return taskWrite;
+      }
+      setTasks(prev => prev.some(t => t.id === newTaskId) ? prev : [{
+        ...taskData,
+        id: newTaskId,
+        sourceMemoryId: memoryId
+      }, ...prev]);
+      return memoryStore.update(memoryId, {
+        linkedTaskIds: [newTaskId]
+      }).then(m => {
+        nexusClearDotLinkPendingEntry(memoryId, newTaskId);
+        return {
+          ok: true,
+          memory: m
+        };
+      }).catch(() => ({
+        ok: false,
+        reason: 'memory_save_failed'
+      }));
+    }));
+  };
+  const handleMemoryTaskCreateAndLink = taskData => {
+    if (!selectedMemory) return;
+    nexusPerformMemoryTaskCreateAndLink(selectedMemory.id, taskData).then(result => {
+      setTaskLinkMemoryTarget(null);
+      if (result.ok) {
+        setSelectedMemory(result.memory);
+      } else if (result.reason === 'memory_already_linked_to_other_task') {
+        alert('この記憶は既に別のタスクと関連付けられています。');
+      } else {
+        alert(nexusDotLinkFailureMessages[result.reason] || 'タスクの作成・関連付けに失敗しました。もう一度「タスクと関連付ける」からお試しください。');
+      }
+    });
+  };
+  // 前回の操作が途中で中断された場合（保存失敗・タブが閉じられた等）の復旧。
+  // 残っているマーカーをすべて（複数の同時操作が中断された場合に備えて）1回ずつ
+  // 再試行する。再試行の結果が確定しない限り、マーカー自体はこの中では消さない
+  // （nexusPerformMemoryTaskLink内部で確定した結果の時だけ消える）。
+  React.useEffect(() => {
+    const read = nexusReadDotLinkPendingMapSafe();
+    if (!read.ok || !read.map) return;
+    Object.values(read.map).forEach(entry => {
+      if (entry && entry.memoryId && entry.taskId) {
+        nexusPerformMemoryTaskLink(entry.memoryId, entry.taskId);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const handleMemoryTaskUnlink = () => {
+    if (!selectedMemory) return;
+    const taskId = (selectedMemory.linkedTaskIds || [])[0];
+    if (!taskId) return;
+    if (!confirm('このタスクとの関連付けを解除します（タスク自体は削除されません）。よろしいですか？')) return;
+    const readResult = nexusReadTasksRawSafe();
+    if (!readResult.ok) {
+      alert(nexusDotLinkFailureMessages[readResult.reason] || 'タスク一覧の読み込みに失敗したため、解除できませんでした。');
+      return;
+    }
+    const nextTasks = readResult.tasks.map(t => t.id === taskId ? {
+      ...t,
+      sourceMemoryId: ''
+    } : t);
+    const writeResult = nexusWriteTasksRawVerified(nextTasks);
+    if (!writeResult.ok) {
+      alert(nexusDotLinkFailureMessages[writeResult.reason] || '保存に失敗したため、関連付けの解除ができませんでした。もう一度お試しください。');
+      return;
+    }
+    setTasks(prev => prev.map(t => t.id === taskId ? {
+      ...t,
+      sourceMemoryId: ''
+    } : t));
+    memoryStore.update(selectedMemory.id, {
+      linkedTaskIds: []
+    }).then(m => setSelectedMemory(m)).catch(() => {
+      alert('タスク側の解除は保存できましたが、記憶側の保存に失敗しました。もう一度お試しください。');
+    });
+  };
+  // action／所要時間／タグの保存。永続保存を確認してから{ok:true}を返し、確認できない
+  // 限りDot用JSONのプレビュー生成へは進ませない（呼び出し側がPromiseの結果で判定する）。
+  const handleMemoryTaskDotFieldsSave = patch => {
+    const taskId = (selectedMemory && selectedMemory.linkedTaskIds || [])[0];
+    if (!taskId) return Promise.resolve({
+      ok: false,
+      reason: 'missing_target'
+    });
+    const readResult = nexusReadTasksRawSafe();
+    if (!readResult.ok) return Promise.resolve(readResult);
+    if (!readResult.tasks.some(t => t.id === taskId)) return Promise.resolve({
+      ok: false,
+      reason: 'missing_target'
+    });
+    const nextTasks = readResult.tasks.map(t => t.id === taskId ? {
+      ...t,
+      ...patch
+    } : t);
+    const writeResult = nexusWriteTasksRawVerified(nextTasks);
+    if (!writeResult.ok) return Promise.resolve(writeResult);
+    setTasks(prev => prev.map(t => t.id === taskId ? {
+      ...t,
+      ...patch
+    } : t));
+    return Promise.resolve({
+      ok: true
+    });
   };
   const handleMemoryLink = targetId => {
     if (!selectedMemory) return;
@@ -43951,7 +45416,10 @@ function App() {
     if ((memory.suggestedTags || []).length > 0) {
       patch.tags = Array.from(new Set([...(memory.tags || []), ...memory.suggestedTags]));
     }
-    if (memory.suggestedPrivate) patch.isPrivate = true;
+    if (memory.suggestedPrivate) {
+      patch.isPrivate = true;
+      patch.privacyConfirmedContentFingerprint = nexusSimpleFingerprint(memory.content);
+    }
     memoryStore.update(memory.id, patch).then(m => setSelectedMemory(m));
   };
   const handleMemoryReanalyzeAll = () => memoryStore.reanalyzeAll().then(count => {
@@ -44435,7 +45903,9 @@ function App() {
     onClearEntityFilter: () => setNexusMemoryEntityFilter(null),
     customers: customers,
     onOpenAiPack: ids => setAiPackMemoryIds(ids),
-    initialSearch: nexusMemorySearchSeed
+    initialSearch: nexusMemorySearchSeed,
+    dotBridgeEnabled: nexusDotBridgeEnabled,
+    onToggleDotBridge: setNexusDotBridgeEnabled
   })), /*#__PURE__*/React.createElement("nav", {
     className: "bottom-nav"
   }, tabs.map(t => /*#__PURE__*/React.createElement("button", {
@@ -44569,8 +46039,36 @@ function App() {
     onLinkEntity: handleMemoryEntityLink,
     onSearchTheme: handleSearchMemoryTheme,
     onExplore: m => setNexusMemoryExploreTarget(m),
-    onDeleteAttachment: attachmentId => handleMemoryDeleteAttachment(selectedMemory.id, attachmentId)
-  }), nexusMemoryExploreTarget && /*#__PURE__*/React.createElement(NexusMemoryExploreScreen, {
+    onDeleteAttachment: attachmentId => handleMemoryDeleteAttachment(selectedMemory.id, attachmentId),
+    onDismissPrivacySuggestion: handleMemoryDismissPrivacySuggestion,
+    dotBridgeEnabled: nexusDotBridgeEnabled,
+    linkedTask: tasks.find(t => t.id === ((memoryStore.memories.find(x => x.id === selectedMemory.id) || selectedMemory).linkedTaskIds || [])[0]),
+    onOpenTaskLink: () => setTaskLinkMemoryTarget(selectedMemory),
+    onUnlinkTask: handleMemoryTaskUnlink,
+    onOpenDotExport: task => setDotExportTarget({
+      memoryId: selectedMemory.id,
+      taskId: task.id
+    })
+  }), nexusDotBridgeEnabled && taskLinkMemoryTarget && /*#__PURE__*/React.createElement(NexusMemoryTaskLinkScreen, {
+    memory: memoryStore.memories.find(x => x.id === taskLinkMemoryTarget.id) || taskLinkMemoryTarget,
+    tasks: tasks,
+    clients: clients,
+    customers: customers,
+    onOpenCustomer: handleMemoryOpenCustomer,
+    onPickExisting: handleMemoryTaskPickExisting,
+    onCreateAndLink: handleMemoryTaskCreateAndLink,
+    onClose: () => setTaskLinkMemoryTarget(null)
+  }), nexusDotBridgeEnabled && dotExportTarget && (() => {
+    const exportMemory = memoryStore.memories.find(x => x.id === dotExportTarget.memoryId);
+    const exportTask = tasks.find(t => t.id === dotExportTarget.taskId);
+    if (!exportMemory || !exportTask) return null;
+    return /*#__PURE__*/React.createElement(NexusMemoryDotExportScreen, {
+      memory: exportMemory,
+      task: exportTask,
+      onSaveTaskDotFields: handleMemoryTaskDotFieldsSave,
+      onClose: () => setDotExportTarget(null)
+    });
+  })(), nexusMemoryExploreTarget && /*#__PURE__*/React.createElement(NexusMemoryExploreScreen, {
     memory: memoryStore.memories.find(x => x.id === nexusMemoryExploreTarget.id) || nexusMemoryExploreTarget,
     allMemories: memoryStore.memories,
     onClose: () => setNexusMemoryExploreTarget(null),
@@ -44609,6 +46107,7 @@ function App() {
     onOpenInsightForm: ids => setInsightFormRelatedIds(ids)
   }), insightFormRelatedIds && /*#__PURE__*/React.createElement(NexusAiInsightForm, {
     relatedMemoryIds: insightFormRelatedIds,
+    memories: memoryStore.memories,
     onSave: handleInsightSave,
     onClose: () => setInsightFormRelatedIds(null)
   }));
