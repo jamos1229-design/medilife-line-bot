@@ -5912,6 +5912,117 @@ function NexusFollowStatusCard({
   }, stat('送信', d.sent), stat('既読', d.read), stat('返信', d.replied), stat('相談', d.consulted), stat('面談', d.met), stat('紹介', d.referralCount))));
 }
 
+// ── 顧客詳細「次にすること」：商談メモで登録した①自分がやること②返事待ち③次の面談・連絡を、
+// その顧客について現在残っている未完了分すべて（どの商談メモから作られたかに関わらず横断）で
+// まとめて表示する。既存tasksストアを直接操作するため、ここでの編集・完了は商談メモ・
+// ホーム画面にもそのまま反映される（同じ1件のタスクを更新するだけで別タスクは作らない）。
+function NexusCustomerNextThingsCard({
+  customerId,
+  tasks,
+  setTasks
+}) {
+  const [expandedId, setExpandedId] = useState(null);
+  const [showCompleted, setShowCompleted] = useState(false);
+  const today = todayStr();
+  const all = nexusCustomerNextThings(tasks, customerId);
+  const updateTask = (id, patch) => setTasks(prev => prev.map(t => t.id === id ? { ...t, ...patch, updatedAt: new Date().toISOString() } : t));
+  const toggleComplete = t => {
+    const completed = !t.completed;
+    const now = new Date().toISOString();
+    updateTask(t.id, { completed, completedAt: completed ? now : '' });
+  };
+  if (all.length === 0) {
+    return /*#__PURE__*/React.createElement("div", {
+      style: { marginBottom: 10 }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "section-header"
+    }, "次にすること"), /*#__PURE__*/React.createElement("div", {
+      className: "card",
+      style: { fontSize: 12.5, color: 'var(--text-sub)' }
+    }, "まだ登録されていません。商談メモの「次にすること」から登録できます。"));
+  }
+  const incomplete = all.filter(t => !t.completed);
+  const completed = all.filter(t => t.completed).sort((a, b) => (b.completedAt || '').localeCompare(a.completedAt || ''));
+  const allDone = incomplete.length === 0;
+  const bucketStyle = bucket => bucket === '期限切れ' ? { color: 'var(--danger)', fontWeight: 700 } : bucket === '今日' ? { color: 'var(--warning)', fontWeight: 700 } : { color: 'var(--text-sub)' };
+  const nextThingDateLabel = nexusNextThingDateLabel;
+  const completeLabel = (kind, isCompleted) => isCompleted ? (kind === 'waiting' ? 'まだ待つ' : '未完了に戻す') : kind === 'waiting' ? '届いた' : '完了';
+  const fieldBlock = (label, inputEl) => /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label",
+    style: { fontSize: 12 }
+  }, label), inputEl);
+  const renderEditFields = t => t.kind === 'self' ? [
+    fieldBlock('やること', /*#__PURE__*/React.createElement("input", { className: "form-input", value: t.title || '', onChange: e => updateTask(t.id, { title: e.target.value }) })),
+    fieldBlock('期限（未定のまま保存できます）', /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", value: t.date || '', onChange: e => updateTask(t.id, { date: e.target.value }) }))
+  ] : t.kind === 'waiting' ? [
+    fieldBlock('誰から', /*#__PURE__*/React.createElement("input", { className: "form-input", value: t.waitingFrom || '', onChange: e => updateTask(t.id, { waitingFrom: e.target.value }) })),
+    fieldBlock('待っているもの', /*#__PURE__*/React.createElement("input", { className: "form-input", value: t.title || '', onChange: e => updateTask(t.id, { title: e.target.value }) })),
+    fieldBlock('こちらから確認する日（未定のまま保存できます）', /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", value: t.date || '', onChange: e => updateTask(t.id, { date: e.target.value }) }))
+  ] : [
+    fieldBlock('方法', /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } }, NEXT_THING_METHODS.map(m => /*#__PURE__*/React.createElement("button", {
+      key: m, type: "button", onClick: () => updateTask(t.id, { method: m }),
+      style: { padding: '5px 10px', borderRadius: 16, border: '1.5px solid', fontSize: 11.5, fontWeight: 700, cursor: 'pointer', borderColor: t.method === m ? 'var(--accent)' : 'var(--border)', background: t.method === m ? 'var(--accent-light)' : 'var(--bg)', color: t.method === m ? 'var(--accent)' : 'var(--text-sub)' }
+    }, m)))),
+    fieldBlock('日時（未定のまま保存できます）', /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 6 } }, /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", style: { flex: 1 }, value: t.date || '', onChange: e => updateTask(t.id, { date: e.target.value }) }), /*#__PURE__*/React.createElement("input", { className: "form-input", type: "time", style: { width: 110 }, value: t.time || '', onChange: e => updateTask(t.id, { time: e.target.value }) }))),
+    fieldBlock('目的', /*#__PURE__*/React.createElement("textarea", { className: "form-textarea", style: { minHeight: 60 }, value: t.memo || '', onChange: e => updateTask(t.id, { memo: e.target.value }) }))
+  ];
+  const renderRow = t => {
+    const expanded = expandedId === t.id;
+    const bucket = nexusNextThingUrgencyBucket(t.date, today);
+    const compactTitle = t.kind === 'nextContact' ? t.memo || '（目的未入力）' : t.title || '（未入力）';
+    const compactSub = t.kind === 'self' ? `期限：${nextThingDateLabel(t.date)}` : t.kind === 'waiting' ? `確認する日：${nextThingDateLabel(t.date)}${t.waitingFrom ? '（' + t.waitingFrom + '）' : ''}` : `${nextThingDateLabel(t.date)}${t.time ? ' ' + t.time : ''}${t.method ? '・' + t.method : ''}`;
+    return /*#__PURE__*/React.createElement("div", {
+      key: t.id,
+      style: { border: '1px solid var(--border)', borderRadius: 10, marginBottom: 6, overflow: 'hidden' }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', background: t.completed ? '#F0FDF4' : 'var(--bg)' }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: { flex: 1, minWidth: 0, cursor: 'pointer' },
+      onClick: () => setExpandedId(k => k === t.id ? null : t.id)
+    }, /*#__PURE__*/React.createElement("div", {
+      style: { fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: t.completed ? 'line-through' : 'none', color: t.completed ? 'var(--text-sub)' : 'var(--text)' }
+    }, compactTitle), /*#__PURE__*/React.createElement("div", {
+      style: { fontSize: 11, ...(t.completed ? { color: 'var(--text-sub)' } : bucketStyle(bucket)) }
+    }, compactSub, !t.completed && bucket !== '未定' && ` ・${bucket}`)), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => toggleComplete(t),
+      style: { fontSize: 11, padding: '5px 9px', borderRadius: 8, border: '1.5px solid #16A34A', background: t.completed ? '#fff' : '#DCFCE7', color: '#16A34A', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }
+    }, completeLabel(t.kind, t.completed)), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => setExpandedId(k => k === t.id ? null : t.id),
+      style: { fontSize: 11, padding: '5px 9px', borderRadius: 8, border: '1.5px solid var(--border)', background: 'var(--bg)', color: 'var(--text-sub)', fontWeight: 700, cursor: 'pointer', flexShrink: 0 }
+    }, "編集")), expanded && /*#__PURE__*/React.createElement("div", {
+      style: { padding: 10, borderTop: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 8 }
+    }, ...renderEditFields(t)));
+  };
+  const kindInfo = { self: { icon: '🔴', label: '自分がやること' }, waiting: { icon: '🟡', label: '返事待ち' }, nextContact: { icon: '📅', label: '次の連絡' } };
+  const groupBlock = kind => {
+    const items = incomplete.filter(t => t.kind === kind).sort((a, b) => nexusNextThingSortScore(a, today).localeCompare(nexusNextThingSortScore(b, today)));
+    if (items.length === 0) return null;
+    return /*#__PURE__*/React.createElement("div", {
+      key: kind,
+      style: { marginBottom: 8 }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: { fontSize: 12, fontWeight: 700, marginBottom: 4 }
+    }, kindInfo[kind].icon, " ", kindInfo[kind].label), items.map(renderRow));
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: { marginBottom: 10 }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "次にすること"), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, allDone ? /*#__PURE__*/React.createElement("div", {
+    style: { fontSize: 12.5, color: '#16A34A', fontWeight: 700, marginBottom: 4 }
+  }, "✅ 今のところすべて完了しています") : NEXT_THING_KINDS.map(groupBlock), completed.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: { marginTop: allDone ? 0 : 6 }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setShowCompleted(v => !v),
+    style: { fontSize: 11.5, background: 'none', border: 'none', color: 'var(--accent)', fontWeight: 700, cursor: 'pointer', padding: '4px 0' }
+  }, showCompleted ? `▲ 完了済みを隠す` : `▼ 完了済みを表示（${completed.length}件）`), showCompleted && completed.map(renderRow))));
+}
+
 // ── Customer Detail Screen ────────────────────────────────────
 function CustomerDetail({
   customer,
@@ -6159,7 +6270,11 @@ function CustomerDetail({
       marginBottom: 10
     },
     onClick: () => onOpenCorpPlanning(c.id)
-  }, "📊 法人プランニングを開く"), onUpdateCustomer && /*#__PURE__*/React.createElement("div", {
+  }, "📊 法人プランニングを開く"), tasks && setTasks && /*#__PURE__*/React.createElement(NexusCustomerNextThingsCard, {
+    customerId: c.id,
+    tasks: tasks,
+    setTasks: setTasks
+  }), onUpdateCustomer && /*#__PURE__*/React.createElement("div", {
     style: {
       marginBottom: 10
     }
@@ -7777,6 +7892,55 @@ function MissionBanner({
   }, "今日の行動："), mission.dailyAction)));
 }
 
+// ── ホーム「今日やること」：商談メモで登録した①自分がやること②返事待ち③次の面談・連絡のうち、
+// 今日が期限・確認日・予定日のもの＋①②は期限切れ分も表示する（③は仕様通り当日分のみ）。
+// 日付未定のものはここに出さない（未来の返事待ちを前倒しで「今日」に出さない）。
+// 同じtasksストアを参照するだけで、AIが自動で営業行動を作ることはしない。
+function NexusHomeNextThingsCard({
+  tasks,
+  customers,
+  onNavigate
+}) {
+  const today = todayStr();
+  const items = nexusTodayNextThings(tasks, today);
+  if (items.length === 0) return null;
+  const customerName = id => {
+    const c = (customers || []).find(x => x.id === id);
+    return c ? nexusDisplayName(c) : '（顧客未設定）';
+  };
+  const order = { self: 0, waiting: 1, nextContact: 2 };
+  const sorted = [...items].sort((a, b) => {
+    if (order[a.kind] !== order[b.kind]) return order[a.kind] - order[b.kind];
+    if (a.kind === 'nextContact') return (a.time || '99:99').localeCompare(b.time || '99:99');
+    return 0;
+  });
+  const renderItem = t => {
+    const bucket = nexusNextThingUrgencyBucket(t.date, today);
+    const dateText = bucket === '期限切れ' ? `${nexusNextThingDateLabel(t.date)}（期限切れ）` : '今日';
+    const line1 = t.kind === 'self' ? (t.title || '（未入力）') : t.kind === 'waiting' ? `${t.title || '（未入力）'}が届いたか確認` : `${t.time ? t.time + ' ' : ''}${t.method || ''}`.trim();
+    const line2 = t.kind === 'self' ? `期限：${dateText}` : t.kind === 'waiting' ? `確認日：${dateText}` : t.memo || '';
+    return /*#__PURE__*/React.createElement("div", {
+      key: t.id,
+      onClick: () => {
+        const c = (customers || []).find(x => x.id === t.customerId);
+        if (c && onNavigate) onNavigate('customers', c);
+      },
+      style: { padding: '8px 10px', background: 'var(--bg)', borderRadius: 8, marginBottom: 6, cursor: t.customerId ? 'pointer' : 'default' }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: { fontSize: 12, fontWeight: 700, color: 'var(--accent)', marginBottom: 2 }
+    }, customerName(t.customerId)), /*#__PURE__*/React.createElement("div", {
+      style: { fontSize: 13.5, fontWeight: 700 }
+    }, line1), line2 && /*#__PURE__*/React.createElement("div", {
+      style: { fontSize: 11.5, color: bucket === '期限切れ' ? 'var(--danger)' : 'var(--text-sub)' }
+    }, line2));
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: { marginBottom: 10 }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card-title"
+  }, "📋 今日やること"), sorted.map(renderItem));
+}
 // ── 今日の営業司令塔：見込み客づくり／商談立ち上げ／商談前進／フォローの4グループで
 // 優先度上位を表示する。既存のDashboardTab本体（stat-grid以下）はそのまま維持し、
 // この新セクションをその手前に追加するだけに留める。 ──
@@ -11878,7 +12042,11 @@ function DashboardTab({
   };
   const kpi200 = calc(2000000);
   const kpi1000 = calc(10000000);
-  const commandCenter = tasks && setTasks && activityLogs && setActivityLogs && opportunities && setOpportunities && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(NexusTodayCommandCenter, {
+  const commandCenter = tasks && setTasks && activityLogs && setActivityLogs && opportunities && setOpportunities && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(NexusHomeNextThingsCard, {
+    tasks: tasks,
+    customers: customers,
+    onNavigate: onNavigate
+  }), /*#__PURE__*/React.createElement(NexusTodayCommandCenter, {
     tasks: tasks,
     customers: customers,
     onNavigate: onNavigate
@@ -14031,21 +14199,30 @@ function AppointmentTab({
 }
 
 // ── 商談テンプレート ──────────────────────────────────────────
-const MEMO_TEMPLATE = `【職業・年収】
+// 「次回アクション」は上部の「次にすること」専用エリアで管理するため、テンプレートからは外す。
+// 過去の商談メモ本文（旧テンプレートで書かれたもの含む）は一切変更しない。
+const MEMO_TEMPLATE = `【お客さまが望んでいること・困っていること】
 
-【家族構成】
 
-【きっかけ・ニーズ】
+【相談・提案内容】
 
-【刺さったポイント】
+提案商品・金額：
 
-【提案商品・金額】
 
-【結果】
+【お客さまの反応・実際の言葉】
 
-【次回アクション】
 
-【雑談・印象】
+【決まったこと・まだ確認が必要なこと】
+
+
+【覚えておきたいこと・雑談】
+
+
+【基本情報】※初回・変更があったとき
+
+職業・年収：
+
+家族構成：
 `;
 const RESULT_OPTIONS = ['継続中', '成約', '見送り', '保留', '紹介待ち'];
 
@@ -14067,6 +14244,8 @@ const TempDisplay = ({
 function NegotiationForm({
   editing,
   customers,
+  tasks,
+  setTasks,
   onSave,
   onClose
 }) {
@@ -14083,18 +14262,85 @@ function NegotiationForm({
     ...blank,
     ...(editing || {})
   });
+  // 「次にすること」：この商談メモが既に持つnextThingTaskIdsから、既存タスクの内容を
+  // 1回だけ読み込んでフォームのローカル状態にする（taskIdを保持し、保存時に同じタスクを
+  // 更新するだけで増殖しないようにする）。_keyは画面内でのリスト操作用のローカルキーで、
+  // taskIdとは別物（新規追加した項目はtaskIdがまだ無い）。
+  const [nextThings, setNextThings] = useState(() => {
+    const ids = editing && Array.isArray(editing.nextThingTaskIds) ? editing.nextThingTaskIds : [];
+    return ids.map(id => (tasks || []).find(t => t.id === id)).filter(Boolean).map(t => ({
+      _key: uid(),
+      taskId: t.id,
+      kind: t.kind,
+      title: t.title || '',
+      date: t.date || '',
+      time: t.time || '',
+      method: t.method || '',
+      waitingFrom: t.waitingFrom || '',
+      memo: t.memo || '',
+      completed: !!t.completed
+    }));
+  });
+  const [expandedKey, setExpandedKey] = useState(null);
+  const addNextThing = kind => {
+    const key = uid();
+    setNextThings(prev => [...prev, {
+      _key: key,
+      taskId: '',
+      kind,
+      title: '',
+      date: '',
+      time: '',
+      method: kind === 'nextContact' ? '面談' : '',
+      waitingFrom: '',
+      memo: '',
+      completed: false
+    }]);
+    setExpandedKey(key);
+  };
+  const updateNextThing = (key, patch) => setNextThings(prev => prev.map(i => i._key === key ? {
+    ...i,
+    ...patch
+  } : i));
+  const removeNextThing = key => {
+    setNextThings(prev => prev.filter(i => i._key !== key));
+    setExpandedKey(k => k === key ? null : k);
+  };
   const s = k => v => setForm(f => ({
     ...f,
     [k]: v
   }));
   const si = k => e => s(k)(e.target.value);
+  // 保存ボタン連打・同一イベント内の多重発火で同じタスクが複数できないよう、同期的な
+  // refガードを使う（Reactのstate更新は非同期のため、useState単独では同一ティック内の
+  // 二重呼び出しを防げない）。
+  const savingRef = React.useRef(false);
+  const [saveError, setSaveError] = useState('');
   const save = () => {
+    if (savingRef.current) return;
     if (!form.memo.trim() && !form.personName.trim() && !form.customerId) return;
-    onSave({
-      ...form,
-      id: form.id || uid()
-    });
-    onClose();
+    savingRef.current = true;
+    setSaveError('');
+    try {
+      const now = new Date().toISOString();
+      const prevTaskIds = editing && Array.isArray(editing.nextThingTaskIds) ? editing.nextThingTaskIds : [];
+      const synced = nexusSyncNextThingTasks(tasks, prevTaskIds, nextThings, {
+        customerId: form.customerId,
+        now
+      });
+      if (setTasks) setTasks(synced.tasks);
+      onSave({
+        ...form,
+        id: form.id || uid(),
+        nextThingTaskIds: synced.nextThingTaskIds
+      });
+      onClose();
+    } catch (e) {
+      // 保存に失敗した場合は成功したように見せず、入力内容を保持したまま再保存できるようにする。
+      savingRef.current = false;
+      setSaveError('保存に失敗しました。もう一度お試しください。');
+      return;
+    }
   };
   const applyTemplate = () => {
     if (form.memo.trim() && !window.confirm('メモを商談テンプレートで上書きしますか？')) return;
@@ -14103,6 +14349,81 @@ function NegotiationForm({
       memo: MEMO_TEMPLATE
     }));
   };
+  // ── 「次にすること」編集UI（①自分がやること／②相手からの返事待ち／③次の面談・連絡） ──
+  const NEXT_THING_SECTION_INFO = {
+    self: { icon: '🔴', label: '自分がやること', addLabel: '＋ やることを追加' },
+    waiting: { icon: '🟡', label: '相手からの返事待ち', addLabel: '＋ 返事待ちを追加' },
+    nextContact: { icon: '📅', label: '次の面談・連絡', addLabel: '＋ 次の連絡を追加' }
+  };
+  const nextThingDateLabel = nexusNextThingDateLabel;
+  const fieldBlock = (label, inputEl) => /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "form-label",
+    style: { fontSize: 12 }
+  }, label), inputEl);
+  const renderNextThingRow = item => {
+    const expanded = expandedKey === item._key;
+    const compactTitle = item.kind === 'nextContact' ? item.memo || '（目的未入力）' : item.title || '（未入力）';
+    const compactSub = item.kind === 'self' ? `期限：${nextThingDateLabel(item.date)}` : item.kind === 'waiting' ? `確認する日：${nextThingDateLabel(item.date)}${item.waitingFrom ? '（' + item.waitingFrom + '）' : ''}` : `${nextThingDateLabel(item.date)}${item.time ? ' ' + item.time : ''}${item.method ? '・' + item.method : ''}`;
+    const editFields = item.kind === 'self' ? [
+      fieldBlock('やること', /*#__PURE__*/React.createElement("input", { className: "form-input", placeholder: "例：医療保険2案の比較表をLINEで送る", value: item.title, onChange: e => updateNextThing(item._key, { title: e.target.value }) })),
+      fieldBlock('期限（未定のまま保存できます）', /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", value: item.date, onChange: e => updateNextThing(item._key, { date: e.target.value }) }))
+    ] : item.kind === 'waiting' ? [
+      fieldBlock('誰から', /*#__PURE__*/React.createElement("input", { className: "form-input", placeholder: "例：お客さま", value: item.waitingFrom, onChange: e => updateNextThing(item._key, { waitingFrom: e.target.value }) })),
+      fieldBlock('待っているもの', /*#__PURE__*/React.createElement("input", { className: "form-input", placeholder: "例：保険証券の写真", value: item.title, onChange: e => updateNextThing(item._key, { title: e.target.value }) })),
+      fieldBlock('こちらから確認する日（未定のまま保存できます）', /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", value: item.date, onChange: e => updateNextThing(item._key, { date: e.target.value }) }))
+    ] : [
+      fieldBlock('方法', /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } }, NEXT_THING_METHODS.map(m => /*#__PURE__*/React.createElement("button", {
+        key: m, type: "button", onClick: () => updateNextThing(item._key, { method: m }),
+        style: { padding: '5px 10px', borderRadius: 16, border: '1.5px solid', fontSize: 11.5, fontWeight: 700, cursor: 'pointer', borderColor: item.method === m ? 'var(--accent)' : 'var(--border)', background: item.method === m ? 'var(--accent-light)' : 'var(--bg)', color: item.method === m ? 'var(--accent)' : 'var(--text-sub)' }
+      }, m)))),
+      fieldBlock('日時（未定のまま保存できます）', /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 6 } }, /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", style: { flex: 1 }, value: item.date, onChange: e => updateNextThing(item._key, { date: e.target.value }) }), /*#__PURE__*/React.createElement("input", { className: "form-input", type: "time", style: { width: 110 }, value: item.time, onChange: e => updateNextThing(item._key, { time: e.target.value }) }))),
+      fieldBlock('目的', /*#__PURE__*/React.createElement("textarea", { className: "form-textarea", style: { minHeight: 60 }, placeholder: "例：比較表を見た感想と気になる点を聞く", value: item.memo, onChange: e => updateNextThing(item._key, { memo: e.target.value }) }))
+    ];
+    return /*#__PURE__*/React.createElement("div", {
+      key: item._key,
+      style: { border: '1px solid var(--border)', borderRadius: 10, marginBottom: 6, overflow: 'hidden' }
+    }, /*#__PURE__*/React.createElement("div", {
+      onClick: () => setExpandedKey(k => k === item._key ? null : item._key),
+      style: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', cursor: 'pointer', background: item.completed ? '#F0FDF4' : 'var(--bg)' }
+    }, /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: e => { e.stopPropagation(); updateNextThing(item._key, { completed: !item.completed }); },
+      style: { width: 20, height: 20, borderRadius: '50%', border: `2px solid ${item.completed ? '#16A34A' : 'var(--border)'}`, background: item.completed ? '#16A34A' : 'transparent', color: '#fff', fontSize: 11, flexShrink: 0, cursor: 'pointer' }
+    }, item.completed ? '✓' : ''), /*#__PURE__*/React.createElement("div", {
+      style: { flex: 1, minWidth: 0 }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: { fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: item.completed ? 'line-through' : 'none', color: item.completed ? 'var(--text-sub)' : 'var(--text)' }
+    }, compactTitle), /*#__PURE__*/React.createElement("div", {
+      style: { fontSize: 11, color: 'var(--text-sub)' }
+    }, compactSub)), /*#__PURE__*/React.createElement("span", {
+      style: { fontSize: 11, color: 'var(--text-sub)' }
+    }, expanded ? '▲' : '▼')), expanded && /*#__PURE__*/React.createElement("div", {
+      style: { padding: 10, borderTop: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 8 }
+    }, ...editFields, /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => removeNextThing(item._key),
+      style: { alignSelf: 'flex-start', background: 'none', border: 'none', color: 'var(--danger)', fontSize: 12, fontWeight: 700, cursor: 'pointer', padding: '4px 0' }
+    }, "✕ この項目を削除")));
+  };
+  const renderNextThingSection = kind => {
+    const info = NEXT_THING_SECTION_INFO[kind];
+    const items = nextThings.filter(i => i.kind === kind);
+    return /*#__PURE__*/React.createElement("div", {
+      key: kind,
+      style: { marginBottom: 10 }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: { fontSize: 12.5, fontWeight: 700, marginBottom: 6 }
+    }, info.icon, " ", info.label), items.map(renderNextThingRow), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => addNextThing(kind),
+      style: { fontSize: 12, padding: '6px 12px', borderRadius: 8, border: '1.5px solid var(--accent)', background: 'var(--accent-light)', color: 'var(--accent)', cursor: 'pointer', fontWeight: 700 }
+    }, info.addLabel));
+  };
+  const nextThingsBlock = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, "次にすること"), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, renderNextThingSection('self'), renderNextThingSection('waiting'), renderNextThingSection('nextContact')));
   return /*#__PURE__*/React.createElement("div", {
     className: "full-screen"
   }, /*#__PURE__*/React.createElement("div", {
@@ -14218,7 +14539,18 @@ function NegotiationForm({
       color: 'var(--text-sub)',
       marginTop: 2
     }
-  }, /*#__PURE__*/React.createElement("span", null, "冷たい"), /*#__PURE__*/React.createElement("span", null, "熱い")))), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("span", null, "冷たい"), /*#__PURE__*/React.createElement("span", null, "熱い")))), nextThingsBlock, saveError && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: '#FEF2F2',
+      border: '1px solid #FECACA',
+      color: 'var(--danger)',
+      borderRadius: 10,
+      padding: '10px 12px',
+      marginBottom: 10,
+      fontSize: 13,
+      fontWeight: 700
+    }
+  }, "⚠️ ", saveError), /*#__PURE__*/React.createElement("div", {
     className: "section-header",
     style: {
       display: 'flex',
@@ -16790,6 +17122,106 @@ function nexusIsStaleTask(task, todayStr, thresholdDays) {
   const d = nexusDaysBetween(task.date, todayStr);
   if (d === null) return false;
   return d >= thresholdDays;
+}
+// ── 商談メモ「次にすること」：既存のtasksストアをそのまま使い、source:'negotiationTask'・
+// kind（self/waiting/nextContact）の2項目だけを新規追加して区別する（既存の営業ToDo
+// source:'salesTodo'とは完全に独立しており、既存のNexusTodayCommandCenter／
+// NexusSalesTodoList／営業実績集計には一切影響しない）。
+// ①自分がやること：date=期限、title=やること内容
+// ②相手からの返事待ち：date=こちらから確認する日、title=待っているもの、waitingFrom=誰から
+// ③次の面談・連絡：date=日時の日付部分、time=時刻（任意）、method=方法、memo=目的
+// いずれも日付未定（date=''）で保存できる。未定を期限切れとして扱わない。
+const NEXT_THING_KINDS = ['self', 'waiting', 'nextContact'];
+const NEXT_THING_METHODS = ['面談', '電話', 'LINE', 'メール', 'その他'];
+// 基準日時点の「期限切れ／今日／今後／未定」を判定する。date未入力は必ず「未定」とし、
+// 期限切れにも今日にも分類しない（勝手な期限切れ扱いを防ぐ）。
+function nexusNextThingUrgencyBucket(dateStr, todayStrVal) {
+  if (!dateStr) return '未定';
+  if (dateStr < todayStrVal) return '期限切れ';
+  if (dateStr === todayStrVal) return '今日';
+  return '今後';
+}
+// 表示順ソート用スコア（小さいほど上位）：期限切れ→今日→今後（日付昇順）→未定（末尾）。
+function nexusNextThingSortScore(task, todayStrVal) {
+  const bucket = nexusNextThingUrgencyBucket(task.date, todayStrVal);
+  const bucketOrder = { '期限切れ': 0, '今日': 1, '今後': 2, '未定': 3 };
+  const dateRank = task.date || '9999-99-99';
+  return `${bucketOrder[bucket]}_${dateRank}`;
+}
+// 「次にすること」の日付表示を「○月○日」または「日付未定」に揃える共通ヘルパー。
+function nexusNextThingDateLabel(d) {
+  return d ? `${parseInt(d.slice(5, 7), 10)}月${parseInt(d.slice(8, 10), 10)}日` : '日付未定';
+}
+// ある顧客に紐づく「次にすること」タスク（全商談メモ分を横断。特定の商談メモに限定しない）。
+function nexusCustomerNextThings(tasks, customerId) {
+  if (!customerId) return [];
+  return (tasks || []).filter(t => t.source === 'negotiationTask' && NEXT_THING_KINDS.includes(t.kind) && t.customerId === customerId);
+}
+// ホーム「今日やること」：①②は今日が期限／確認日のもの＋期限切れ（未完了のみ）、
+// ③は「今日予定されている」もののみ（期限切れは対象外、仕様通り）。日付未定は対象外
+// （未来の返事待ち・未定の仕事をAIが勝手に「今日やること」化しない）。
+function nexusTodayNextThings(tasks, todayStrVal) {
+  return (tasks || []).filter(t => {
+    if (t.source !== 'negotiationTask' || t.completed) return false;
+    if (!NEXT_THING_KINDS.includes(t.kind)) return false;
+    if (!t.date) return false;
+    if (t.kind === 'nextContact') return t.date === todayStrVal;
+    return t.date <= todayStrVal;
+  });
+}
+// 商談メモ画面で登録した「次にすること」項目を、既存tasksストアへ冪等に反映する純関数。
+// items：その商談メモが今保持している最新の項目一覧（各項目はtaskId（既存タスクの更新）
+// または無し（新規作成）を持つ）。prevTaskIds：保存前にその商談メモが持っていたtaskId一覧。
+// 動作：①items中のtaskId付きはそのタスクを更新 ②taskId無しは新規作成 ③prevTaskIdsに
+// あったがitemsに無いID（編集画面で削除された項目）はtasksから削除する（＝この商談メモの
+// 所有物のみを操作し、他の商談メモ・他の顧客のタスクには一切触れない）。
+// 再実行（保存連打・再編集・再保存）しても既存タスクのidはそのまま更新されるだけなので、
+// タスクが増殖しない（同じmemo.idから複数回呼んでも同じtaskIdセットに収束する）。
+function nexusSyncNextThingTasks(tasks, prevTaskIds, items, { customerId, now }) {
+  const prevSet = new Set(prevTaskIds || []);
+  const list = tasks || [];
+  const byId = new Map(list.map(t => [t.id, t]));
+  const keepIds = new Set();
+  items.forEach(item => {
+    const existing = item.taskId ? byId.get(item.taskId) : null;
+    const id = existing ? existing.id : uid();
+    const base = existing || {
+      id,
+      source: 'negotiationTask',
+      createdAt: now
+    };
+    byId.set(id, {
+      ...base,
+      source: 'negotiationTask',
+      kind: item.kind,
+      customerId: customerId || '',
+      title: item.title || '',
+      date: item.date || '',
+      time: item.kind === 'nextContact' ? item.time || '' : '',
+      method: item.kind === 'nextContact' ? item.method || '' : '',
+      waitingFrom: item.kind === 'waiting' ? item.waitingFrom || '' : '',
+      memo: item.kind === 'nextContact' ? item.memo || '' : (existing ? existing.memo || '' : ''),
+      completed: existing ? !!existing.completed : false,
+      completedAt: existing ? existing.completedAt || '' : '',
+      updatedAt: now
+    });
+    keepIds.add(id);
+  });
+  // 編集画面で削除された項目（以前は持っていたがitemsに残っていないID）はタスクごと削除する。
+  prevSet.forEach(id => {
+    if (!keepIds.has(id)) byId.delete(id);
+  });
+  const nextThingTaskIds = [...keepIds];
+  const updatedTasks = list.filter(t => !prevSet.has(t.id) || keepIds.has(t.id)).map(t => byId.get(t.id) || t);
+  // byIdに新規追加された（元のtasks配列に無かった）ものを末尾に追加する。
+  const existingIds = new Set(updatedTasks.map(t => t.id));
+  nextThingTaskIds.forEach(id => {
+    if (!existingIds.has(id)) {
+      updatedTasks.push(byId.get(id));
+      existingIds.add(id);
+    }
+  });
+  return { tasks: updatedTasks, nextThingTaskIds };
 }
 // ── 営業活動履歴（activityLogs）：種類マスタ・KPI集計・論理削除フィルタ・二重タップ防止 ──
 // 「クイック活動登録」で作る活動は tasks に直接1件+1するのではなく、この履歴配列に保存し、
@@ -44110,6 +44542,8 @@ function App() {
   }), showMemoForm && /*#__PURE__*/React.createElement(NegotiationForm, {
     editing: editingMemo,
     customers: customers,
+    tasks: tasks,
+    setTasks: setTasks,
     onSave: m => {
       saveMemo(m);
       setEditingMemo(null);
