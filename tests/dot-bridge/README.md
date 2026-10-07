@@ -14,6 +14,7 @@
 | `e2e-integrity-and-locks.test.js` | 版番号の非内容依存性、PRIVATE候補の誤検知解除、由来不明AI Insightのブロック、コピー直前の鮮度再確認（別タブでのPRIVATE化・本文変更）、複数タブでの同一タスク競合、Web Locks非対応時の停止、中断からの復旧 | Playwright + ローカルHTTPサーバー |
 | `e2e-iphone-widths.test.js` | 375/390/430px幅での横スクロール・要素のあふれ・タップ領域確認（ブラウザのビューポート幅テスト、実機確認ではない） | Playwright + ローカルHTTPサーバー |
 | `e2e-fault-injection.test.js` | `localStorage.setItem`・IndexedDBの`put()`へ実際に例外を注入し、保存失敗時に成功表示・JSON出力をしないこと、重複やデータ消失が起きないことを検証 | Playwright + ローカルHTTPサーバー |
+| `e2e-review-fixes.test.js` | 公開コード確認で見つかった2件の保存問題（①別タブ追加タスクが古いReact状態で消える／②新規作成retry時の重複タスク作成）の再現と修正確認 | Playwright + ローカルHTTPサーバー |
 | `vendor/` | E2EテストがCDN（unpkg.com）へ依存せず動くようにするためのReact本体のローカルコピー（React 18 UMD production build） | なし（静的ファイル） |
 
 ## 依存関係
@@ -42,6 +43,7 @@
    node tests/dot-bridge/e2e-integrity-and-locks.test.js
    node tests/dot-bridge/e2e-iphone-widths.test.js
    node tests/dot-bridge/e2e-fault-injection.test.js
+   node tests/dot-bridge/e2e-review-fixes.test.js
    ```
    Playwrightパッケージが`node_modules`から解決できない環境では、`NODE_PATH`にPlaywrightのインストール先を追加してください（例：`NODE_PATH=/path/to/playwright/node_modules node tests/dot-bridge/e2e-link-and-export.test.js`）。
 
@@ -51,11 +53,12 @@
 
 | テスト | 件数 |
 |---|---|
-| `pure.test.js` | 65 PASS / 0 FAIL |
+| `pure.test.js` | 82 PASS / 0 FAIL |
 | `e2e-link-and-export.test.js` | 31 PASS / 0 FAIL |
 | `e2e-integrity-and-locks.test.js` | 29 PASS / 0 FAIL |
 | `e2e-iphone-widths.test.js` | 47 PASS / 0 FAIL |
 | `e2e-fault-injection.test.js` | 20 PASS / 0 FAIL |
+| `e2e-review-fixes.test.js` | 8 PASS / 0 FAIL |
 
 （上記に加え、商談メモ・支払免除・解約返戻金税務・資料出力範囲・記憶バックアップ等の既存機能に対する回帰確認もすべてPASSしていますが、それらのテストファイル自体はこのリポジトリには含まれていません。）
 
