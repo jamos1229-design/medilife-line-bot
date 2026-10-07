@@ -40950,6 +40950,25 @@ function nexusClearDotLinkPendingEntry(memoryId, taskId) {
   } catch (e) {}
 }
 
+// YYYY-MM-DD形式の文字列が、実在するカレンダー上の日付かどうかを厳密に確認する。
+// 正規表現の形式チェックだけでは「2026-99-99」等の存在しない日付や、regex.test()が
+// 配列などを暗黙に文字列へ変換して受理してしまうケースを防げないため、型そのもの
+// （文字列であること）と、月・日の実際の範囲（うるう年を含む）を確認する。
+// new Date()によるパース・ロールオーバーには依存しない（JSTの日付安全性の方針と同じ）。
+function nexusIsValidCalendarDateString(s) {
+  if (typeof s !== 'string') return false;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!m) return false;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  if (month < 1 || month > 12) return false;
+  const isLeap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, isLeap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (day < 1 || day > daysInMonth[month - 1]) return false;
+  return true;
+}
+
 // 既存タスクのdateが「単純な期限」として確定しているかどうか。kind指定のある商談メモ発の
 // タスク（自分がやること／返事待ち／次の面談）は、同じdateが期限・確認日・面談日時など
 // 複数の意味を持ちうるため、今回のdueDateには変換しない（対象外として理由を保持）。
@@ -40962,7 +40981,7 @@ function nexusDotDueDateEligibility(task) {
     eligible: false,
     reason: 'unsupported_kind'
   };
-  if (!task.date || !/^\d{4}-\d{2}-\d{2}$/.test(task.date)) return {
+  if (!nexusIsValidCalendarDateString(task.date)) return {
     eligible: false,
     reason: 'no_plain_date'
   };
@@ -41015,7 +41034,7 @@ function nexusValidateDotExportJson(obj) {
   if (!NEXUS_DOT_BASIS_VALUES.includes(obj.actionBasis)) errors.push('actionBasis');
   if (obj.status !== null && !NEXUS_DOT_STATUS_VALUES.includes(obj.status)) errors.push('status');
   if (!NEXUS_DOT_BASIS_VALUES.includes(obj.statusBasis)) errors.push('statusBasis');
-  if (obj.dueDate !== null && !/^\d{4}-\d{2}-\d{2}$/.test(obj.dueDate)) errors.push('dueDate');
+  if (obj.dueDate !== null && !nexusIsValidCalendarDateString(obj.dueDate)) errors.push('dueDate');
   if (!NEXUS_DOT_BASIS_VALUES.includes(obj.dueDateBasis)) errors.push('dueDateBasis');
   if (obj.durationMinutes !== null && !(Number.isInteger(obj.durationMinutes) && obj.durationMinutes > 0 && obj.durationMinutes <= 480)) errors.push('durationMinutes');
   if (!NEXUS_DOT_BASIS_VALUES.includes(obj.durationBasis)) errors.push('durationBasis');
@@ -45201,10 +45220,10 @@ function App() {
             // 保存が確認できない＝結果不明。マーカーは残し、確定失敗として処理中記録から消さない。
             return taskWrite;
           }
-          setTasks(prev => prev.some(t => t.id === taskId && t.sourceMemoryId === freshMemory.id) ? prev : prev.map(t => t.id === taskId ? {
-            ...t,
-            sourceMemoryId: freshMemory.id
-          } : t));
+          // Reactの画面状態は、検証済みの保存内容（nextTasks、最新の読み直しに基づく）で
+          // そのまま置き換える。prevへの関数更新にすると、useLSのsetが古いprevを
+          // 正本として再度localStorageへ書き直してしまい、他タブの変更を消してしまう。
+          setTasks(nextTasks);
         }
         const memoryWrite = memoryAlready ? Promise.resolve(freshMemory) : memoryStore.update(freshMemory.id, {
           linkedTaskIds: [freshTask.id]
@@ -45267,36 +45286,50 @@ function App() {
           reason: 'memory_already_linked_to_other_task'
         };
       }
-      const newTaskId = taskData.id || uid();
-      const pendingWrite = nexusSetDotLinkPendingVerified(memoryId, newTaskId);
-      if (!pendingWrite.ok) {
-        // 処理中記録を保存できなければ、タスク作成自体を開始しない。
-        return pendingWrite;
-      }
       const readResult = nexusReadTasksRawSafe();
       if (!readResult.ok) {
         return readResult;
       }
-      const already = readResult.tasks.find(t => t.id === newTaskId);
-      const nextTasks = already ? readResult.tasks : [{
-        ...taskData,
-        id: newTaskId,
-        sourceMemoryId: memoryId
-      }, ...readResult.tasks];
-      const taskWrite = nexusWriteTasksRawVerified(nextTasks);
-      if (!taskWrite.ok) {
-        // 保存が確認できない＝結果不明。マーカーは残し、確定失敗として処理中記録から消さない。
-        return taskWrite;
+      // 前回の試行で既にタスク側だけ保存できていた（記憶側が未確定のまま中断した）場合は、
+      // 新しいタスクを作らず、そのIDへ戻って不足側（記憶側）だけを補う。判定は
+      // sourceMemoryIdの一致・前回の処理中記録のIDの一致だけで行い、タイトル一致などの
+      // 曖昧な統合や、既存タスクの削除・強制的な統合は行わない。
+      const pendingRead = nexusReadDotLinkPendingMapSafe();
+      const pendingEntryForMemory = pendingRead.ok ? Object.values(pendingRead.map).find(e => e && e.memoryId === memoryId) : null;
+      const existingBySourceMemory = readResult.tasks.find(t => t.sourceMemoryId === memoryId);
+      const existingByPendingId = pendingEntryForMemory ? readResult.tasks.find(t => t.id === pendingEntryForMemory.taskId) : null;
+      const recoveredTask = existingBySourceMemory || existingByPendingId || null;
+      const taskId = recoveredTask ? recoveredTask.id : pendingEntryForMemory ? pendingEntryForMemory.taskId : taskData.id || uid();
+      const pendingWrite = nexusSetDotLinkPendingVerified(memoryId, taskId);
+      if (!pendingWrite.ok) {
+        // 処理中記録を保存できなければ、タスク作成自体を開始しない。
+        return pendingWrite;
       }
-      setTasks(prev => prev.some(t => t.id === newTaskId) ? prev : [{
-        ...taskData,
-        id: newTaskId,
-        sourceMemoryId: memoryId
-      }, ...prev]);
+      const taskAlreadyLinked = !!(recoveredTask && recoveredTask.sourceMemoryId === memoryId);
+      let nextTasks = readResult.tasks;
+      if (!taskAlreadyLinked) {
+        const already = readResult.tasks.some(t => t.id === taskId);
+        nextTasks = already ? readResult.tasks.map(t => t.id === taskId ? {
+          ...t,
+          sourceMemoryId: memoryId
+        } : t) : [{
+          ...taskData,
+          id: taskId,
+          sourceMemoryId: memoryId
+        }, ...readResult.tasks];
+        const taskWrite = nexusWriteTasksRawVerified(nextTasks);
+        if (!taskWrite.ok) {
+          // 保存が確認できない＝結果不明。マーカーは残し、確定失敗として処理中記録から消さない。
+          return taskWrite;
+        }
+        // Reactの画面状態は検証済みの保存内容でそのまま置き換える（古いprevへの関数更新に
+        // すると、他タブの変更を消してしまう。①の修正と同じ理由）。
+        setTasks(nextTasks);
+      }
       return memoryStore.update(memoryId, {
-        linkedTaskIds: [newTaskId]
+        linkedTaskIds: [taskId]
       }).then(m => {
-        nexusClearDotLinkPendingEntry(memoryId, newTaskId);
+        nexusClearDotLinkPendingEntry(memoryId, taskId);
         return {
           ok: true,
           memory: m
@@ -45353,10 +45386,7 @@ function App() {
       alert(nexusDotLinkFailureMessages[writeResult.reason] || '保存に失敗したため、関連付けの解除ができませんでした。もう一度お試しください。');
       return;
     }
-    setTasks(prev => prev.map(t => t.id === taskId ? {
-      ...t,
-      sourceMemoryId: ''
-    } : t));
+    setTasks(nextTasks);
     memoryStore.update(selectedMemory.id, {
       linkedTaskIds: []
     }).then(m => setSelectedMemory(m)).catch(() => {
@@ -45383,10 +45413,7 @@ function App() {
     } : t);
     const writeResult = nexusWriteTasksRawVerified(nextTasks);
     if (!writeResult.ok) return Promise.resolve(writeResult);
-    setTasks(prev => prev.map(t => t.id === taskId ? {
-      ...t,
-      ...patch
-    } : t));
+    setTasks(nextTasks);
     return Promise.resolve({
       ok: true
     });

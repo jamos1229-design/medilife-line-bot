@@ -274,6 +274,29 @@ const task = (id, over) => ({
   assertEq(nexusDotDueDateEligibility(t).eligible, false, 'YYYY-MM-DD形式でない日付はdueDate対象外');
 }
 
+// ── §4b: nexusIsValidCalendarDateString（正規表現だけでなく、文字列型・実在する日付を確認）──
+{
+  assertTrue(nexusIsValidCalendarDateString('2026-03-01'), '実在する日付は受理する');
+  assertTrue(nexusIsValidCalendarDateString('2024-02-29'), 'うるう年の2月29日は受理する');
+  assertFalse(nexusIsValidCalendarDateString('2023-02-29'), 'うるう年でない年の2月29日は拒否する');
+  assertFalse(nexusIsValidCalendarDateString('2026-99-99'), '存在しない月・日（99月99日）は拒否する');
+  assertFalse(nexusIsValidCalendarDateString('2026-02-30'), '2月30日のような存在しない日付は拒否する');
+  assertFalse(nexusIsValidCalendarDateString('2026-13-01'), '13月は拒否する');
+  assertFalse(nexusIsValidCalendarDateString('2026-00-01'), '0月は拒否する');
+  assertFalse(nexusIsValidCalendarDateString('2026-01-00'), '0日は拒否する');
+  assertFalse(nexusIsValidCalendarDateString(['2026-03-01']), '配列は、文字列へ暗黙変換されても拒否する（regex.test()だけに頼らない）');
+  assertFalse(nexusIsValidCalendarDateString(null), 'nullは拒否する（dueDate自体がnullであることの判定は呼び出し側が別に行う）');
+  assertFalse(nexusIsValidCalendarDateString(20260301), '数値は拒否する');
+  assertFalse(nexusIsValidCalendarDateString('2026-3-1'), '0埋めされていない日付は拒否する');
+}
+{
+  // nexusDotDueDateEligibilityも同じ厳密な判定を使っていることを確認
+  const t1 = task('d6', { date: '2026-99-99' });
+  assertEq(nexusDotDueDateEligibility(t1).eligible, false, '存在しない日付（2026-99-99）はdueDate対象外');
+  const t2 = task('d7', { date: ['2026-03-01'] });
+  assertEq(nexusDotDueDateEligibility(t2).eligible, false, '配列のdateはdueDate対象外（暗黙の文字列変換で受理しない）');
+}
+
 // ── §5: nexusDotStatusForTask ──
 {
   assertEq(nexusDotStatusForTask(task('s1', { completed: false })), 'open', '未完了タスクはstatus=open');
@@ -319,6 +342,16 @@ function validInput(over) {
 }
 {
   assertThrows(() => nexusBuildDotExportJson(validInput({ dueDate: '2026/03/01' })), 'YYYY-MM-DD形式でないdueDateは拒否される');
+}
+{
+  assertThrows(() => nexusBuildDotExportJson(validInput({ dueDate: '2026-99-99' })), '出力JSONの検証でも、実在しない日付（2026-99-99）は拒否される');
+}
+{
+  assertThrows(() => nexusBuildDotExportJson(validInput({ dueDate: ['2026-03-01'] })), '出力JSONの検証でも、配列のdueDateは拒否される（暗黙の文字列変換で受理しない）');
+}
+{
+  const json = nexusBuildDotExportJson(validInput({ dueDate: null }));
+  assertEq(json.dueDate, null, '未定のdueDate（null）はそのまま保持される');
 }
 {
   assertThrows(() => nexusBuildDotExportJson(validInput({ durationMinutes: 99999 })), '異常なdurationMinutesは拒否される');
