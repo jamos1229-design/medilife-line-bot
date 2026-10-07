@@ -30404,6 +30404,836 @@ function nexusComputeHousingPlan(inputs, currentAge) {
   };
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// ── 生存時ライフプラン・資産寿命シミュレーション（初期版）────────────────
+// 既存の老後／教育／住宅プランニング（nexusComputeRetirement/EducationPlan/HousingPlan、
+// いずれも「必要総額」の一括計算）とは別の、現在から100歳まで年度別に収支・資産・取り崩しを
+// 追う年次シミュレーション。既存関数・既存lpフィールドは変更せず、customer.lp.lifePlan という
+// 新しい名前空間に専用の確認済み入力だけを追加する。
+// ══════════════════════════════════════════════════════════════════════════
+
+// 有限数のみ受理（NaN/Infinity/配列/文字列化できない値は0やデフォルト値へ丸めない＝呼び出し側が
+// 明示的に「未入力」「0」「無効」を区別して渡す責務を持つ。エンジン自身は丸めない）。
+function nexusLpIsFiniteNumber(v) {
+  return typeof v === 'number' && isFinite(v);
+}
+
+// ── 期間の生成：basisDateから100歳到達まで、1年ごとの期間配列を作る ──
+// 生年月日が分かっている場合は実際の日付で期間境界を作る（isApprox:false）。
+// 年齢のみ（誕生日不明）の場合は、誕生日を捏造せず「年齢が変わる年の初め」を境界とみなす
+// 年次の概算とする（isApprox:true）。
+function nexusLpAddYears(dateStr, years) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  // 2/29生まれ＋非閏年の場合は2/28に繰り下げる（JSのDateが3/1へ繰り上がる挙動を避ける）。
+  const dt = new Date(Date.UTC(y + years, m - 1, 1));
+  const lastDayOfMonth = new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth() + 1, 0)).getUTCDate();
+  const day = Math.min(d, lastDayOfMonth);
+  const dt2 = new Date(Date.UTC(y + years, m - 1, day));
+  const pad = n => String(n).padStart(2, '0');
+  return `${dt2.getUTCFullYear()}-${pad(dt2.getUTCMonth() + 1)}-${pad(dt2.getUTCDate())}`;
+}
+function nexusLpAgeAtDate(birthdate, dateStr) {
+  const [by, bm, bd] = birthdate.split('-').map(Number);
+  const [ty, tm, td] = dateStr.split('-').map(Number);
+  let age = ty - by;
+  if (tm < bm || tm === bm && td < bd) age--;
+  return age;
+}
+function nexusLpBuildPeriods({
+  basisDate,
+  birthdate,
+  currentAge,
+  maxAge
+}) {
+  const periods = [];
+  if (birthdate) {
+    // 実際の誕生日基準：basisDateの時点の満年齢を期首年齢とし、以後誕生日ごとに1期間を作る。
+    const startAge = nexusLpAgeAtDate(birthdate, basisDate);
+    // 期間0の開始日は常にbasisDate（誕生日当日ではない）。期間0の終了日＝次の誕生日。
+    let periodStart = basisDate;
+    for (let age = startAge; age < maxAge; age++) {
+      const nextBirthday = nexusLpAddYears(birthdate, age + 1);
+      periods.push({
+        index: periods.length,
+        startDate: periodStart,
+        endDate: nextBirthday,
+        startAge: age,
+        endAge: age + 1,
+        isApprox: false
+      });
+      periodStart = nextBirthday;
+    }
+  } else {
+    // 年齢のみ：誕生日を仮定せず、年次の概算として「期首年齢→期首年齢+1」を1期間とする。
+    const startAge = nexusLpIsFiniteNumber(currentAge) ? currentAge : null;
+    if (startAge === null) return [];
+    for (let age = startAge; age < maxAge; age++) {
+      periods.push({
+        index: periods.length,
+        startDate: null,
+        endDate: null,
+        startAge: age,
+        endAge: age + 1,
+        isApprox: true
+      });
+    }
+  }
+  return periods;
+}
+
+// ── 期間内アクティブ判定：ストリームの開始・終了period indexに対して、その期間が範囲内かどうか ──
+// endPeriodIndexがnull/undefinedの場合は「期限なし（最後まで継続）」。
+function nexusLpStreamActiveInPeriod(stream, periodIndex) {
+  const start = nexusLpIsFiniteNumber(stream.startPeriodIndex) ? stream.startPeriodIndex : 0;
+  const end = stream.endPeriodIndex === null || stream.endPeriodIndex === undefined ? Infinity : stream.endPeriodIndex;
+  return periodIndex >= start && periodIndex < end;
+}
+// ── 期間内の月割り比率：ストリームが期間の途中で開始/終了する場合の比率（0〜1）。
+// startMonthFrac/endMonthFracが与えられていれば使う（月が分かっている場合のみ呼び出し側が設定）。
+// 指定が無ければ常に1（期間全体に渡って有効、または年次近似でまとめて切り替え）。
+function nexusLpStreamProrationFactor(stream, periodIndex) {
+  if (!stream.proration) return 1;
+  const p = stream.proration[periodIndex];
+  return p === undefined ? 1 : p;
+}
+
+// ── ストリーム（収入・年金・支出・積立）の、ある期間における金額 ──
+// 上昇率は「タイムライン全体のperiodIndex（t）」を指数として使う（期t＝基準日からt年後、t=0が基準年）。
+// これは、将来開始する年金・収入であっても「今日の価値で何年分上昇しているか」を一貫して扱うための仕様。
+function nexusLpStreamAmountForPeriod(stream, periodIndex) {
+  if (!nexusLpStreamActiveInPeriod(stream, periodIndex)) return 0;
+  const rate = nexusLpIsFiniteNumber(stream.riseRatePct) ? stream.riseRatePct / 100 : 0;
+  const base = nexusLpIsFiniteNumber(stream.baseAnnualJpy) ? stream.baseAnnualJpy : 0;
+  const amount = base * Math.pow(1 + rate, periodIndex);
+  return amount * nexusLpStreamProrationFactor(stream, periodIndex);
+}
+
+// ── 1期間分の計算 ──
+// assetCategoriesは呼び出し間でミュータブルに更新される想定（calculateLifePlanが毎期cloneして使う）。
+function nexusLpStepPeriod({
+  period,
+  assetCategories,
+  incomeStreams,
+  pensionStreams,
+  expenseStreams,
+  contributions
+}) {
+  // ① 期首の対象資産に運用益・損失を計算（完全な1年間の運用益。期中の移動分には付けない）
+  assetCategories.forEach(cat => {
+    if (!cat.eligible) return;
+    const rate = nexusLpIsFiniteNumber(cat.returnRatePct) ? cat.returnRatePct / 100 : 0;
+    cat.balance = cat.balance * (1 + rate);
+  });
+  const cash = assetCategories.find(c => c.isCashSink);
+  if (!cash) {
+    throw new Error('isCashSinkの資産カテゴリが1つも指定されていません');
+  }
+  // ② 外部からの手取り収入を現金へ加算（年金・給与等すべて合算）
+  const incomeBreakdown = {};
+  let totalIncome = 0;
+  incomeStreams.concat(pensionStreams).forEach(s => {
+    const amt = nexusLpStreamAmountForPeriod(s, period.index);
+    incomeBreakdown[s.id] = amt;
+    totalIncome += amt;
+  });
+  cash.balance += totalIncome;
+  // ③ 生活費・教育・住宅・保険・その他の確認済み支出を控除
+  const expenseBreakdown = {};
+  let totalExpense = 0;
+  expenseStreams.forEach(s => {
+    const amt = nexusLpStreamAmountForPeriod(s, period.index);
+    expenseBreakdown[s.id] = amt;
+    totalExpense += amt;
+  });
+  cash.balance -= totalExpense;
+  // ④ 現金不足を、指定順の取り崩し可能資産（現金自身を除く）から補う
+  let shortfall = 0;
+  if (cash.balance < 0) {
+    shortfall = -cash.balance;
+    cash.balance = 0;
+  }
+  const drawnByCategory = {};
+  if (shortfall > 0) {
+    const withdrawables = assetCategories.filter(c => c !== cash && c.eligible && c.withdrawable).sort((a, b) => (a.drawOrder || 0) - (b.drawOrder || 0));
+    for (const cat of withdrawables) {
+      if (shortfall <= 0) break;
+      const draw = Math.min(cat.balance, shortfall);
+      cat.balance -= draw;
+      shortfall -= draw;
+      if (draw > 0) drawnByCategory[cat.key] = draw;
+    }
+  }
+  const unmetShortfall = Math.max(0, shortfall);
+  // ⑤ 可能な範囲で積立を資産間移動（現金に余裕がある場合のみ。不足が出た期は自動的に実行不可＝0）
+  const contributionExecuted = {};
+  const contributionShortfall = {};
+  contributions.forEach(c => {
+    const desired = nexusLpStreamAmountForPeriod(c, period.index);
+    if (desired <= 0) return;
+    const available = Math.max(0, cash.balance);
+    const exec = Math.min(desired, available);
+    const target = assetCategories.find(a => a.key === c.targetCategoryKey);
+    if (exec > 0 && target) {
+      cash.balance -= exec;
+      target.balance += exec;
+      contributionExecuted[c.id] = exec;
+    }
+    if (exec < desired) contributionShortfall[c.id] = desired - exec;
+  });
+  // ⑥ 期末残高・積立未達・資金不足を記録
+  const endBalances = {};
+  assetCategories.forEach(cat => {
+    endBalances[cat.key] = cat.balance;
+  });
+  const withdrawableTotal = assetCategories.filter(c => c.eligible && c.withdrawable).reduce((s, c) => s + c.balance, 0);
+  const eligibleAssetTotal = assetCategories.filter(c => c.eligible).reduce((s, c) => s + c.balance, 0);
+  return {
+    periodIndex: period.index,
+    startAge: period.startAge,
+    endAge: period.endAge,
+    startDate: period.startDate,
+    endDate: period.endDate,
+    isApprox: period.isApprox,
+    incomeBreakdown,
+    totalIncome,
+    expenseBreakdown,
+    totalExpense,
+    drawnByCategory,
+    unmetShortfall,
+    contributionExecuted,
+    contributionShortfall,
+    endBalances,
+    withdrawableTotal,
+    eligibleAssetTotal
+  };
+}
+
+// ── メインエンジン：完全な年表を計算する ──
+// inputの意味解釈（未確認・対象外の扱い等）は呼び出し側（normalize関数）の責務。
+// このエンジンは「与えられた数値で機械的に計算する」ことだけを担当する。
+function calculateLifePlan(input) {
+  const periods = input.periods || [];
+  const assetCategoriesInit = (input.assetCategories || []).map(c => ({
+    ...c,
+    balance: nexusLpIsFiniteNumber(c.openingBalanceJpy) ? c.openingBalanceJpy : 0
+  }));
+  const rows = [];
+  let firstWithdrawableDepletionPeriod = null;
+  let firstUnmetShortfallPeriod = null;
+  let cumulativeUnmetShortfall = 0;
+  periods.forEach(period => {
+    const row = nexusLpStepPeriod({
+      period,
+      assetCategories: assetCategoriesInit,
+      incomeStreams: input.incomeStreams || [],
+      pensionStreams: input.pensionStreams || [],
+      expenseStreams: input.expenseStreams || [],
+      contributions: input.contributions || []
+    });
+    if (firstWithdrawableDepletionPeriod === null && row.withdrawableTotal <= 0) {
+      firstWithdrawableDepletionPeriod = period.index;
+    }
+    if (row.unmetShortfall > 0) {
+      cumulativeUnmetShortfall += row.unmetShortfall;
+      if (firstUnmetShortfallPeriod === null) firstUnmetShortfallPeriod = period.index;
+    }
+    rows.push(row);
+  });
+  const findSnapshotAtAge = age => rows.find(r => r.startAge === age) || null;
+  return {
+    status: input.status || 'complete',
+    missingInputs: input.missingInputs || [],
+    assumptions: input.assumptions || [],
+    rows,
+    firstWithdrawableDepletionPeriod,
+    firstUnmetShortfallPeriod,
+    cumulativeUnmetShortfall,
+    snapshotAtRetirement: nexusLpIsFiniteNumber(input.retirementAge) ? findSnapshotAtAge(input.retirementAge) : null,
+    snapshotAt90: findSnapshotAtAge(90),
+    snapshotAt100: rows.length ? rows[rows.length - 1] : null
+  };
+}
+
+// ── 正規化層：既存customer/lp情報とlifePlan上書き値から、calculateLifePlanへ渡す
+// 正規化済みinputを組み立てる。意味解釈・未確認判定・二重計上防止はすべてここの責務。
+// localStorage/DOM/外部APIには触れない（引数で全て受け取る）。
+
+// 有限数かつ配列・文字列でないことを検証する入力バリデータ。
+// parseFloat(v)||defaultのような「未入力・0・不正値の混同」を避けるため、ここで明示的に判定する。
+function nexusLpValidNumberOrNull(v) {
+  if (v === undefined || v === null || v === '') return null;
+  if (Array.isArray(v)) return null;
+  const n = Number(v);
+  if (!isFinite(n)) return null;
+  return n;
+}
+// 年齢0歳は有効な値として扱う（0をfalsyとして弾かない）。
+function nexusLpHasConfirmedNumber(v) {
+  return nexusLpValidNumberOrNull(v) !== null;
+}
+function nexusLpCalcStoredAge(age, ageYear, todayYear) {
+  if (!age) return null;
+  const diff = ageYear ? todayYear - Number(ageYear) : 0;
+  return Number(age) + diff;
+}
+function nexusLpCalcAge(birthdate, todayDateStr) {
+  if (!birthdate) return null;
+  const [y, m, d] = birthdate.split('-').map(Number);
+  const [ty, tm, td] = todayDateStr.split('-').map(Number);
+  let age = ty - y;
+  if (tm < m || tm === m && td < d) age--;
+  return age;
+}
+// 誕生日が分かっている場合、ある期間（basisDateから1年後の誕生日まで）のうち、
+// targetDateより後ろの部分の比率（0〜1）を返す（月割りの基礎）。targetDateが期間開始以前なら1
+// （全期間が対象）、期間終了以降なら0（対象外）。
+function nexusLpMonthFractionAfter(periodStartDate, periodEndDate, targetDateStr) {
+  if (!targetDateStr) return 1;
+  const toDays = s => {
+    const [y, m, d] = s.split('-').map(Number);
+    return Date.UTC(y, m - 1, d) / 86400000;
+  };
+  const start = toDays(periodStartDate);
+  const end = toDays(periodEndDate);
+  const target = toDays(targetDateStr);
+  if (target <= start) return 1;
+  if (target >= end) return 0;
+  return (end - target) / (end - start);
+}
+function nexusLpMonthFractionBefore(periodStartDate, periodEndDate, targetDateStr) {
+  return 1 - nexusLpMonthFractionAfter(periodStartDate, periodEndDate, targetDateStr);
+}
+
+function nexusLifePlanNormalizeInput(ctx) {
+  const missingInputs = [];
+  const assumptions = [];
+  // 明示的に「対象外」と確認された項目（入力漏れではない）。ただし、これらを除外した結果を
+  // 家計全体の確認済み結果として見せてはいけないため、呼び出し側（UI）で「選択した範囲の
+  // 試算である」ことと合わせて必ず表示する。
+  const excludedItems = [];
+  const lp = ctx.lp || {};
+  const lifePlan = ctx.lifePlan || {};
+  const todayDateStr = ctx.todayDateStr;
+  const todayYear = Number(todayDateStr.slice(0, 4));
+
+  // ── 期間生成 ──
+  const birthdate = ctx.birthdate || null;
+  const age = birthdate ? nexusLpCalcAge(birthdate, todayDateStr) : nexusLpCalcStoredAge(ctx.age, ctx.ageYear, todayYear);
+  if (age === null) {
+    return {
+      status: 'invalid',
+      missingInputs: ['birthdate_or_age'],
+      assumptions,
+      periods: [],
+      reason: '本人の年齢または生年月日が未確認のため計算できません'
+    };
+  }
+  const basisDate = lifePlan.basisDate || todayDateStr;
+  const maxAge = 100;
+  const periods = nexusLpBuildPeriods({
+    basisDate,
+    birthdate,
+    currentAge: birthdate ? null : age,
+    maxAge
+  });
+  if (birthdate === null) {
+    assumptions.push('生年月日が未確認のため、年齢のみに基づく年次の概算で計算しています（月単位の切り替わりは反映されません）');
+  }
+  if (periods.length === 0) {
+    return {
+      status: 'invalid',
+      missingInputs: ['periods_empty'],
+      assumptions,
+      periods: [],
+      reason: '対象期間を生成できませんでした（既に100歳以上の設定になっている可能性があります）'
+    };
+  }
+
+  // ── 資産カテゴリ（現金区分1つを含む） ──
+  const categoryDefs = ctx.portfolioCategoryTotals || {};
+  const assetCategories = [];
+  let cashSinkCount = 0;
+  let anyAssetConfigured = false;
+  // 資産集計ヘルパー（nexusPortfolioListTotal等）はparseFloat(v)||0の形で未入力を0円に変換する
+  // ため、合計額だけでは「本当に資産が無い」のか「明細はあるが値が未入力」のかを区別できない。
+  // 呼び出し側（UI）がportfolioCategoryHasDataとして、明細の有無（配列の件数や手入力欄の
+  // 存在）を集計結果と別に渡し、どちらかがtrueなら「確認すべき対象がある」とみなす。
+  const categoryHasData = ctx.portfolioCategoryHasData || {};
+  Object.keys(categoryDefs).forEach(key => {
+    const total = nexusLpValidNumberOrNull(categoryDefs[key]) || 0;
+    const hasData = total !== 0 || categoryHasData[key] === true;
+    const override = lifePlan.assetCategories && lifePlan.assetCategories[key] || {};
+    const included = override.includeInSim === true;
+    if (!included) {
+      // 明細・残高が共に無い資産区分は、確認すべき対象が無いため未確認として数えない
+      // （10区分すべてを毎回チェックしないと完了扱いにならない、という実用的でない要求を避ける）。
+      // includeInSim===false（対象外と明示的に確認済み）も入力漏れとしては記録しないが、
+      // 「選択した範囲の試算」であることを示すため除外項目として記録する。
+      if (override.includeInSim === false) {
+        if (hasData) excludedItems.push({ type: 'asset', key });
+      } else if (hasData) {
+        missingInputs.push('asset:' + key);
+      }
+      return;
+    }
+    anyAssetConfigured = true;
+    const returnRate = nexusLpValidNumberOrNull(override.returnRatePct);
+    if (returnRate === null) {
+      missingInputs.push('asset_return_rate:' + key);
+    }
+    if (override.isCashSink === true) cashSinkCount++;
+    // 企業型DC・iDeCoは法令上、受給可能年齢（通常60歳等）に達するまで取り崩せない。
+    // 「取り崩し可能」を選んでいても、受給可能年齢に達していることの確認が無ければ、
+    // 自由に取り崩せる現金と同様に扱わず、取り崩し対象から外す（安全側のデフォルト）。
+    let effectiveWithdrawable = override.withdrawable === true;
+    if (effectiveWithdrawable && (key === 'corporateDc' || key === 'ideco')) {
+      if (override.withdrawalEligibilityConfirmed !== true) {
+        effectiveWithdrawable = false;
+        missingInputs.push('asset_withdrawal_eligibility_unconfirmed:' + key);
+      }
+    }
+    assetCategories.push({
+      key,
+      label: override.label || key,
+      openingBalanceJpy: nexusLpValidNumberOrNull(categoryDefs[key]) || 0,
+      returnRatePct: returnRate === null ? 0 : returnRate,
+      eligible: true,
+      isCashSink: override.isCashSink === true,
+      withdrawable: effectiveWithdrawable,
+      drawOrder: nexusLpValidNumberOrNull(override.drawOrder) || 0
+    });
+  });
+  if (cashSinkCount === 0 && !anyAssetConfigured) {
+    // 資産が1つも確認されていない場合：計算そのものを止めるのではなく、「現金0円」の
+    // 仮の資産区分で収支のみの試算を続ける（partial。資産寿命・最終残高は確定値として扱わない）。
+    assetCategories.push({
+      key: '__unconfirmed_cash__',
+      label: '（資産未確認）',
+      openingBalanceJpy: 0,
+      returnRatePct: 0,
+      eligible: true,
+      isCashSink: true,
+      withdrawable: true,
+      drawOrder: 999
+    });
+    missingInputs.push('no_assets_confirmed');
+  } else if (cashSinkCount !== 1) {
+    return {
+      status: 'invalid',
+      missingInputs: missingInputs.concat(['cash_sink_selection']),
+      assumptions,
+      periods,
+      reason: cashSinkCount === 0 ? '資産は入力されていますが、現金として扱う資産区分が指定されていません' : '現金として扱う資産区分が複数指定されています（1つだけ選んでください）'
+    };
+  }
+
+  // ── 年金（老後プランニングの入力（本人・配偶者）を参照元とする。本人と配偶者は
+  // 受給開始年齢が異なる場合があるため別々のストリームとして扱う。incomeItemsの「年金」
+  // タイプは、老後プランニング側と同一の年金か別の年金か不明な場合、推測で統合・除外せず
+  // 「重複候補」として確認を求める（取りこぼし・二重計上の両方を防ぐ）──
+  const pensionStreams = [];
+  const retirementInput = lp.retirement || {};
+  const pensionOverride = lifePlan.pension || {};
+  // 老後プランニング側に年金関連の入力が何もなければ、確認すべき対象が無いため
+  // pension_not_confirmedとして記録しない（他の資産区分と同じ「対象外」の扱い）。
+  const hasAnyPensionData = nexusLpHasConfirmedNumber(retirementInput.pensionMonthly) || nexusLpHasConfirmedNumber(retirementInput.spousePensionMonthly) || nexusLpHasConfirmedNumber(retirementInput.retirementAge);
+  if (pensionOverride.includeInSim === true) {
+    const selfMonthly = nexusLpValidNumberOrNull(retirementInput.pensionMonthly);
+    const spouseMonthly = nexusLpValidNumberOrNull(retirementInput.spousePensionMonthly);
+    const riseRate = nexusLpValidNumberOrNull(pensionOverride.riseRatePct);
+    if (selfMonthly === null && spouseMonthly === null) {
+      missingInputs.push('pension_amount');
+    }
+    if (riseRate === null) missingInputs.push('pension_rise_rate');
+    // 本人の受給開始年齢：明示的な上書きが無ければ退職年齢をそのまま使う（従来互換）。
+    const selfStartAgeOverride = nexusLpValidNumberOrNull(pensionOverride.selfStartAge);
+    const selfStartAge = selfStartAgeOverride !== null ? selfStartAgeOverride : nexusLpValidNumberOrNull(retirementInput.retirementAge);
+    if (selfStartAge === null) missingInputs.push('pension_start_age');
+    if (selfMonthly !== null) {
+      pensionStreams.push({
+        id: 'pension_self',
+        startPeriodIndex: selfStartAge === null ? 0 : Math.max(0, selfStartAge - periods[0].startAge),
+        endPeriodIndex: null,
+        baseAnnualJpy: selfMonthly * 12,
+        riseRatePct: riseRate === null ? 0 : riseRate
+      });
+    }
+    if (spouseMonthly !== null) {
+      // 配偶者の受給開始時期は本人と異なる場合があるため、本人の年齢で言い換えた
+      // 開始時点（「配偶者の年金が始まる時、本人は何歳か」）の明示的な確認を求める。
+      // 未確認のまま本人と同じ開始年齢に揃えない（受給開始時期の違いを取りこぼさないため）。
+      const spouseStartAgeSelfEquivalent = nexusLpValidNumberOrNull(pensionOverride.spouseStartAgeSelfEquivalent);
+      if (spouseStartAgeSelfEquivalent === null) {
+        missingInputs.push('pension_spouse_start_age_unconfirmed');
+      } else {
+        pensionStreams.push({
+          id: 'pension_spouse',
+          startPeriodIndex: Math.max(0, spouseStartAgeSelfEquivalent - periods[0].startAge),
+          endPeriodIndex: null,
+          baseAnnualJpy: spouseMonthly * 12,
+          riseRatePct: riseRate === null ? 0 : riseRate
+        });
+      }
+    }
+    assumptions.push('年金額（老後プランニングの入力）は額面・手取りの区分を区別していません。入力された金額をそのまま手取りとして計算しており、年金に対する税・社会保険料の控除は考慮していません');
+  } else if (pensionOverride.includeInSim === false && hasAnyPensionData) {
+    excludedItems.push({ type: 'pension' });
+  } else if (pensionOverride.includeInSim !== false && hasAnyPensionData) {
+    // includeInSimがfalse（含めないと明示的に確認済み）の場合は、確認済みの除外として扱い記録しない。
+    // undefined（未確認）で、かつ実際に年金関連の入力がある場合のみ、確認が必要として記録する。
+    missingInputs.push('pension_not_confirmed');
+  }
+
+  // ── 収入（incomeItems） ──
+  // 「年金」タイプは、老後プランニング側（上のpensionStreams）に何らかの年金入力が既にある場合、
+  // 同一の年金（二重計上防止のため除外すべき）か、別の年金（公的年金と私的年金等、取りこぼさず
+  // 加算すべき）かが構造上判別できないため、本人の確認（pensionDuplicateStatus）が無い限り
+  // 「重複候補」として記録し、どちらの計算にも含めない（推測で統合・除外しない）。
+  // 老後プランニング側に年金入力が全く無い場合は、二重計上の懸念が無いため通常の収入項目として扱う。
+  const incomeStreams = [];
+  (lp.incomeItems || []).forEach(item => {
+    const override = lifePlan.incomeOverrides && lifePlan.incomeOverrides[item.id] || {};
+    if (item.type === '年金' && hasAnyPensionData) {
+      const relation = override.pensionDuplicateStatus;
+      if (relation === 'duplicateExcluded') return; // 確認済み：老後プランニング側と同一の年金のため計上しない
+      if (relation !== 'separate') {
+        missingInputs.push('pension_duplicate_candidate:' + item.id);
+        return; // 同一性が未確認のため、取りこぼしを示しつつどちらにも計上しない
+      }
+      // relation === 'separate'：別の年金として確認済み。通常の収入項目と同じ確認フローへ進む。
+    }
+    if (override.includeInSim !== true) {
+      // includeInSim===false（含めないと明示的に確認済み）なら入力漏れとしては記録せず、
+      // 除外項目として記録する。未確認(undefined)の場合のみ入力不足として記録する。
+      if (override.includeInSim === false) excludedItems.push({ type: 'income', id: item.id });
+      else missingInputs.push('income:' + item.id);
+      return;
+    }
+    let annualJpy = (item.unit === 'monthly' ? (nexusLpValidNumberOrNull(item.amount) || 0) * 12 : nexusLpValidNumberOrNull(item.amount) || 0);
+    if ((item.type === '給与' || item.type === '配偶者給与' || item.type === '年金') && item.amountType !== '手取り') {
+      const confirmedNet = nexusLpValidNumberOrNull(override.confirmedNetAmount);
+      if (confirmedNet === null) {
+        missingInputs.push('income_net_unconfirmed:' + item.id);
+        return; // 額面のまま手取り収支として扱わない
+      }
+      annualJpy = confirmedNet;
+    }
+    const riseRate = nexusLpValidNumberOrNull(override.riseRatePct);
+    if (riseRate === null) missingInputs.push('income_rise_rate:' + item.id);
+    const endAge = nexusLpValidNumberOrNull(override.endAge);
+    incomeStreams.push({
+      id: item.id,
+      startPeriodIndex: 0,
+      endPeriodIndex: endAge === null ? null : Math.max(0, endAge - periods[0].startAge),
+      baseAnnualJpy: annualJpy,
+      riseRatePct: riseRate === null ? 0 : riseRate
+    });
+  });
+
+  // ── 生活費（基準額×上昇率。初年度t=0は上昇なし） ──
+  const livingExpenseInput = lifePlan.livingExpense || {};
+  const expenseStreams = [];
+  const livingBase = nexusLpValidNumberOrNull(livingExpenseInput.baseAnnualJpy);
+  const livingRise = nexusLpValidNumberOrNull(livingExpenseInput.riseRatePct);
+  if (livingBase === null) {
+    missingInputs.push('living_expense_base');
+  } else {
+    if (livingRise === null) missingInputs.push('living_expense_rise_rate');
+    expenseStreams.push({
+      id: 'living',
+      startPeriodIndex: 0,
+      endPeriodIndex: null,
+      baseAnnualJpy: livingBase,
+      riseRatePct: livingRise === null ? 0 : livingRise
+    });
+  }
+
+  // ── その他の確認済み支出項目（expenseItems。教育費カテゴリは教育プラン側と二重計上しないよう、
+  // educationのmodeが'includedInExpense'でない限りスキップする） ──
+  let rentExpenseIncluded = false;
+  (lp.expenseItems || []).forEach(item => {
+    if (item.category === LP_LEGACY_SAVINGS_EXPENSE_CATEGORY) return;
+    const educationMode = lifePlan.education && lifePlan.education.mode;
+    if (item.category === '教育費' && educationMode !== 'includedInExpense') return;
+    const insuranceOverride = lifePlan.insurance || {};
+    if (item.category === '保険料' && insuranceOverride.alreadyInExpenseItems !== true) return;
+    const override = lifePlan.expenseOverrides && lifePlan.expenseOverrides[item.id] || {};
+    if (override.includeInSim !== true) {
+      if (override.includeInSim === false) excludedItems.push({ type: 'expense', id: item.id });
+      else missingInputs.push('expense:' + item.id);
+      return;
+    }
+    const riseRate = nexusLpValidNumberOrNull(override.riseRatePct);
+    if (item.category === '住居費（家賃・管理費等）') rentExpenseIncluded = true;
+    expenseStreams.push({
+      id: 'expense:' + item.id,
+      startPeriodIndex: 0,
+      endPeriodIndex: null,
+      baseAnnualJpy: nexusLpValidNumberOrNull(item.amount) || 0,
+      riseRatePct: riseRate === null ? 0 : riseRate
+    });
+  });
+
+  // ── 教育費（別計算モードの場合のみ。進学段階ごとの参考値をそのまま使い、一般物価上昇率は
+  // 重ねて適用しない。大学費用は4年総額を4年間に均等配分する＝4年連続で全額計上しない）。
+  // 進学トラック（track）は既存の教育資金プランニング機能（customer.lp.education[kidId].track）を
+  // そのまま再利用する（新しい入力欄を重複して作らない。呼び出し側がkid.trackとして渡す）──
+  const educationOverride = lifePlan.education || {};
+  if ((ctx.kidsForEducation || []).length === 0) {
+    // お子様が1人も登録されていない場合、「本当にお子様がいない」のか「家族情報の登録が
+    // 未完了なだけ」なのかを区別する。本人の明示的な確認（noChildrenConfirmed）が無ければ
+    // 未確認として記録する（登録なし＝対象外と自動で決めない）。modeの選択は意味を持たないため
+    // kids.length===0の場合はここで判定し、mode側の分岐には進まない。
+    if (educationOverride.noChildrenConfirmed === true) {
+      excludedItems.push({ type: 'education_no_children' });
+    } else {
+      missingInputs.push('education_children_registration_unconfirmed');
+    }
+  } else if (educationOverride.mode === 'separate') {
+    (ctx.kidsForEducation || []).forEach(kid => {
+      const track = kid.track || null;
+      if (!track) {
+        missingInputs.push('education_track:' + kid.id);
+        return;
+      }
+      const kidAgeAtBasis = kid.birthdate ? nexusLpCalcAge(kid.birthdate, basisDate) : nexusLpCalcStoredAge(kid.age, kid.ageYear, todayYear);
+      if (kidAgeAtBasis === null) {
+        missingInputs.push('education_kid_age:' + kid.id);
+        return;
+      }
+      ctx.educationStages.forEach(stage => {
+        const options = stage.lumpCosts || stage.annualCosts;
+        const selected = track[stage.key] && options[track[stage.key]] !== undefined ? track[stage.key] : Object.keys(options)[0];
+        const stageStartPeriodIndex = stage.startAge - kidAgeAtBasis;
+        const stageEndPeriodIndex = stageStartPeriodIndex + stage.years;
+        if (stageEndPeriodIndex <= 0) return; // 既に終わっている段階
+        const annualCostJpy = stage.lumpCosts ? stage.lumpCosts[selected] * 10000 / stage.years : stage.annualCosts[selected] * 10000;
+        expenseStreams.push({
+          id: 'education:' + kid.id + ':' + stage.key,
+          startPeriodIndex: Math.max(0, stageStartPeriodIndex),
+          endPeriodIndex: Math.max(0, stageEndPeriodIndex),
+          baseAnnualJpy: annualCostJpy,
+          riseRatePct: 0 // 参考値（文部科学省調査等）のまま使用。一般物価上昇率は重ねて適用しない
+        });
+      });
+    });
+    assumptions.push('教育費は進学段階ごとの参考値（文部科学省「子供の学習費調査」等）をそのまま使用し、一般物価上昇率は重ねて適用していません');
+  } else if (educationOverride.mode !== 'includedInExpense') {
+    missingInputs.push('education_mode_unconfirmed');
+  }
+
+  // ── 住宅ローン（返済額が確認できているローンのみ。残高からの返済額逆算は今回行わない） ──
+  let housingLoanIncluded = false;
+  (lp.loans || []).forEach(loan => {
+    if (loan.category !== '住宅') return;
+    const override = lifePlan.housing && lifePlan.housing.loanOverrides && lifePlan.housing.loanOverrides[loan.id] || {};
+    if (override.includeInSim !== true) {
+      if (override.includeInSim === false) excludedItems.push({ type: 'loan', id: loan.id });
+      else missingInputs.push('loan:' + loan.id);
+      return;
+    }
+    const monthlyPayment = nexusLpValidNumberOrNull(loan.monthlyPayment);
+    const remainingYears = nexusLpValidNumberOrNull(loan.remainingYears !== undefined && loan.remainingYears !== '' ? loan.remainingYears : loan.years);
+    if (monthlyPayment === null || remainingYears === null) {
+      missingInputs.push('loan_amount_unconfirmed:' + loan.id);
+      return;
+    }
+    // ボーナス返済（登録済みの場合）を年間返済額に加算する。bonusPaymentAmountは既存の
+    // ローン明細画面で「円/年」として表示される年額のため、そのまま加算すればよい。
+    // ボーナス返済ありと登録されているのに金額が未確認の場合、ボーナス分を0円と断定せず
+    // 未確認として記録する（月々返済額のみでの過少計上を黒字化して見せない）。
+    let bonusAnnualJpy = 0;
+    if (loan.hasBonusPayment) {
+      const bonusAmount = nexusLpValidNumberOrNull(loan.bonusPaymentAmount);
+      if (bonusAmount === null) {
+        missingInputs.push('loan_bonus_amount_unconfirmed:' + loan.id);
+      } else {
+        bonusAnnualJpy = bonusAmount;
+      }
+    }
+    housingLoanIncluded = true;
+    // 残年数が小数の場合、Math.ceilで切り上げると完済後も1年近く余分に支払う形になってしまう
+    // （完済後も返済が続くことになり、二重計上と同種の誤りになる）。完済年の支出だけを
+    // 残りの比率でprorationし、完済後は計上を止める。
+    const wholeYears = Math.floor(remainingYears);
+    const fraction = remainingYears - wholeYears;
+    const endPeriodIndex = fraction > 1e-9 ? wholeYears + 1 : wholeYears;
+    let proration = null;
+    if (fraction > 1e-9) {
+      proration = {};
+      proration[wholeYears] = fraction;
+    }
+    expenseStreams.push({
+      id: 'loan:' + loan.id,
+      startPeriodIndex: 0,
+      endPeriodIndex,
+      baseAnnualJpy: monthlyPayment * 12 + bonusAnnualJpy,
+      riseRatePct: 0,
+      proration
+    });
+  });
+  assumptions.push('住宅ローンは「月々返済額」が確認済みのものだけを支出として計上しています（残高・金利からの返済額逆算は今回のバージョンでは行っていません）');
+  // 住居費（家賃・管理費等）とローン返済を両方計上する場合、住居費の金額にローン返済分が
+  // 既に含まれていると二重計上になる。判断できないため推測で統合せず、本人の明示的な
+  // 確認（rentExcludesLoanPayment）を求める。
+  if (housingLoanIncluded && rentExpenseIncluded) {
+    if ((lifePlan.housing || {}).rentExcludesLoanPayment !== true) {
+      missingInputs.push('housing_expense_loan_overlap_unconfirmed');
+    }
+  }
+
+  // ── 保険料（既にexpenseItemsの「保険料」に含めている場合は、ここでは計上しない＝二重計上防止）。
+  // 払込方法（一時払・前納・月払等）だけで「支払済み」と決めず、契約日・前納回数・払込期間・
+  // 払込免除の確認状態から判定する。情報が足りず確定できない将来の払込予定は、0円と断定せず
+  // 「未反映」としてmissingInputsに記録する（取りこぼしを隠さない）──
+  const insuranceOverride = lifePlan.insurance || {};
+  if (insuranceOverride.includeInSim === true && insuranceOverride.alreadyInExpenseItems !== true) {
+    (ctx.contractsForPremium || []).forEach(ct => {
+      const cycle = ct.paymentCycle || '月払';
+      if (cycle === '一時払' || cycle === '全期前納') {
+        // 契約日（ct.date）は「いつ契約したか」であり、実際に払込を終えた証拠ではない。
+        // 契約日を支払日として扱わず、既存の「保険料の払込状況」（premiumPaymentStatus）が
+        // 「払込完了」と確認できる場合のみ、既に払込済みとして将来支出に計上しない。
+        if (!ct.date) {
+          missingInputs.push('premium_lump_date_unconfirmed:' + ct.id);
+        } else if (ct.date > basisDate) {
+          // 契約日が基準日より先（まだ契約そのものが始まっていない）。支払時期・金額ともに
+          // 未確定のため、0円と断定しない。
+          missingInputs.push('premium_future_lump_unconfirmed:' + ct.id);
+        } else if (ct.premiumPaymentStatus !== '払込完了') {
+          // 契約日は基準日以前だが、払込状況が「払込完了」として確認できていない
+          // （未設定・通常払込・払込免除中等）。契約日だけで支払済みと断定せず、未確認として示す。
+          missingInputs.push('premium_lump_payment_status_unconfirmed:' + ct.id);
+        }
+        return;
+      }
+      if (cycle === '前期前納') {
+        // 前納した期間が終わった後は、通常payment（前納時の1回あたり保険料）が再開する想定。
+        // 契約日・前納回数・前納時の1回あたり保険料のいずれかが未確認では再開時期・金額を
+        // 確定できないため、0円と断定せず未反映として記録する。
+        const prepaidCount = nexusLpValidNumberOrNull(ct.prepaidCount);
+        const perPayment = nexusLpValidNumberOrNull(ct.premiumPerPayment);
+        if (!ct.date || prepaidCount === null || perPayment === null) {
+          missingInputs.push('premium_prepaid_resume_unconfirmed:' + ct.id);
+          return;
+        }
+        const resumeDate = nexusLpAddYears(ct.date, prepaidCount);
+        const resumeAge = birthdate ? nexusLpAgeAtDate(birthdate, resumeDate) : null;
+        if (resumeAge === null) {
+          // 生年月日が未確認では再開時期を期（period）に変換できない。
+          missingInputs.push('premium_prepaid_resume_unconfirmed:' + ct.id);
+          return;
+        }
+        const termEndAge = nexusTermEndAge(ct.paymentTermEnd, ct.paymentTermNote, birthdate);
+        expenseStreams.push({
+          id: 'premium:' + ct.id,
+          startPeriodIndex: Math.max(0, resumeAge - periods[0].startAge),
+          endPeriodIndex: termEndAge === null ? null : Math.max(0, termEndAge - periods[0].startAge),
+          baseAnnualJpy: perPayment,
+          riseRatePct: 0
+        });
+        assumptions.push('前期前納の契約（id:' + ct.id + '）は、前納期間終了後に前納時と同額の払込が再開するものとして計算しています（実際の再開金額とは異なる場合があります）');
+        return;
+      }
+      // 月払／年払：払込期間終了（paymentTermEnd/Note）が確認できればそこで計上を終了する
+      // （従来は払込期間を無視して常に継続計上していた）。
+      const premium = nexusLpValidNumberOrNull(ct.premium);
+      if (premium === null) return;
+      const annualJpy = cycle === '年払' ? premium : premium * 12;
+      const termEndAge = nexusTermEndAge(ct.paymentTermEnd, ct.paymentTermNote, birthdate);
+      const endPeriodIndex = termEndAge === null ? null : Math.max(0, termEndAge - periods[0].startAge);
+      // 払込免除：①払込免除中に設定②保険会社への全額免除確認済み③免除開始日が確認済み、の
+      // 3条件を満たす場合のみ実際に適用されているとみなす（既存のnexusWaiverActiveAsOfと同じ基準）。
+      let proration = null;
+      if (ct.premiumPaymentStatus === '払込免除中') {
+        if (ct.waiverFullyConfirmed === true && ct.waiverStartDate) {
+          if (birthdate) {
+            proration = {};
+            periods.forEach(p => {
+              proration[p.index] = nexusLpMonthFractionBefore(p.startDate, p.endDate, ct.waiverStartDate);
+            });
+          } else {
+            // 年齢のみ（生年月日未確認）では月割りができないため、保守的に全額を計上したまま
+            // 免除を反映しない（免除を適用して過少計上するより安全側）。
+            assumptions.push('払込免除が適用されている契約（id:' + ct.id + '）について、生年月日が未確認のため免除を反映せず、保険料を全額計上しています');
+          }
+        } else {
+          // 払込免除中だが、保険会社への確認待ち・開始日未確認等で実際の適用が未確定。
+          missingInputs.push('premium_waiver_unconfirmed:' + ct.id);
+        }
+      }
+      expenseStreams.push({
+        id: 'premium:' + ct.id,
+        startPeriodIndex: 0,
+        endPeriodIndex,
+        baseAnnualJpy: annualJpy,
+        riseRatePct: 0,
+        proration
+      });
+    });
+  } else if (insuranceOverride.includeInSim === false) {
+    if ((ctx.contractsForPremium || []).length > 0) excludedItems.push({ type: 'insurance' });
+  } else if (insuranceOverride.alreadyInExpenseItems !== true) {
+    if ((ctx.contractsForPremium || []).length > 0) {
+      missingInputs.push('insurance_not_confirmed');
+    } else if (insuranceOverride.noContractsConfirmed === true) {
+      // 本人が「契約の登録なし＝対象外」と明示的に確認済み。
+      excludedItems.push({ type: 'insurance_no_contracts' });
+    } else {
+      // 契約が1件も登録されていない場合、「本当に契約が無い」のか「NEXUSへの登録が
+      // 未完了なだけ」なのかを区別する。明示的な確認が無ければ未確認として記録する。
+      missingInputs.push('insurance_contracts_registration_unconfirmed');
+    }
+  }
+
+  // ── 積立（savingsItems。対象資産カテゴリを明示的に指定したものだけ） ──
+  const contributions = [];
+  (lp.savingsItems || []).forEach(item => {
+    const override = lifePlan.contributions && lifePlan.contributions[item.id] || {};
+    if (override.includeInSim === false) {
+      excludedItems.push({ type: 'contribution', id: item.id });
+      return;
+    }
+    if (override.includeInSim !== true || !override.targetCategoryKey) {
+      missingInputs.push('contribution:' + item.id);
+      return;
+    }
+    if (!assetCategories.some(c => c.key === override.targetCategoryKey)) {
+      missingInputs.push('contribution_target_not_eligible:' + item.id);
+      return;
+    }
+    const annualJpy = item.unit === 'monthly' ? (nexusLpValidNumberOrNull(item.amount) || 0) * 12 : nexusLpValidNumberOrNull(item.amount) || 0;
+    contributions.push({
+      id: item.id,
+      startPeriodIndex: 0,
+      endPeriodIndex: null,
+      baseAnnualJpy: annualJpy,
+      riseRatePct: 0,
+      targetCategoryKey: override.targetCategoryKey
+    });
+  });
+  assumptions.push('積立額は毎年同額として計算しています（積立額自体の年次上昇率は今回のバージョンでは対応していません）');
+
+  const status = missingInputs.length > 0 ? 'partial' : 'complete';
+  return {
+    status,
+    missingInputs,
+    assumptions,
+    excludedItems,
+    periods,
+    assetCategories,
+    incomeStreams,
+    pensionStreams,
+    expenseStreams,
+    contributions,
+    retirementAge: nexusLpValidNumberOrNull(retirementInput.retirementAge)
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ── 生存時ライフプラン・資産寿命シミュレーション：ここまで ──────────────
+// ══════════════════════════════════════════════════════════════════════════
+
 // ── Excel(.xlsx)出力ライブラリ（ExcelJS）の遅延読み込み ──
 // 罫線・見出しの色・列幅など「見た目のある表」として書き出すため、
 // セルスタイルに対応したExcelJSを使う（軽量なSheetJS無償版はセル装飾に非対応のため不採用）。
@@ -33364,6 +34194,766 @@ const nexusDocPortfolioForOwner = (portfolioObj, ownerId, includedMap, assetsSec
   }
   return out;
 };
+
+// ── 生存時ライフプラン・資産寿命シミュレーション：UI（初期版） ──
+// customer.lp.lifePlan（schemaVersion1）の確認済み入力だけを保存する。既存のlpフィールド・
+// 既存の老後/教育/住宅プランニング・既存の画面は一切変更しない（このセクションの追加のみ）。
+
+// customers_v1への書き込みを、useLSの非検証setItemに頼らず読み戻しで確認する
+// （保存失敗を成功表示しないための、このライフプラン保存専用の検証付き書き込み）。
+function nexusLifePlanWriteCustomersVerified(nextCustomers) {
+  try {
+    const json = JSON.stringify(nextCustomers);
+    localStorage.setItem('customers_v1', json);
+    const readBack = localStorage.getItem('customers_v1');
+    if (readBack !== json) return { ok: false, reason: 'readback_mismatch' };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: 'write_exception' };
+  }
+}
+
+const NEXUS_LP_SIM_ASSET_CATEGORY_LABELS = {
+  deposits: '現金・預貯金',
+  fundsStocks: '投資信託・株式等',
+  corporateDc: '企業型DC（確定拠出年金）',
+  ideco: 'iDeCo（個人型確定拠出年金）',
+  mutualPension: '小規模企業共済・国民年金基金',
+  bonds: '債券',
+  fx: 'FX',
+  crypto: '仮想通貨',
+  realEstate: '不動産',
+  misc: 'その他（動産等）'
+};
+const NEXUS_LP_SIM_MISSING_INPUT_LABELS = {
+  pension_amount: '年金額が未入力です',
+  pension_rise_rate: '年金の上昇率が未確認です',
+  pension_start_age: '年金開始年齢（退職年齢）が未確認です',
+  pension_not_confirmed: '年金をシミュレーションに含めるかが未確認です',
+  pension_spouse_start_age_unconfirmed: '配偶者の年金受給開始時期（本人の年齢換算）が未確認です',
+  living_expense_base: '生活費の基準額が未入力です',
+  living_expense_rise_rate: '生活費の上昇率が未確認です',
+  no_assets_confirmed: '資産が1つも確認されていません',
+  cash_sink_selection: '現金として扱う資産区分の指定に誤りがあります',
+  education_mode_unconfirmed: '教育費の扱いが未確認です',
+  insurance_not_confirmed: '保険料の扱いが未確認です',
+  education_children_registration_unconfirmed: 'お子様の登録が無い状態です。本当にお子様がいないのか、登録が未完了なだけなのかが未確認です',
+  insurance_contracts_registration_unconfirmed: '保険契約の登録が無い状態です。本当に契約が無いのか、登録が未完了なだけなのかが未確認です',
+  birthdate_or_age: '本人の年齢・生年月日が未確認です',
+  periods_empty: '計算対象期間を作成できません'
+};
+function nexusLpSimMissingInputLabel(key) {
+  if (NEXUS_LP_SIM_MISSING_INPUT_LABELS[key]) return NEXUS_LP_SIM_MISSING_INPUT_LABELS[key];
+  const idx = key.indexOf(':');
+  const prefix = idx === -1 ? key : key.slice(0, idx);
+  const id = idx === -1 ? '' : key.slice(idx + 1);
+  const prefixLabels = {
+    asset: '資産区分が未確認です（' + id + '）',
+    asset_return_rate: '資産区分の運用率が未確認です（' + id + '）',
+    asset_withdrawal_eligibility_unconfirmed: '受給可能年齢への到達が未確認のため、取り崩し対象から外しています（' + id + '）',
+    housing_expense_loan_overlap_unconfirmed: '住居費とローン返済の二重計上の有無が未確認です',
+    income: '収入項目が対象外です（' + id + '）',
+    income_net_unconfirmed: '額面か手取りか未確認の収入項目があります（' + id + '）',
+    income_rise_rate: '収入項目の上昇率が未確認です（' + id + '）',
+    expense: '支出項目が対象外です（' + id + '）',
+    loan: 'ローンが対象外です（' + id + '）',
+    loan_amount_unconfirmed: '返済額・残年数が未確認のローンがあります（' + id + '）',
+    loan_bonus_amount_unconfirmed: 'ボーナス返済ありのローンで、ボーナス返済額が未確認です（' + id + '）',
+    education_track: '進学想定が未設定のお子様がいます',
+    education_kid_age: '年齢が未確認のお子様がいます',
+    contribution: '積立項目が対象外です（' + id + '）',
+    contribution_target_not_eligible: '積立の移動先資産区分が未指定です（' + id + '）',
+    pension_duplicate_candidate: '老後プランニングの年金と同一か別かが未確認の年金項目があります（' + id + '）',
+    premium_lump_date_unconfirmed: '一時払・全期前納の契約日が未確認です（契約id:' + id + '）',
+    premium_future_lump_unconfirmed: '契約日が基準日より先の一時払・全期前納があります。将来の支払予定が未反映です（契約id:' + id + '）',
+    premium_lump_payment_status_unconfirmed: '一時払・全期前納の契約で、払込状況が「払込完了」と確認できていません（契約日だけでは支払済みと判断していません。契約id:' + id + '）',
+    premium_prepaid_resume_unconfirmed: '前期前納の再開時期・金額が未確認です。前納終了後の払込が未反映です（契約id:' + id + '）',
+    premium_waiver_unconfirmed: '払込免除の適用が未確認（保険会社への確認待ち等）の契約があります（契約id:' + id + '）'
+  };
+  return prefixLabels[prefix] || key;
+}
+// 明示的に「対象外」と確認された項目の表示名。入力漏れではないが、この試算が家計全体ではなく
+// 「選択した範囲」であることを示すために一覧表示する。
+function nexusLpSimExcludedItemLabel(item) {
+  const labels = {
+    pension: '年金（含めない設定）',
+    insurance: '保険料（契約情報から計算しない設定）',
+    insurance_no_contracts: '保険料（契約の登録なしを確認済み）',
+    education_no_children: '教育費（お子様なしを確認済み）'
+  };
+  if (labels[item.type]) return labels[item.type];
+  const idLabels = {
+    income: '収入項目（' + item.id + '）',
+    expense: '支出項目（' + item.id + '）',
+    loan: 'ローン（' + item.id + '）',
+    contribution: '積立項目（' + item.id + '）',
+    asset: '資産区分（' + item.key + '）'
+  };
+  return idLabels[item.type] || item.type;
+}
+
+function nexusLpSvgPath(points) {
+  return points.map((p, i) => (i === 0 ? 'M' : 'L') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+}
+function NexusLpCashflowChart({ rows }) {
+  if (!rows || !rows.length) return null;
+  const W = Math.max(320, rows.length * 18);
+  const H = 150;
+  const padL = 46, padB = 18, padT = 14;
+  const maxVal = Math.max(1, ...rows.map(r => Math.max(r.totalIncome, r.totalExpense)));
+  const scaleY = v => padT + (H - padT - padB) * (1 - v / maxVal);
+  const stepX = (W - padL - 10) / Math.max(1, rows.length - 1);
+  const incomePts = rows.map((r, i) => [padL + i * stepX, scaleY(r.totalIncome)]);
+  const expensePts = rows.map((r, i) => [padL + i * stepX, scaleY(r.totalExpense)]);
+  return /*#__PURE__*/React.createElement("svg", {
+    width: "100%",
+    height: H,
+    viewBox: `0 0 ${W} ${H}`,
+    style: { display: 'block' }
+  }, /*#__PURE__*/React.createElement("line", {
+    x1: padL, y1: H - padB, x2: W, y2: H - padB, stroke: "var(--border)"
+  }), /*#__PURE__*/React.createElement("path", {
+    d: nexusLpSvgPath(incomePts), fill: "none", stroke: "#059669", strokeWidth: 2
+  }), /*#__PURE__*/React.createElement("path", {
+    d: nexusLpSvgPath(expensePts), fill: "none", stroke: "var(--danger)", strokeWidth: 2
+  }), /*#__PURE__*/React.createElement("text", {
+    x: padL, y: 11, fontSize: 10, fill: "#059669"
+  }, "● 収入"), /*#__PURE__*/React.createElement("text", {
+    x: padL + 48, y: 11, fontSize: 10, fill: "var(--danger)"
+  }, "● 支出"));
+}
+function NexusLpAssetChart({ rows, firstDrawPeriod }) {
+  if (!rows || !rows.length) return null;
+  const W = Math.max(320, rows.length * 18);
+  const H = 150;
+  const padL = 46, padB = 18, padT = 14;
+  const values = rows.map(r => r.eligibleAssetTotal);
+  const maxVal = Math.max(1, ...values);
+  const minVal = Math.min(0, ...values);
+  const range = Math.max(1, maxVal - minVal);
+  const scaleY = v => padT + (H - padT - padB) * (1 - (v - minVal) / range);
+  const stepX = (W - padL - 10) / Math.max(1, rows.length - 1);
+  const pts = rows.map((r, i) => [padL + i * stepX, scaleY(r.eligibleAssetTotal)]);
+  const zeroY = scaleY(0);
+  const hasDraw = firstDrawPeriod !== null && firstDrawPeriod !== undefined;
+  return /*#__PURE__*/React.createElement("svg", {
+    width: "100%",
+    height: H,
+    viewBox: `0 0 ${W} ${H}`,
+    style: { display: 'block' }
+  }, /*#__PURE__*/React.createElement("line", {
+    x1: padL, y1: zeroY, x2: W, y2: zeroY, stroke: "var(--border)", strokeDasharray: "4 2"
+  }), /*#__PURE__*/React.createElement("text", {
+    x: 2, y: zeroY + 3, fontSize: 9, fill: "var(--text-sub)"
+  }, "0円"), /*#__PURE__*/React.createElement("path", {
+    d: nexusLpSvgPath(pts), fill: "none", stroke: "var(--accent)", strokeWidth: 2
+  }), hasDraw && /*#__PURE__*/React.createElement("line", {
+    x1: padL + firstDrawPeriod * stepX, y1: padT, x2: padL + firstDrawPeriod * stepX, y2: H - padB, stroke: "var(--warning)", strokeDasharray: "2 2"
+  }), hasDraw && /*#__PURE__*/React.createElement("text", {
+    x: padL + firstDrawPeriod * stepX + 2, y: 11, fontSize: 9, fill: "var(--warning)"
+  }, "取り崩し開始"));
+}
+
+function NexusLifePlanSimSection({
+  customer,
+  customers,
+  setCustomers,
+  lp,
+  portfolio,
+  portfolioInputs,
+  incomeItems,
+  expenseItems,
+  savingsItems,
+  loans,
+  contractsForPremium,
+  kids,
+  educationPlans
+}) {
+  const [collapsed, setCollapsed] = useState(true);
+  const [draft, setDraft] = useState(() => customer.lp && customer.lp.lifePlan || {});
+  const [saveState, setSaveState] = useState(null);
+  React.useEffect(() => {
+    setDraft(customer.lp && customer.lp.lifePlan || {});
+    setSaveState(null);
+  }, [customer.id]);
+
+  const patch = p => {
+    setDraft(prev => ({ ...prev, ...p }));
+    setSaveState(null);
+  };
+  const patchNested = (key, p) => {
+    setDraft(prev => ({ ...prev, [key]: { ...(prev[key] || {}), ...p } }));
+    setSaveState(null);
+  };
+  const patchMap = (mapKey, id, p) => {
+    setDraft(prev => ({ ...prev, [mapKey]: { ...(prev[mapKey] || {}), [id]: { ...((prev[mapKey] || {})[id] || {}), ...p } } }));
+    setSaveState(null);
+  };
+  const setCashSinkKey = key => {
+    setDraft(prev => {
+      const ac = { ...(prev.assetCategories || {}) };
+      Object.keys(NEXUS_LP_SIM_ASSET_CATEGORY_LABELS).forEach(k => {
+        ac[k] = { ...(ac[k] || {}), isCashSink: k === key };
+      });
+      return { ...prev, assetCategories: ac };
+    });
+    setSaveState(null);
+  };
+
+  const assetCategoryDefs = Object.keys(NEXUS_LP_SIM_ASSET_CATEGORY_LABELS).map(key => ({
+    key,
+    label: NEXUS_LP_SIM_ASSET_CATEGORY_LABELS[key],
+    total: key === 'misc' ? (parseFloat(portfolioInputs.golfMembershipJpy) || 0) + (parseFloat(portfolioInputs.carJpy) || 0) + (parseFloat(portfolioInputs.householdItemsJpy) || 0) + (parseFloat(portfolioInputs.artJpy) || 0) + (parseFloat(portfolioInputs.graveJpy) || 0) + (parseFloat(portfolioInputs.othersJpy) || 0) : parseFloat(portfolioInputs[key + 'Jpy']) || 0
+  }));
+  const portfolioCategoryTotals = {};
+  assetCategoryDefs.forEach(d => {
+    portfolioCategoryTotals[d.key] = d.total;
+  });
+  // 資産集計ヘルパー（nexusPortfolioListTotal等）は未入力をparseFloat(v)||0で0円に変換するため、
+  // 合計額だけでは「本当に資産が無い」のか「明細はあるが値が未入力」のかを区別できない。
+  // 明細配列の件数・手入力欄の存在を合計額と別に渡し、どちらかがあれば「確認すべき対象がある」
+  // と判定する（残高が0円に見えても、未確認のまま入力完了扱いにしない）。
+  const p = portfolio || {};
+  const portfolioCategoryHasData = {
+    deposits: (p.deposits || []).length > 0,
+    fundsStocks: (p.stocks || []).length > 0 || (p.funds || []).length > 0 || nexusHasValue(p.fundsStocksJpy),
+    corporateDc: (p.corporateDc || []).length > 0,
+    ideco: (p.ideco || []).length > 0,
+    mutualPension: (p.mutualPension || []).length > 0,
+    bonds: (p.bonds || []).length > 0,
+    fx: (p.fx || []).length > 0,
+    crypto: (p.crypto || []).length > 0,
+    realEstate: (p.realEstate || []).length > 0,
+    misc: (p.others || []).length > 0 || nexusHasValue(p.golfMembershipJpy) || nexusHasValue(p.carJpy) || nexusHasValue(p.householdItemsJpy) || nexusHasValue(p.artJpy) || nexusHasValue(p.graveJpy)
+  };
+
+  const kidsForEducation = (kids || []).map(k => ({
+    id: k.id,
+    birthdate: k.birthdate,
+    age: k.age,
+    ageYear: k.ageYear,
+    track: (educationPlans[k.id] || {}).track
+  }));
+
+  const normalizedInput = nexusLifePlanNormalizeInput({
+    todayDateStr: todayStr(),
+    birthdate: customer.birthdate || null,
+    age: customer.age,
+    ageYear: customer.ageYear,
+    lp: {
+      incomeItems,
+      expenseItems,
+      savingsItems,
+      loans,
+      retirement: lp.retirement || {}
+    },
+    lifePlan: draft,
+    portfolioCategoryTotals,
+    portfolioCategoryHasData,
+    kidsForEducation,
+    educationStages: NEXUS_EDUCATION_STAGES,
+    contractsForPremium: contractsForPremium
+  });
+  // statusがinvalidの場合（現金区分の指定が0件／複数件など、構造的に計算できない状態）は
+  // calculateLifePlanを呼ばない。現金カテゴリが0件または複数件だとエンジンが例外を投げる設計
+  // のため、ここで止めずに呼ぶと、ユーザーが資産にチェックを入れてから「現金として扱う」を
+  // 選ぶまでの間（ごく普通の操作の途中経過）に画面が壊れてしまう。
+  const result = normalizedInput.status === 'invalid' ? {
+    status: 'invalid',
+    missingInputs: normalizedInput.missingInputs || [],
+    assumptions: normalizedInput.assumptions || [],
+    rows: [],
+    firstWithdrawableDepletionPeriod: null,
+    firstUnmetShortfallPeriod: null,
+    cumulativeUnmetShortfall: 0,
+    snapshotAtRetirement: null,
+    snapshotAt90: null,
+    snapshotAt100: null
+  } : calculateLifePlan(normalizedInput);
+
+  const handleSave = () => {
+    // customers（Reactのprops/state）は、別タブ・別ウィンドウでの保存後にこの画面が再読込されていない場合、
+    // localStorageの最新状態より古いことがある（useLSはタブ間同期を行わないため）。古いcustomersを
+    // そのまま書き戻すと、他の顧客情報や同一顧客への別タブでの最新変更を古いデータで上書きしてしまう。
+    // そのため保存の直前に必ずlocalStorageから最新のcustomers_v1を読み直し、そこへ今回の変更だけを
+    // マージする（Reactのcustomers propは、保存対象の特定にのみ使う）。
+    let latestCustomers;
+    try {
+      const raw = localStorage.getItem('customers_v1');
+      latestCustomers = raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      latestCustomers = null;
+    }
+    if (!Array.isArray(latestCustomers)) latestCustomers = customers;
+    if (!latestCustomers.some(c => c.id === customer.id)) {
+      // 保存対象の顧客が最新データに存在しない（削除済み等）。古いcustomersで新規作成してしまう
+      // 事故を避けるため、成功表示をせず保存を中断する。
+      setSaveState('error');
+      return;
+    }
+    const nextCustomers = latestCustomers.map(c => c.id === customer.id ? {
+      ...c,
+      lp: { ...(c.lp || {}), lifePlan: { ...draft, schemaVersion: 1, confirmedAt: new Date().toISOString() } }
+    } : c);
+    const writeResult = nexusLifePlanWriteCustomersVerified(nextCustomers);
+    if (!writeResult.ok) {
+      setSaveState('error');
+      return;
+    }
+    setCustomers(nextCustomers);
+    setDraft({ ...draft, schemaVersion: 1, confirmedAt: new Date().toISOString() });
+    setSaveState('saved');
+  };
+
+  const eligibleCategoryOptions = (draft.assetCategories ? Object.keys(draft.assetCategories).filter(k => draft.assetCategories[k] && draft.assetCategories[k].includeInSim === true && draft.assetCategories[k].isCashSink !== true) : []);
+
+  if (collapsed) {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "card",
+      style: { marginTop: 16 }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "section-header",
+      style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' },
+      onClick: () => setCollapsed(false)
+    }, /*#__PURE__*/React.createElement("span", null, "生存時ライフプラン・資産寿命シミュレーション（初期版）"), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      className: "btn",
+      style: { fontSize: 12 }
+    }, "▼ 開く")));
+  }
+
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: { marginTop: 16 }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "section-header",
+    style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' },
+    onClick: () => setCollapsed(true)
+  }, /*#__PURE__*/React.createElement("span", null, "生存時ライフプラン・資産寿命シミュレーション（初期版）"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn",
+    style: { fontSize: 12 }
+  }, "▲ 閉じる")), /*#__PURE__*/React.createElement("div", {
+    style: { fontSize: 11.5, color: 'var(--text-sub)', marginBottom: 10 }
+  }, "今から100歳までの収入・支出・運用・取り崩しを年度別に確認します。確認済みの項目だけにチェックを入れてください（未確認の項目は計算に含めません）。"),
+
+  // 基準日
+  /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: { marginBottom: 10 }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "計算基準日"), /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    className: "form-input",
+    style: { maxWidth: 180 },
+    value: draft.basisDate || todayStr(),
+    onChange: e => patch({ basisDate: e.target.value })
+  })),
+
+  // 年金
+  /*#__PURE__*/React.createElement("div", {
+    style: { border: '1px solid var(--border)', borderRadius: 8, padding: 10, marginBottom: 10 }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: { fontWeight: 700, fontSize: 13, marginBottom: 6 }
+  }, "年金"), /*#__PURE__*/React.createElement("label", {
+    style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, marginBottom: 6 }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: (draft.pension || {}).includeInSim === true,
+    onChange: e => patchNested('pension', { includeInSim: e.target.checked })
+  }), /*#__PURE__*/React.createElement("span", null, "年金をシミュレーションに含める（老後プランニングの年金額・開始年齢を使用）")), (draft.pension || {}).includeInSim === true && /*#__PURE__*/React.createElement("div", {
+    style: { fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: { color: 'var(--text-sub)' }
+  }, "年金の年次上昇率（%・0なら明示的に0を入力）"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    className: "form-input",
+    style: { width: 80 },
+    value: (draft.pension || {}).riseRatePct === undefined ? '' : draft.pension.riseRatePct,
+    onChange: e => patchNested('pension', { riseRatePct: e.target.value === '' ? '' : Number(e.target.value) })
+  })), (draft.pension || {}).includeInSim === true && nexusHasValue((lp.retirement || {}).spousePensionMonthly) && /*#__PURE__*/React.createElement("div", {
+    style: { fontSize: 12, display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: { color: 'var(--text-sub)' }
+  }, "配偶者の年金が始まる時、本人は何歳ですか（受給開始時期が異なる場合は推測せず確認します）"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    className: "form-input",
+    style: { width: 80 },
+    value: (draft.pension || {}).spouseStartAgeSelfEquivalent === undefined ? '' : draft.pension.spouseStartAgeSelfEquivalent,
+    onChange: e => patchNested('pension', { spouseStartAgeSelfEquivalent: e.target.value === '' ? '' : Number(e.target.value) })
+  }), /*#__PURE__*/React.createElement("span", null, "歳"))),
+
+  // 生活費
+  /*#__PURE__*/React.createElement("div", {
+    style: { border: '1px solid var(--border)', borderRadius: 8, padding: 10, marginBottom: 10 }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: { fontWeight: 700, fontSize: 13, marginBottom: 6 }
+  }, "生活費"), /*#__PURE__*/React.createElement("div", {
+    style: { display: 'flex', gap: 10, flexWrap: 'wrap' }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "nexus-lp-living-base",
+    style: { fontSize: 12 }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: { color: 'var(--text-sub)', marginBottom: 2 }
+  }, "現在の年間生活費（基準額・円）"), /*#__PURE__*/React.createElement(AmountInput, {
+    prefix: "¥",
+    value: (draft.livingExpense || {}).baseAnnualJpy || '',
+    onChange: e => patchNested('livingExpense', { baseAnnualJpy: e.target.value === '' ? '' : Number(e.target.value) })
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "nexus-lp-living-rate",
+    style: { fontSize: 12 }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: { color: 'var(--text-sub)', marginBottom: 2 }
+  }, "年次上昇率（%）"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    className: "form-input",
+    style: { width: 90 },
+    value: (draft.livingExpense || {}).riseRatePct === undefined ? '' : draft.livingExpense.riseRatePct,
+    onChange: e => patchNested('livingExpense', { riseRatePct: e.target.value === '' ? '' : Number(e.target.value) })
+  })))),
+
+  // 資産区分
+  /*#__PURE__*/React.createElement("div", {
+    style: { border: '1px solid var(--border)', borderRadius: 8, padding: 10, marginBottom: 10 }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: { fontWeight: 700, fontSize: 13, marginBottom: 6 }
+  }, "資産区分（対象にする資産だけチェックしてください。1つを「現金」として指定します）"), assetCategoryDefs.map(def => {
+    const o = (draft.assetCategories || {})[def.key] || {};
+    return /*#__PURE__*/React.createElement("div", {
+      key: def.key,
+      style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12, padding: '4px 0', borderBottom: '1px dashed var(--border)' }
+    }, /*#__PURE__*/React.createElement("label", {
+      style: { display: 'flex', alignItems: 'center', gap: 4, width: 170, flexShrink: 0 }
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "checkbox",
+      checked: o.includeInSim === true,
+      onChange: e => patchMap('assetCategories', def.key, { includeInSim: e.target.checked })
+    }), /*#__PURE__*/React.createElement("span", null, def.label)), /*#__PURE__*/React.createElement("span", {
+      style: { color: 'var(--text-sub)', width: 90, flexShrink: 0 }
+    }, def.total.toLocaleString(), "円"), o.includeInSim === true && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("label", {
+      style: { display: 'flex', alignItems: 'center', gap: 4 }
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "radio",
+      name: "nexusLpCashSink",
+      checked: o.isCashSink === true,
+      onChange: () => setCashSinkKey(def.key)
+    }), /*#__PURE__*/React.createElement("span", null, "現金として扱う")), /*#__PURE__*/React.createElement("label", {
+      style: { display: 'flex', alignItems: 'center', gap: 4 }
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "checkbox",
+      checked: o.withdrawable === true,
+      onChange: e => patchMap('assetCategories', def.key, { withdrawable: e.target.checked })
+    }), /*#__PURE__*/React.createElement("span", null, "取り崩し可能")), /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      className: "form-input",
+      style: { width: 70 },
+      placeholder: "運用率%",
+      value: o.returnRatePct === undefined ? '' : o.returnRatePct,
+      onChange: e => patchMap('assetCategories', def.key, { returnRatePct: e.target.value === '' ? '' : Number(e.target.value) })
+    }), o.withdrawable === true && (def.key === 'corporateDc' || def.key === 'ideco') && /*#__PURE__*/React.createElement("label", {
+      style: { display: 'flex', alignItems: 'center', gap: 4 }
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "checkbox",
+      checked: o.withdrawalEligibilityConfirmed === true,
+      onChange: e => patchMap('assetCategories', def.key, { withdrawalEligibilityConfirmed: e.target.checked })
+    }), /*#__PURE__*/React.createElement("span", {
+      style: { color: 'var(--warning)' }
+    }, "受給可能年齢（60歳等）に達していることを確認済み")), o.withdrawable === true && !o.isCashSink && /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      className: "form-input",
+      style: { width: 60 },
+      placeholder: "取崩順位",
+      value: o.drawOrder === undefined ? '' : o.drawOrder,
+      onChange: e => patchMap('assetCategories', def.key, { drawOrder: e.target.value === '' ? '' : Number(e.target.value) })
+    })));
+  })),
+
+  // 収入
+  // 老後プランニング側（上の年金ブロック）に何らかの年金入力が既にある場合、incomeItemsの
+  // 「年金」タイプは、同一の年金か別の年金か不明なままでは統合・除外しない（重複候補として確認）。
+  (() => {
+    const hasAnyPensionDataUi = nexusHasValue((lp.retirement || {}).pensionMonthly) || nexusHasValue((lp.retirement || {}).spousePensionMonthly) || nexusHasValue((lp.retirement || {}).retirementAge);
+    return incomeItems.length > 0 && /*#__PURE__*/React.createElement("div", {
+      style: { border: '1px solid var(--border)', borderRadius: 8, padding: 10, marginBottom: 10 }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: { fontWeight: 700, fontSize: 13, marginBottom: 6 }
+    }, "収入"), incomeItems.map(item => {
+      const o = (draft.incomeOverrides || {})[item.id] || {};
+      const needsNet = (item.type === '給与' || item.type === '配偶者給与' || item.type === '年金') && item.amountType !== '手取り';
+      const isPensionDuplicateCandidate = item.type === '年金' && hasAnyPensionDataUi;
+      if (isPensionDuplicateCandidate && o.pensionDuplicateStatus !== 'separate') {
+        return /*#__PURE__*/React.createElement("div", {
+          key: item.id,
+          style: { fontSize: 12, padding: '6px 0', borderBottom: '1px dashed var(--border)' }
+        }, /*#__PURE__*/React.createElement("div", {
+          style: { marginBottom: 4 }
+        }, "年金（", item.amount ? Number(item.amount).toLocaleString() + (item.unit === 'monthly' ? '円／月' : '円／年') : '金額未入力', "）：上の「年金」欄（老後プランニングの入力）と同じ年金か、別の年金かが未確認です。推測で統合・除外せず、どちらか確認してください。"), /*#__PURE__*/React.createElement("div", {
+          className: "toggle-group"
+        }, /*#__PURE__*/React.createElement("button", {
+          type: "button",
+          className: 'toggle-btn' + (o.pensionDuplicateStatus === 'separate' ? ' sel' : ''),
+          onClick: () => patchMap('incomeOverrides', item.id, { pensionDuplicateStatus: 'separate' })
+        }, "別の年金（二重計上せず加算する）"), /*#__PURE__*/React.createElement("button", {
+          type: "button",
+          className: 'toggle-btn' + (o.pensionDuplicateStatus === 'duplicateExcluded' ? ' sel' : ''),
+          onClick: () => patchMap('incomeOverrides', item.id, { pensionDuplicateStatus: 'duplicateExcluded' })
+        }, "同じ年金（ここでは計上しない）")));
+      }
+      return /*#__PURE__*/React.createElement("div", {
+        key: item.id,
+        style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12, padding: '4px 0', borderBottom: '1px dashed var(--border)' }
+      }, /*#__PURE__*/React.createElement("label", {
+        style: { display: 'flex', alignItems: 'center', gap: 4, width: 160, flexShrink: 0 }
+      }, /*#__PURE__*/React.createElement("input", {
+        type: "checkbox",
+        checked: o.includeInSim === true,
+        onChange: e => patchMap('incomeOverrides', item.id, { includeInSim: e.target.checked })
+      }), /*#__PURE__*/React.createElement("span", null, item.type, isPensionDuplicateCandidate ? '（別の年金として確認済み）' : '', needsNet ? '（額面）' : '')), o.includeInSim === true && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("input", {
+        type: "number",
+        className: "form-input",
+        style: { width: 70 },
+        placeholder: "上昇率%",
+        value: o.riseRatePct === undefined ? '' : o.riseRatePct,
+        onChange: e => patchMap('incomeOverrides', item.id, { riseRatePct: e.target.value === '' ? '' : Number(e.target.value) })
+      }), /*#__PURE__*/React.createElement("input", {
+        type: "number",
+        className: "form-input",
+        style: { width: 80 },
+        placeholder: "終了年齢",
+        value: o.endAge === undefined ? '' : o.endAge,
+        onChange: e => patchMap('incomeOverrides', item.id, { endAge: e.target.value === '' ? '' : Number(e.target.value) })
+      }), needsNet && /*#__PURE__*/React.createElement("input", {
+        type: "number",
+        className: "form-input",
+        style: { width: 120 },
+        placeholder: "確認済み手取り年額",
+        value: o.confirmedNetAmount === undefined ? '' : o.confirmedNetAmount,
+        onChange: e => patchMap('incomeOverrides', item.id, { confirmedNetAmount: e.target.value === '' ? '' : Number(e.target.value) })
+      })));
+    }));
+  })(),
+
+  // 支出
+  expenseItems.filter(it => it.category !== LP_LEGACY_SAVINGS_EXPENSE_CATEGORY).length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: { border: '1px solid var(--border)', borderRadius: 8, padding: 10, marginBottom: 10 }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: { fontWeight: 700, fontSize: 13, marginBottom: 6 }
+  }, "支出（教育費は下の「教育費」欄、保険料は下の「保険料」欄で扱う場合は、ここではチェックしません）"), expenseItems.filter(it => it.category !== LP_LEGACY_SAVINGS_EXPENSE_CATEGORY).map(item => {
+    const o = (draft.expenseOverrides || {})[item.id] || {};
+    return /*#__PURE__*/React.createElement("div", {
+      key: item.id,
+      style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12, padding: '4px 0', borderBottom: '1px dashed var(--border)' }
+    }, /*#__PURE__*/React.createElement("label", {
+      style: { display: 'flex', alignItems: 'center', gap: 4, width: 220, flexShrink: 0 }
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "checkbox",
+      checked: o.includeInSim === true,
+      onChange: e => patchMap('expenseOverrides', item.id, { includeInSim: e.target.checked })
+    }), /*#__PURE__*/React.createElement("span", null, item.category)), o.includeInSim === true && /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      className: "form-input",
+      style: { width: 70 },
+      placeholder: "上昇率%",
+      value: o.riseRatePct === undefined ? '' : o.riseRatePct,
+      onChange: e => patchMap('expenseOverrides', item.id, { riseRatePct: e.target.value === '' ? '' : Number(e.target.value) })
+    }));
+  })),
+
+  // 住宅ローン
+  loans.filter(l => l.category === '住宅').length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: { border: '1px solid var(--border)', borderRadius: 8, padding: 10, marginBottom: 10 }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: { fontWeight: 700, fontSize: 13, marginBottom: 6 }
+  }, "住宅ローン（月々返済額・残年数が確認できているローンだけ対象にできます）"), loans.filter(l => l.category === '住宅').map(loan => {
+    const o = (draft.housing && draft.housing.loanOverrides || {})[loan.id] || {};
+    const hasAmount = nexusHasValue(loan.monthlyPayment) && nexusHasValue(loanRemainingYears(loan));
+    return /*#__PURE__*/React.createElement("div", {
+      key: loan.id,
+      style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12, padding: '4px 0', borderBottom: '1px dashed var(--border)' }
+    }, /*#__PURE__*/React.createElement("label", {
+      style: { display: 'flex', alignItems: 'center', gap: 4, opacity: hasAmount ? 1 : 0.5 }
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "checkbox",
+      disabled: !hasAmount,
+      checked: o.includeInSim === true,
+      onChange: e => setDraft(prev => ({ ...prev, housing: { ...(prev.housing || {}), loanOverrides: { ...((prev.housing || {}).loanOverrides || {}), [loan.id]: { includeInSim: e.target.checked } } } }))
+    }), /*#__PURE__*/React.createElement("span", null, loan.name || 'ローン', hasAmount ? '' : '（返済額・残年数が未確認のため対象にできません）')));
+  }), loans.some(l => l.category === '住宅' && (draft.housing && draft.housing.loanOverrides || {})[l.id] && (draft.housing.loanOverrides[l.id] || {}).includeInSim === true) && expenseItems.some(it => it.category === '住居費（家賃・管理費等）' && (draft.expenseOverrides || {})[it.id] && draft.expenseOverrides[it.id].includeInSim === true) && /*#__PURE__*/React.createElement("label", {
+    style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, marginTop: 6, color: 'var(--warning)' }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: (draft.housing || {}).rentExcludesLoanPayment === true,
+    onChange: e => patchNested('housing', { rentExcludesLoanPayment: e.target.checked })
+  }), /*#__PURE__*/React.createElement("span", null, "上の「住居費」の金額に、このローン返済分は含まれていないことを確認済み（二重計上防止）"))),
+
+  // 教育費
+  /*#__PURE__*/React.createElement("div", {
+    style: { border: '1px solid var(--border)', borderRadius: 8, padding: 10, marginBottom: 10 }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: { fontWeight: 700, fontSize: 13, marginBottom: 6 }
+  }, "教育費"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: 'toggle-btn' + ((draft.education || {}).mode === 'separate' ? ' sel' : ''),
+    onClick: () => patchNested('education', { mode: 'separate' })
+  }, "教育資金プランニングで別計算する"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: 'toggle-btn' + ((draft.education || {}).mode === 'includedInExpense' ? ' sel' : ''),
+    onClick: () => patchNested('education', { mode: 'includedInExpense' })
+  }, "支出項目の「教育費」に含まれている")), (draft.education || {}).mode === 'separate' && /*#__PURE__*/React.createElement("div", {
+    style: { fontSize: 11.5, color: 'var(--text-sub)', marginTop: 6 }
+  }, (kids || []).map(k => {
+    const track = (educationPlans[k.id] || {}).track;
+    return /*#__PURE__*/React.createElement("div", {
+      key: k.id
+    }, k.name || 'お子様', "：", track && Object.keys(track).length ? '既存の教育資金プランニングの進学想定を使用します' : '教育資金プランニングで進学想定を設定してください');
+  })), (kids || []).length === 0 && /*#__PURE__*/React.createElement("label", {
+    style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text)' }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: (draft.education || {}).noChildrenConfirmed === true,
+    onChange: e => patchNested('education', { noChildrenConfirmed: e.target.checked })
+  }), /*#__PURE__*/React.createElement("span", null, "お子様は登録されていませんが、本当にいないことを確認済み（NEXUSへの登録漏れではない）"))),
+
+  // 保険料
+  /*#__PURE__*/React.createElement("div", {
+    style: { border: '1px solid var(--border)', borderRadius: 8, padding: 10, marginBottom: 10 }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: { fontWeight: 700, fontSize: 13, marginBottom: 6 }
+  }, "保険料"), /*#__PURE__*/React.createElement("label", {
+    style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, marginBottom: 4 }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: (draft.insurance || {}).alreadyInExpenseItems === true,
+    onChange: e => patchNested('insurance', { alreadyInExpenseItems: e.target.checked })
+  }), /*#__PURE__*/React.createElement("span", null, "保険料は既に上の「支出」の「保険料」項目に含まれている")), (draft.insurance || {}).alreadyInExpenseItems !== true && (contractsForPremium || []).length > 0 && /*#__PURE__*/React.createElement("label", {
+    style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: (draft.insurance || {}).includeInSim === true,
+    onChange: e => patchNested('insurance', { includeInSim: e.target.checked })
+  }), /*#__PURE__*/React.createElement("span", null, "契約情報から保険料を計算する（一時払・前納は払込済みのため計上しません）")), (draft.insurance || {}).alreadyInExpenseItems !== true && (contractsForPremium || []).length === 0 && /*#__PURE__*/React.createElement("label", {
+    style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: (draft.insurance || {}).noContractsConfirmed === true,
+    onChange: e => patchNested('insurance', { noContractsConfirmed: e.target.checked })
+  }), /*#__PURE__*/React.createElement("span", null, "保険契約は登録されていませんが、本当に無いことを確認済み（NEXUSへの登録漏れではない）"))),
+
+  // 積立
+  savingsItems.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: { border: '1px solid var(--border)', borderRadius: 8, padding: 10, marginBottom: 10 }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: { fontWeight: 700, fontSize: 13, marginBottom: 6 }
+  }, "積立（移動先の資産区分を指定した項目だけ対象にできます）"), savingsItems.map(item => {
+    const o = (draft.contributions || {})[item.id] || {};
+    return /*#__PURE__*/React.createElement("div", {
+      key: item.id,
+      style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12, padding: '4px 0', borderBottom: '1px dashed var(--border)' }
+    }, /*#__PURE__*/React.createElement("label", {
+      style: { display: 'flex', alignItems: 'center', gap: 4, width: 150, flexShrink: 0 }
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "checkbox",
+      checked: o.includeInSim === true,
+      onChange: e => patchMap('contributions', item.id, { includeInSim: e.target.checked })
+    }), /*#__PURE__*/React.createElement("span", null, item.type)), o.includeInSim === true && /*#__PURE__*/React.createElement("select", {
+      className: "form-input",
+      style: { width: 170 },
+      value: o.targetCategoryKey || '',
+      onChange: e => patchMap('contributions', item.id, { targetCategoryKey: e.target.value })
+    }, /*#__PURE__*/React.createElement("option", { value: "" }, "移動先の資産区分を選択"), eligibleCategoryOptions.map(k => /*#__PURE__*/React.createElement("option", {
+      key: k,
+      value: k
+    }, NEXUS_LP_SIM_ASSET_CATEGORY_LABELS[k]))));
+  })),
+
+  // 保存
+  /*#__PURE__*/React.createElement("div", {
+    style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary",
+    onClick: handleSave
+  }, "この条件を保存する"), saveState === 'saved' && /*#__PURE__*/React.createElement("span", {
+    style: { color: 'var(--success)', fontSize: 12 }
+  }, "✅ 保存しました"), saveState === 'error' && /*#__PURE__*/React.createElement("span", {
+    style: { color: 'var(--danger)', fontSize: 12 }
+  }, "⚠️ 保存に失敗しました。入力はこの画面にそのまま残っています。もう一度お試しください。")),
+
+  // ステータス・未確認一覧
+  /*#__PURE__*/React.createElement("div", {
+    style: { marginBottom: 10 }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: 'inline-block',
+      padding: '2px 10px',
+      borderRadius: 12,
+      fontSize: 12,
+      fontWeight: 700,
+      background: result.status === 'complete' ? '#ECFDF5' : result.status === 'partial' ? '#FFFBEB' : '#FEF2F2',
+      color: result.status === 'complete' ? 'var(--success)' : result.status === 'partial' ? 'var(--warning)' : 'var(--danger)'
+    }
+  }, result.status === 'complete' ? '確認済み：すべての入力が確認済みです' : result.status === 'partial' ? '入力不足：一部が未確認のため、以下の結果は確定値ではありません' : '計算できません：' + (normalizedInput.reason || '')), normalizedInput.missingInputs && normalizedInput.missingInputs.length > 0 && /*#__PURE__*/React.createElement("ul", {
+    style: { fontSize: 11, color: 'var(--text-sub)', marginTop: 6, paddingLeft: 18 }
+  }, normalizedInput.missingInputs.map((key, i) => /*#__PURE__*/React.createElement("li", {
+    key: i
+  }, nexusLpSimMissingInputLabel(key)))), normalizedInput.excludedItems && normalizedInput.excludedItems.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: { fontSize: 11, color: 'var(--text)', marginTop: 8, padding: 8, background: '#FFF7ED', borderRadius: 6 }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: { fontWeight: 700, marginBottom: 4 }
+  }, "この試算は、以下の項目を対象外として選択した範囲の試算です（家計全体の結果ではありません）"), /*#__PURE__*/React.createElement("ul", {
+    style: { paddingLeft: 18, margin: 0 }
+  }, normalizedInput.excludedItems.map((item, i) => /*#__PURE__*/React.createElement("li", {
+    key: i
+  }, nexusLpSimExcludedItemLabel(item)))))),
+
+  result.rows && result.rows.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null,
+  // 要約
+  /*#__PURE__*/React.createElement("div", {
+    style: { display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12, marginBottom: 10 }
+  }, /*#__PURE__*/React.createElement("div", null, "最初に取り崩し可能資産が尽きる期間：", result.firstWithdrawableDepletionPeriod === null ? (result.status === 'complete' ? '試算期間内では資産の枯渇なし' : '未確定（入力不足）') : '期' + result.firstWithdrawableDepletionPeriod + '（' + result.rows[result.firstWithdrawableDepletionPeriod].startAge + '歳〜）'), /*#__PURE__*/React.createElement("div", null, "最初に支出を賄えなくなる期間：", result.firstUnmetShortfallPeriod === null ? (result.status === 'complete' ? '試算期間内では資金不足なし' : '未確定（入力不足）') : '期' + result.firstUnmetShortfallPeriod + '（' + result.rows[result.firstUnmetShortfallPeriod].startAge + '歳〜）'), result.snapshotAt100 && /*#__PURE__*/React.createElement("div", null, "100歳時点の金融資産残高：", result.status === 'complete' ? result.snapshotAt100.eligibleAssetTotal.toLocaleString() + '円' : '未確定（入力不足）')),
+
+  // 年度別表
+  /*#__PURE__*/React.createElement("div", {
+    style: { overflowX: 'auto', marginBottom: 10 }
+  }, /*#__PURE__*/React.createElement("table", {
+    style: { fontSize: 11, borderCollapse: 'collapse', minWidth: 480 }
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, ['年齢', '収入', '支出', '資金不足', '期末資産'].map(h => /*#__PURE__*/React.createElement("th", {
+    key: h,
+    style: { borderBottom: '1px solid var(--border)', padding: '4px 8px', textAlign: 'right', whiteSpace: 'nowrap' }
+  }, h)))), /*#__PURE__*/React.createElement("tbody", null, result.rows.map(r => /*#__PURE__*/React.createElement("tr", {
+    key: r.periodIndex
+  }, /*#__PURE__*/React.createElement("td", {
+    style: { padding: '2px 8px', whiteSpace: 'nowrap' }
+  }, r.startAge, r.isApprox ? '歳頃' : '歳'), /*#__PURE__*/React.createElement("td", {
+    style: { padding: '2px 8px', textAlign: 'right' }
+  }, Math.round(r.totalIncome).toLocaleString()), /*#__PURE__*/React.createElement("td", {
+    style: { padding: '2px 8px', textAlign: 'right' }
+  }, Math.round(r.totalExpense).toLocaleString()), /*#__PURE__*/React.createElement("td", {
+    style: { padding: '2px 8px', textAlign: 'right', color: r.unmetShortfall > 0 ? 'var(--danger)' : 'inherit' }
+  }, Math.round(r.unmetShortfall).toLocaleString()), /*#__PURE__*/React.createElement("td", {
+    style: { padding: '2px 8px', textAlign: 'right' }
+  }, Math.round(r.eligibleAssetTotal).toLocaleString())))))),
+
+  // グラフ
+  /*#__PURE__*/React.createElement("div", {
+    style: { marginBottom: 6, fontSize: 12, fontWeight: 700 }
+  }, "年度別収支"), /*#__PURE__*/React.createElement("div", {
+    style: { overflowX: 'auto', marginBottom: 14 }
+  }, /*#__PURE__*/React.createElement(NexusLpCashflowChart, { rows: result.rows })), /*#__PURE__*/React.createElement("div", {
+    style: { marginBottom: 6, fontSize: 12, fontWeight: 700 }
+  }, "金融資産残高"), /*#__PURE__*/React.createElement("div", {
+    style: { overflowX: 'auto' }
+  }, /*#__PURE__*/React.createElement(NexusLpAssetChart, { rows: result.rows, firstDrawPeriod: result.rows.findIndex(r => Object.keys(r.drawnByCategory).length > 0) === -1 ? null : result.rows.findIndex(r => Object.keys(r.drawnByCategory).length > 0) }))),
+
+  normalizedInput.assumptions && normalizedInput.assumptions.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: { fontSize: 10.5, color: 'var(--text-sub)', marginTop: 10, borderTop: '1px dashed var(--border)', paddingTop: 8 }
+  }, normalizedInput.assumptions.map((a, i) => /*#__PURE__*/React.createElement("div", {
+    key: i
+  }, "※ ", a))));
+}
 
 function NexusPlanningSection({
   customers,
@@ -38550,7 +40140,21 @@ function NexusPlanningSection({
       fontSize: 13,
       color: 'var(--danger)'
     }
-  }, "不足：月間 ", Math.abs(diff).toLocaleString(), "円足りません")), /*#__PURE__*/React.createElement("div", {
+  }, "不足：月間 ", Math.abs(diff).toLocaleString(), "円足りません")), /*#__PURE__*/React.createElement(NexusLifePlanSimSection, {
+    customer,
+    customers,
+    setCustomers,
+    lp,
+    portfolio,
+    portfolioInputs: portfolioInputsFor(portfolio),
+    incomeItems,
+    expenseItems,
+    savingsItems,
+    loans,
+    contractsForPremium: allContractsForCharts,
+    kids,
+    educationPlans
+  }), /*#__PURE__*/React.createElement("div", {
     className: "section-header"
   }, "FPの所見（診断コメント）"), /*#__PURE__*/React.createElement("div", {
     style: {
