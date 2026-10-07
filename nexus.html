@@ -21380,6 +21380,17 @@ function importJSON(file, handlers) {
         if (data.nexusServiceLinks && handlers.setNexusServiceLinks) handlers.setNexusServiceLinks(data.nexusServiceLinks);
         if (data.nexusMission && handlers.setNexusMission) handlers.setNexusMission(data.nexusMission);
         if (data.nexusSavedSearches && handlers.setNexusSavedSearches) handlers.setNexusSavedSearches(data.nexusSavedSearches);
+        // 神メモ第2段階：依頼・応答の記録。復元してもここでは何も自動適用しない
+        // （未適用の依頼は、復元後に改めてこの画面を開いて確認・採用する）。
+        // 元の要件：復元後の未適用依頼は古いものとして扱い、そのまま採用させず、必ず
+        // 再出力を求める（採用済みの履歴はそのまま保持し、再適用はしない）。復元した
+        // 「未適用」（awaiting_response／response_received／held）の依頼にだけ
+        // restoredInvalidを立てる。nexusDotFindActiveRequestとnexusDotConsultDecideの
+        // 両方でこのフラグを見るため、画面側（UIの表示分岐）だけに頼らず、採用処理自体も拒否する。
+        if (data.nexusDotRequests && handlers.setNexusDotRequests) {
+          const restoredRequests = data.nexusDotRequests.map(r => r.status === 'applied' ? r : { ...r, restoredInvalid: true });
+          handlers.setNexusDotRequests(restoredRequests);
+        }
         if (data.nexusAiIdCounter !== undefined && handlers.setNexusAiIdCounter) handlers.setNexusAiIdCounter(data.nexusAiIdCounter);
         if (data.nexusAiIdMigrationDone !== undefined && handlers.setNexusAiIdMigrationDone) handlers.setNexusAiIdMigrationDone(data.nexusAiIdMigrationDone);
         if (data.nexusAiContractIdCounter !== undefined && handlers.setNexusAiContractIdCounter) handlers.setNexusAiContractIdCounter(data.nexusAiContractIdCounter);
@@ -23666,6 +23677,7 @@ function exportJSON(state) {
     nexusServiceLinks: state.nexusServiceLinks,
     nexusMission: state.nexusMission,
     nexusSavedSearches: state.nexusSavedSearches,
+    nexusDotRequests: state.nexusDotRequests,
     nexusAiIdCounter: state.nexusAiIdCounter,
     nexusAiIdMigrationDone: state.nexusAiIdMigrationDone,
     nexusAiContractIdCounter: state.nexusAiContractIdCounter,
@@ -42652,6 +42664,416 @@ function nexusValidateDotExportJson(obj) {
   return errors;
 }
 
+// ══════════════════════════════════════════════════════════════
+// ── 神メモ第2段階：記憶→dotへの相談→理由付き提案→既存タスクへの反映 ──
+// ・第1段階のschemaVersion:1・既存画面はそのまま維持し、ここではschemaVersion:2の
+//   新しい依頼・応答を追加するだけ（第1段階のnexusBuildDotExportJson等は変更しない）。
+// ・依頼のsourceは第1段階のDot用JSONをそのまま再利用し、ここで値を作り直さない。
+// ・応答（dot_response）は未信頼データとして扱う。facts（確認済み事実）の値は応答に
+//   書かれた値を一切信じず、常に依頼時のsource（NEXUS内部の確認済みデータ）から
+//   再取得する。unknownsも、実際に確認済みでない項目だけを許可する。
+// ・外部AIへの自動送信・Googleカレンダー連携・新規タスク管理DBはここでは作らない。
+// ══════════════════════════════════════════════════════════════
+
+const NEXUS_DOT_PHASE2_SCHEMA_VERSION = 2;
+const NEXUS_DOT_SOURCE_FIELD_DEFS = [
+  { field: 'action', basisKey: 'actionBasis' },
+  { field: 'status', basisKey: 'statusBasis' },
+  { field: 'dueDate', basisKey: 'dueDateBasis' },
+  { field: 'durationMinutes', basisKey: 'durationBasis' },
+  { field: 'tags', basisKey: 'tagsBasis' }
+];
+const NEXUS_DOT_SOURCE_FIELD_NAMES = NEXUS_DOT_SOURCE_FIELD_DEFS.map(d => d.field);
+const NEXUS_DOT_SOURCE_FIELD_LABELS = {
+  action: '行動（action）', status: '状態（status）', dueDate: '期限（dueDate）',
+  durationMinutes: '所要時間（分）', tags: 'タグ'
+};
+const NEXUS_DOT_QUESTION_MAX_LEN = 200;
+const NEXUS_DOT_FUTURE_INTENT_MAX_LEN = 120;
+const NEXUS_DOT_TITLE_MAX_LEN = 80;
+const NEXUS_DOT_TEXT_MAX_LEN = 200;
+const NEXUS_DOT_MAX_OPTIONS = 3;
+const NEXUS_DOT_RESPONSE_MAX_BYTES = 16 * 1024;
+
+// 表示はテキストのみ。HTMLタグ・URLを含む自由文は拒否する（evalやHTML挿入を防ぐ）。
+function nexusDotPlainTextSafe(s) {
+  if (typeof s !== 'string') return false;
+  if (/[<>]/.test(s)) return false;
+  if (/https?:\/\//i.test(s)) return false;
+  return true;
+}
+
+// 依頼JSON（dot_request）の組み立て。sourceは第1段階のnexusBuildDotExportJsonの出力を
+// そのまま受け取り、ここで新しく作り直さない（既存オブジェクトのコピー＆改変もしない）。
+const NEXUS_DOT_REQUEST_ALLOWED_KEYS = ['schemaVersion', 'type', 'requestId', 'source', 'context'];
+const NEXUS_DOT_CONTEXT_ALLOWED_KEYS = ['question', 'futureIntent'];
+function nexusDotBuildConsultRequestJson(input) {
+  const out = {
+    schemaVersion: NEXUS_DOT_PHASE2_SCHEMA_VERSION,
+    type: 'dot_request',
+    requestId: input.requestId,
+    source: input.source,
+    context: {
+      question: input.question || null,
+      futureIntent: input.futureIntent || null
+    }
+  };
+  const errors = nexusDotValidateConsultRequestJson(out);
+  if (errors.length) throw new Error('DOT_REQUEST_INVALID: ' + errors.join(', '));
+  return out;
+}
+function nexusDotValidateConsultRequestJson(obj) {
+  const errors = [];
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return ['not_object'];
+  if (obj.schemaVersion !== NEXUS_DOT_PHASE2_SCHEMA_VERSION) errors.push('schemaVersion');
+  if (obj.type !== 'dot_request') errors.push('type');
+  if (typeof obj.requestId !== 'string' || obj.requestId.length < 8) errors.push('requestId');
+  if (!obj.source || typeof obj.source !== 'object') errors.push('source');
+  if (!obj.context || typeof obj.context !== 'object' || Array.isArray(obj.context)) {
+    errors.push('context');
+  } else {
+    if (obj.context.question !== null && (typeof obj.context.question !== 'string' || obj.context.question.length === 0 || obj.context.question.length > NEXUS_DOT_QUESTION_MAX_LEN || !nexusDotPlainTextSafe(obj.context.question))) errors.push('context.question');
+    if (obj.context.futureIntent !== null && (typeof obj.context.futureIntent !== 'string' || obj.context.futureIntent.length === 0 || obj.context.futureIntent.length > NEXUS_DOT_FUTURE_INTENT_MAX_LEN || !nexusDotPlainTextSafe(obj.context.futureIntent))) errors.push('context.futureIntent');
+    const allowedCtx = new Set(NEXUS_DOT_CONTEXT_ALLOWED_KEYS);
+    Object.keys(obj.context).forEach(k => { if (!allowedCtx.has(k)) errors.push('unknown_key:context.' + k); });
+  }
+  const allowed = new Set(NEXUS_DOT_REQUEST_ALLOWED_KEYS);
+  Object.keys(obj).forEach(k => { if (!allowed.has(k)) errors.push('unknown_key:' + k); });
+  return errors;
+}
+
+// 依頼JSONだけでは、Dot側に「どの形式で、どの項目名で返すべきか」が伝わらない。
+// 固定の回答指示と、この依頼に即した完全な回答JSON例を、依頼JSONと合わせて
+// 一度のコピーで渡せるようにする（指示文は依頼ごとに変わらない固定文、例だけがその場の
+// 依頼内容に合わせて変わる）。
+function nexusDotConsultResponseExampleJson(requestJson) {
+  const source = requestJson.source;
+  const facts = [];
+  const unknowns = [];
+  NEXUS_DOT_SOURCE_FIELD_DEFS.forEach(d => {
+    const basis = source[d.basisKey];
+    if (basis === 'user_confirmed' || basis === 'existing_explicit') facts.push(d.field);
+    else unknowns.push(d.field);
+  });
+  return {
+    schemaVersion: NEXUS_DOT_PHASE2_SCHEMA_VERSION,
+    type: 'dot_response',
+    requestId: requestJson.requestId,
+    memoryRefId: source.memoryRefId,
+    taskRefId: source.taskRefId,
+    sourceRevision: source.sourceRevision,
+    taskRevision: source.taskRevision,
+    facts,
+    unknowns,
+    options: [],
+    nextStep: {
+      title: '（例）前回の未確認事項を3点に整理する',
+      durationMinutes: 15,
+      dueDate: source.dueDate,
+      reason: '（例）次回面談で判断に必要な情報をそろえるため'
+    },
+    futureLink: requestJson.context.futureIntent ? '（例）お客さまが自分で比較検討できる資料を用意する' : null
+  };
+}
+function nexusDotBuildConsultCopyText(requestJson) {
+  const example = nexusDotConsultResponseExampleJson(requestJson);
+  const instructions = [
+    '【Dotへの相談】下記の依頼JSONを確認し、必ず指定した形式の回答JSONのみを返してください。',
+    '',
+    '■回答JSONの形式（厳守・この形式から外れる回答は取り込めません）',
+    '- schemaVersion: 2固定',
+    '- type: "dot_response"固定',
+    '- requestId, memoryRefId, taskRefId, sourceRevision, taskRevision: 依頼JSONの値をそのまま変更せずに使用してください',
+    '- facts: 配列。依頼のsourceで既に確認済みの項目名のみを入れてください（値は含めません。値はこちら側で確認済みの内容を表示します）',
+    '- unknowns: 配列。実際に未確認の項目名のみを入れてください（確認済みの項目をここに入れないでください）',
+    '- options: 配列（0〜3件）。各要素は {title, durationMinutes, dueDate, reason}',
+    '  - title: 1〜80文字。HTMLタグ・URLを含めないでください',
+    '  - durationMinutes: 1〜480の整数、または不明ならnull',
+    '  - dueDate: "YYYY-MM-DD"形式、または不明ならnull（依頼の期限と異なる新しい期限を作らないでください）',
+    '  - reason: 1〜200文字。HTMLタグ・URLを含めないでください',
+    '- nextStep: null、またはoptionsと同じ形式の1件のみ',
+    '- futureLink: null、または1〜200文字（HTMLタグ・URLを含めない）。依頼のcontext.futureIntentが無い場合は必ずnull',
+    '- 上記以外のキーは含めないでください',
+    '- 全体で16KB以内にしてください',
+    '',
+    '■依頼JSON',
+    JSON.stringify(requestJson, null, 2),
+    '',
+    '■回答JSONの例（この依頼用に、形式はこのまま・内容だけを実際の提案に置き換えて返してください）',
+    JSON.stringify(example, null, 2)
+  ];
+  return instructions.join('\n');
+}
+
+// 回答JSON（dot_response）の検証。requestRecordは依頼を保存した時点のNEXUS内部レコード
+// （requestId・参照ID・版・source・question/futureIntentを含む、信頼できる手元の記録）。
+// 既存のnexusIsValidCalendarDateStringをそのまま再利用する（日付検証を作り直さない）。
+const NEXUS_DOT_RESPONSE_ALLOWED_KEYS = ['schemaVersion', 'type', 'requestId', 'memoryRefId', 'taskRefId', 'sourceRevision', 'taskRevision', 'facts', 'unknowns', 'options', 'nextStep', 'futureLink'];
+const NEXUS_DOT_OPTION_ALLOWED_KEYS = ['title', 'durationMinutes', 'dueDate', 'reason'];
+function nexusDotValidateOptionLike(obj, pathPrefix, errors, fixedDueDate) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+    errors.push(pathPrefix + ':not_object');
+    return;
+  }
+  if (typeof obj.title !== 'string' || obj.title.length === 0 || obj.title.length > NEXUS_DOT_TITLE_MAX_LEN || !nexusDotPlainTextSafe(obj.title)) errors.push(pathPrefix + '.title');
+  if (obj.durationMinutes !== null && !(Number.isInteger(obj.durationMinutes) && obj.durationMinutes > 0 && obj.durationMinutes <= 480)) errors.push(pathPrefix + '.durationMinutes');
+  if (obj.dueDate !== null && !nexusIsValidCalendarDateString(obj.dueDate)) errors.push(pathPrefix + '.dueDate');
+  if (fixedDueDate !== undefined && obj.dueDate !== null && obj.dueDate !== fixedDueDate) errors.push(pathPrefix + '.dueDate_not_original');
+  if (typeof obj.reason !== 'string' || obj.reason.length === 0 || obj.reason.length > NEXUS_DOT_TEXT_MAX_LEN || !nexusDotPlainTextSafe(obj.reason)) errors.push(pathPrefix + '.reason');
+  const allowed = new Set(NEXUS_DOT_OPTION_ALLOWED_KEYS);
+  Object.keys(obj).forEach(k => { if (!allowed.has(k)) errors.push('unknown_key:' + pathPrefix + '.' + k); });
+}
+function nexusDotValidateConsultResponseJson(resp, requestRecord) {
+  const errors = [];
+  if (!resp || typeof resp !== 'object' || Array.isArray(resp)) return { ok: false, errors: ['not_object'] };
+  let byteLen;
+  try {
+    byteLen = new TextEncoder().encode(JSON.stringify(resp)).length;
+  } catch (e) {
+    byteLen = JSON.stringify(resp).length;
+  }
+  if (byteLen > NEXUS_DOT_RESPONSE_MAX_BYTES) return { ok: false, errors: ['too_large'] };
+  if (resp.schemaVersion !== NEXUS_DOT_PHASE2_SCHEMA_VERSION) errors.push('schemaVersion');
+  if (resp.type !== 'dot_response') errors.push('type');
+  if (!requestRecord) return { ok: false, errors: ['no_matching_request'] };
+  if (resp.requestId !== requestRecord.requestId) errors.push('requestId_mismatch');
+  if (resp.memoryRefId !== requestRecord.source.memoryRefId) errors.push('memoryRefId_mismatch');
+  if (resp.taskRefId !== requestRecord.source.taskRefId) errors.push('taskRefId_mismatch');
+  if (resp.sourceRevision !== requestRecord.source.sourceRevision) errors.push('sourceRevision_mismatch');
+  if (resp.taskRevision !== requestRecord.source.taskRevision) errors.push('taskRevision_mismatch');
+
+  const basisByField = {};
+  NEXUS_DOT_SOURCE_FIELD_DEFS.forEach(d => { basisByField[d.field] = requestRecord.source[d.basisKey]; });
+
+  // factsは「確認済みフィールドの参照だけ」を許可する（値はここでは一切受け取らない）。
+  // unknownsと同じ、フィールド名の配列という形式にすることで、AIが値そのものを
+  // 送ってくる余地自体を無くす（受け取って無視するのではなく、そもそも受け取らない）。
+  const factFields = new Set();
+  if (!Array.isArray(resp.facts)) {
+    errors.push('facts');
+  } else {
+    resp.facts.forEach((f, i) => {
+      if (!NEXUS_DOT_SOURCE_FIELD_NAMES.includes(f)) { errors.push('facts[' + i + ']'); return; }
+      if (factFields.has(f)) { errors.push('facts[' + i + '].duplicate'); return; }
+      factFields.add(f);
+      const basis = basisByField[f];
+      if (basis !== 'user_confirmed' && basis !== 'existing_explicit') errors.push('facts[' + i + '].field_not_confirmed');
+    });
+  }
+  const unknownFields = new Set();
+  if (!Array.isArray(resp.unknowns)) {
+    errors.push('unknowns');
+  } else {
+    resp.unknowns.forEach((f, i) => {
+      if (!NEXUS_DOT_SOURCE_FIELD_NAMES.includes(f)) { errors.push('unknowns[' + i + ']'); return; }
+      if (unknownFields.has(f)) { errors.push('unknowns[' + i + '].duplicate'); return; }
+      unknownFields.add(f);
+      const basis = basisByField[f];
+      if (basis !== 'unknown') errors.push('unknowns[' + i + '].field_not_actually_unknown');
+      if (factFields.has(f)) errors.push('unknowns[' + i + '].overlaps_facts');
+    });
+  }
+
+  if (!Array.isArray(resp.options)) {
+    errors.push('options');
+  } else if (resp.options.length > NEXUS_DOT_MAX_OPTIONS) {
+    errors.push('options_too_many');
+  } else {
+    resp.options.forEach((o, i) => nexusDotValidateOptionLike(o, 'options[' + i + ']', errors));
+  }
+
+  if (resp.nextStep !== null) {
+    nexusDotValidateOptionLike(resp.nextStep, 'nextStep', errors, requestRecord.source.dueDate);
+  }
+
+  const futureIntentPresent = !!(requestRecord.context && requestRecord.context.futureIntent);
+  if (resp.futureLink !== null) {
+    if (typeof resp.futureLink !== 'string' || resp.futureLink.length === 0 || resp.futureLink.length > NEXUS_DOT_TEXT_MAX_LEN || !nexusDotPlainTextSafe(resp.futureLink)) errors.push('futureLink');
+    if (!futureIntentPresent) errors.push('futureLink_without_futureIntent');
+  }
+
+  const allowed = new Set(NEXUS_DOT_RESPONSE_ALLOWED_KEYS);
+  Object.keys(resp).forEach(k => { if (!allowed.has(k)) errors.push('unknown_key:' + k); });
+
+  if (errors.length) return { ok: false, errors };
+
+  // facts（フィールド名の配列＝参照）から、表示用の値を必ずrequestRecord.sourceから
+  // 再取得して組み立てる（応答は値を一切持たないため、応答由来の値は存在しない）。
+  const facts = resp.facts.map(f => ({
+    field: f,
+    value: requestRecord.source[f],
+    basis: basisByField[f]
+  }));
+  return {
+    ok: true,
+    validated: {
+      requestId: resp.requestId,
+      facts,
+      unknowns: resp.unknowns.slice(),
+      options: resp.options.map(o => ({ title: o.title, durationMinutes: o.durationMinutes, dueDate: o.dueDate, reason: o.reason })),
+      nextStep: resp.nextStep === null ? null : { title: resp.nextStep.title, durationMinutes: resp.nextStep.durationMinutes, dueDate: resp.nextStep.dueDate, reason: resp.nextStep.reason },
+      futureLink: resp.futureLink
+    }
+  };
+}
+
+// 自由文（question／futureIntent）の個人情報等リスク検出。あくまで補助であり、安全を
+// 保証する表示はしない（本人が送出内容を最終確認する）。既存のnexusScanForResidualPii
+// （AI分析パック向け・複数行データ対象）とは別に、単一の自由文に直接適用できる形にする
+// （既存関数は変更しない。同じ発想のregexチェックを再利用するだけ）。
+function nexusDotFreeTextRiskScan(text, customers) {
+  const issues = [];
+  if (!text) return { ok: true, issues };
+  const checks = [
+    ['電話番号らしい文字列', /0\d{1,4}-?\d{1,4}-?\d{3,4}/g],
+    ['メールアドレス', /[\w.+-]+@[\w-]+\.[\w.-]+/g],
+    ['郵便番号', /\d{3}-\d{4}/g],
+    ['証券番号らしき数字列', /\d{7,}/g],
+    ['URL', /https?:\/\/\S+/g]
+  ];
+  checks.forEach(([label, re]) => {
+    const m = text.match(re);
+    if (m && m.length) issues.push({ pattern: label, sample: m[0] });
+  });
+  const names = new Set();
+  (customers || []).forEach(c => {
+    if (c.name) names.add(c.name);
+    if (c.furigana) names.add(c.furigana);
+    if (c.corporateName) names.add(c.corporateName);
+    (c.suspects || []).forEach(sp => { if (sp.name) names.add(sp.name); });
+  });
+  names.forEach(name => {
+    if (name && name.trim().length >= 2 && text.includes(name)) issues.push({ pattern: '氏名', sample: name });
+  });
+  return { ok: issues.length === 0, issues };
+}
+
+// 既存タスクへの反映パッチ計算（純粋関数）。title・所要時間（dotDurationMinutes）・
+// 期限（date）だけを対象にする。dueDateがnullなら既存のdateは一切変更しない
+// （nullを理由に既存の期限を消さない）。task.kindが設定されているタスク（商談メモの
+// 「次にすること」等、日付の意味がdueDateとは異なるタスク）は、既存のdueDate運用と
+// 同じ判断基準（nexusDotDueDateEligibilityがkind付きタスクを対象外にしているのと同じ
+// 考え方）でdateの更新を行わない。
+function nexusDotComputeApplyPatch(task, decision) {
+  const patch = {};
+  let dateSkippedReason = null;
+  if (decision.title && decision.title.trim()) patch.title = decision.title.trim();
+  if (decision.durationMinutes !== null && decision.durationMinutes !== undefined) patch.dotDurationMinutes = decision.durationMinutes;
+  if (decision.dueDate) {
+    if (task.kind) {
+      dateSkippedReason = 'unsafe_date_kind';
+    } else {
+      patch.date = decision.dueDate;
+    }
+  }
+  return { patch, dateSkippedReason };
+}
+
+// 中断時の復旧判定。ml_dot_apply_pending_v1の1件（before/afterスナップショット）と、
+// 読み直した最新タスクを比較し、未適用／適用済み／不明・競合のいずれかを返す。
+// 版番号だけでなく対象データ自体の変化を見るため、別タブでの変更も検出できる。
+function nexusDotApplyPendingReconcile(pendingEntry, freshTask) {
+  if (!pendingEntry) return 'not_started';
+  const matches = snapshot => Object.keys(snapshot).every(k => (freshTask[k] === undefined ? null : freshTask[k]) === snapshot[k]);
+  if (matches(pendingEntry.after)) return 'already_applied';
+  if (matches(pendingEntry.before)) return 'not_started';
+  return 'conflict';
+}
+
+// memoryId・taskIdの組に対して、まだ応答を受け取っていない（awaiting_response）依頼が
+// 既に存在するかを探す。「同じ依頼の再コピーでIDを増やさない」ための判定に使う
+// （この組には同時に1件までしか進行中の依頼を持たせない）。
+// バックアップから復元した未適用の依頼（restoredInvalid）は「進行中」とみなさない
+// （復元後の未適用依頼は古いものとして扱い、新しい依頼の出力を必ず必要にするため）。
+function nexusDotFindActiveRequest(requests, memoryId, taskId) {
+  return (requests || []).find(r => r.memoryId === memoryId && r.taskId === taskId && r.status === 'awaiting_response' && !r.restoredInvalid) || null;
+}
+
+// ml_dot_requests_v1の安全な読み込み・書込確認（既存のnexusReadTasksRawSafe／
+// nexusWriteTasksRawVerifiedと同じパターン。読込失敗・不正データは空配列扱いにしない）。
+function nexusReadDotRequestsRawSafe() {
+  let raw;
+  try {
+    raw = localStorage.getItem('ml_dot_requests_v1');
+  } catch (e) {
+    return { ok: false, reason: 'read_failed' };
+  }
+  if (raw === null) return { ok: true, requests: [] };
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    return { ok: false, reason: 'corrupt_data' };
+  }
+  if (!Array.isArray(parsed)) return { ok: false, reason: 'corrupt_data' };
+  return { ok: true, requests: parsed };
+}
+function nexusWriteDotRequestsRawVerified(requests) {
+  const serialized = JSON.stringify(requests);
+  try {
+    localStorage.setItem('ml_dot_requests_v1', serialized);
+  } catch (e) {
+    return { ok: false, reason: 'write_failed' };
+  }
+  let verify;
+  try {
+    verify = localStorage.getItem('ml_dot_requests_v1');
+  } catch (e) {
+    return { ok: false, reason: 'verify_failed' };
+  }
+  if (verify !== serialized) return { ok: false, reason: 'write_not_persisted' };
+  return { ok: true };
+}
+// ml_dot_apply_pending_v1（タスク反映の復旧用記録）。キーは依頼のrequestId単位
+// （1依頼につき同時に1つの反映操作のみを想定する。第1段階のml_dot_link_pending_v1と
+// 同じ、操作前に書く→操作後に消す、という安全側の設計）。
+function nexusReadDotApplyPendingMapSafe() {
+  let raw;
+  try {
+    raw = localStorage.getItem('ml_dot_apply_pending_v1');
+  } catch (e) {
+    return { ok: false, reason: 'pending_read_failed' };
+  }
+  if (raw === null) return { ok: true, map: {} };
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    return { ok: false, reason: 'pending_corrupt' };
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { ok: false, reason: 'pending_corrupt' };
+  return { ok: true, map: parsed };
+}
+function nexusSetDotApplyPendingVerified(operationId, entry) {
+  const read = nexusReadDotApplyPendingMapSafe();
+  if (!read.ok) return read;
+  const nextMap = { ...read.map, [operationId]: entry };
+  const serialized = JSON.stringify(nextMap);
+  try {
+    localStorage.setItem('ml_dot_apply_pending_v1', serialized);
+  } catch (e) {
+    return { ok: false, reason: 'write_failed' };
+  }
+  let verify;
+  try {
+    verify = localStorage.getItem('ml_dot_apply_pending_v1');
+  } catch (e) {
+    return { ok: false, reason: 'verify_failed' };
+  }
+  if (verify !== serialized) return { ok: false, reason: 'write_not_persisted' };
+  return { ok: true };
+}
+function nexusClearDotApplyPendingEntry(operationId) {
+  const read = nexusReadDotApplyPendingMapSafe();
+  if (!read.ok) return;
+  if (!(operationId in read.map)) return;
+  const nextMap = { ...read.map };
+  delete nextMap[operationId];
+  try {
+    localStorage.setItem('ml_dot_apply_pending_v1', JSON.stringify(nextMap));
+  } catch (e) {}
+}
+
 // ── 匿名化・仮名化サービス層 ────────────────────────────────────
 // 仮名対応表（PERSON_001＝山田太郎、等）はNEXUS内部（IndexedDBのpseudonymMapストア）
 // だけで保持し、AI分析用プロンプトにも通常のバックアップにも絶対に含めない。
@@ -45187,7 +45609,8 @@ function MemoryDetail({
   linkedTask,
   onOpenTaskLink,
   onUnlinkTask,
-  onOpenDotExport
+  onOpenDotExport,
+  onOpenDotConsult
 }) {
   const [confirmDel, setConfirmDel] = useState(false);
   return /*#__PURE__*/React.createElement("div", {
@@ -45345,6 +45768,10 @@ function MemoryDetail({
     className: "btn btn-sm btn-primary",
     onClick: () => onOpenDotExport(linkedTask)
   }, "📤 Dot用JSONを確認"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-sm btn-primary",
+    onClick: () => onOpenDotConsult(linkedTask)
+  }, "🤝 Dotへ相談する"), /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "btn btn-sm btn-outline",
     onClick: onUnlinkTask
@@ -46579,6 +47006,280 @@ function NexusMemoryDotExportScreen({
   }, toast));
 }
 
+// ── 神メモ第2段階：記憶→dot相談→既存タスクへの反映 画面 ─────────────
+// 依頼JSONの作成・コピー → 回答JSONの貼り付け・検証 → 採用／編集して採用／保留 →
+// 採用時のみ既存タスクへ反映、という一往復をこの1画面で行う。
+// factsの値は常にNEXUS側（source）から再取得した値を表示し、応答に書かれた値は使わない。
+function NexusDotConsultScreen({
+  memory,
+  task,
+  customers,
+  activeRequest,
+  historyRequests,
+  onEnsureRequest,
+  onSubmitResponse,
+  onDecide,
+  onClose
+}) {
+  const [question, setQuestion] = useState((activeRequest && activeRequest.context && activeRequest.context.question) || '');
+  const [futureIntent, setFutureIntent] = useState((activeRequest && activeRequest.context && activeRequest.context.futureIntent) || '');
+  const [requestRecord, setRequestRecord] = useState(activeRequest || null);
+  // 既に依頼が存在する場合は、わざわざ「依頼を更新する」を押さなくても、その場で
+  // 保存済みの内容からJSONを再構成して表示する（連携OFF→再開後の再確認等のため）。
+  const [requestJson, setRequestJson] = useState(() => {
+    if (!activeRequest) return null;
+    try {
+      return nexusDotBuildConsultRequestJson({ requestId: activeRequest.requestId, source: activeRequest.source, question: activeRequest.context && activeRequest.context.question, futureIntent: activeRequest.context && activeRequest.context.futureIntent });
+    } catch (e) {
+      return null;
+    }
+  });
+  const [pasteText, setPasteText] = useState('');
+  const [submitErrors, setSubmitErrors] = useState(null);
+  const [editingChoice, setEditingChoice] = useState(null); // {kind:'nextStep'|'option', index, title, durationMinutes, dueDate}
+  const [toast, setToast] = useState('');
+  const showToast = msg => {
+    setToast(msg);
+    setTimeout(() => setToast(''), 3500);
+  };
+  const questionRisk = useMemo(() => nexusDotFreeTextRiskScan(question, customers), [question, customers]);
+  const futureIntentRisk = useMemo(() => nexusDotFreeTextRiskScan(futureIntent, customers), [futureIntent, customers]);
+  const hasRisk = !questionRisk.ok || !futureIntentRisk.ok;
+
+  const SUBMIT_ERROR_MESSAGES = {
+    bridge_disabled: 'Dot連携がOFFのため操作できません。',
+    locks_unsupported: 'この環境（ブラウザ）では複数タブでの安全性を保証できないため停止しています。他のタブを閉じてページを再読み込みしてからお試しください。',
+    missing_target: '記憶またはタスクが見つからないため中止しました。',
+    relink_changed: '記憶とタスクの関連付けが変わったため中止しました。もう一度確認してください。',
+    private_blocked: '⛔ この記憶はPRIVATE（または由来未確認）のため、相談を進められません。',
+    source_build_failed: '依頼の作成に失敗しました。',
+    request_build_failed: '依頼の作成に失敗しました。',
+    write_failed: '保存に失敗しました。もう一度お試しください。',
+    write_not_persisted: '保存の確認ができませんでした。もう一度お試しください。',
+    verify_failed: '保存の確認ができませんでした。もう一度お試しください。',
+    read_failed: '読み込みに失敗したため中止しました。',
+    corrupt_data: 'データが読み取れないため中止しました（既存データを保護するため上書きしません）。',
+    invalid_json: '貼り付けた内容がJSONとして読み取れませんでした。',
+    request_not_found: 'この依頼が見つかりません。削除されたか、別の端末の依頼かもしれません。',
+    response_already_exists_different: 'この依頼には既に別の回答が取り込まれています。上書きはできません。',
+    invalid_state: '現在の状態では実行できません。画面を開き直してもう一度確認してください。',
+    task_missing: '対象のタスクが見つからないため中止しました。',
+    conflict_concurrent_change: '別の操作でタスクが変更されたため中止しました。最新の状態を確認してください。',
+    already_applied_different_decision: 'この依頼は既に別の内容で採用済みです。変更するには、まずタスクを直接編集してください。',
+    request_record_save_failed_task_already_applied: 'タスクには反映されましたが、記録の保存が確認できませんでした。もう一度同じ内容で採用操作をお試しください（タスクが重複して変わることはありません）。',
+    restored_requires_reissue: 'この依頼・回答はバックアップからの復元によるものです。そのまま採用はできません。新しく依頼を出し直してください。'
+  };
+  const RESPONSE_FIELD_ERROR_HINT = '回答の形式が許可された内容と一致しません（型・許可値・文字数・未知のキーなど）。Dotからの回答をそのまま、改変せずに貼り付けてください。';
+
+  const doEnsureRequest = () => {
+    if (hasRisk) return;
+    Promise.resolve(onEnsureRequest(question.trim() || null, futureIntent.trim() || null)).then(result => {
+      if (!result.ok) {
+        showToast('⚠️ ' + (SUBMIT_ERROR_MESSAGES[result.reason] || '依頼の作成に失敗しました'));
+        return;
+      }
+      setRequestRecord(result.record);
+      setRequestJson(result.requestJson);
+    });
+  };
+  const doCopyRequest = () => {
+    if (!requestRecord) return;
+    // コピー直前に最新状態を再確認する（第1段階のdoCopyと同じ考え方）。ここでは
+    // 依頼そのものを再生成することで、PRIVATE化・関連解除・記憶やタスクの変更を検出する。
+    Promise.resolve(onEnsureRequest(question.trim() || null, futureIntent.trim() || null)).then(result => {
+      if (!result.ok) {
+        showToast('⚠️ ' + (SUBMIT_ERROR_MESSAGES[result.reason] || 'コピーの直前確認に失敗しました'));
+        return;
+      }
+      setRequestRecord(result.record);
+      setRequestJson(result.requestJson);
+      // 依頼JSON単体ではなく、回答形式の固定指示＋この依頼用の完全な回答例を含めて
+      // 一度のコピーで渡す（形式の明文化・合成例の同梱は元の要件どおり）。
+      nexusCopyToClipboard(nexusDotBuildConsultCopyText(result.requestJson)).then(ok => {
+        showToast(ok ? '📋 依頼とDotへの回答指示をコピーしました' : '⚠️ コピーに失敗しました');
+      });
+    });
+  };
+  const doSubmitResponse = () => {
+    if (!requestRecord) return;
+    setSubmitErrors(null);
+    Promise.resolve(onSubmitResponse(requestRecord.requestId, pasteText)).then(result => {
+      if (!result.ok) {
+        if (result.errors) setSubmitErrors(result.errors);
+        showToast('⚠️ ' + (SUBMIT_ERROR_MESSAGES[result.reason] || RESPONSE_FIELD_ERROR_HINT));
+        return;
+      }
+      showToast(result.duplicate ? '📋 この回答は取り込み済みです' : '✅ 回答を取り込みました');
+      setRequestRecord(prev => ({ ...prev, status: 'response_received', response: result.validated }));
+      setPasteText('');
+    });
+  };
+  const doDecide = decisionInput => {
+    Promise.resolve(onDecide(requestRecord.requestId, decisionInput)).then(result => {
+      if (!result.ok) {
+        showToast('⚠️ ' + (SUBMIT_ERROR_MESSAGES[result.reason] || '処理に失敗しました'));
+        return;
+      }
+      showToast(decisionInput.kind === 'held' ? '保留しました' : '✅ タスクへ反映しました');
+      setRequestRecord(prev => ({ ...prev, status: decisionInput.kind === 'held' ? 'held' : 'applied', decision: decisionInput }));
+      setEditingChoice(null);
+    });
+  };
+
+  const chipStyle = active => ({
+    padding: '7px 12px', borderRadius: 999, border: `1.5px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+    background: active ? 'var(--accent-light)' : 'var(--bg)', color: active ? 'var(--accent)' : 'var(--text-sub)',
+    fontSize: 12.5, fontWeight: 600, cursor: 'pointer'
+  });
+  const response = requestRecord && requestRecord.response;
+  const alreadyApplied = requestRecord && requestRecord.status === 'applied';
+  const isHeld = requestRecord && requestRecord.status === 'held';
+  // バックアップから復元した未適用の依頼・回答は古いものとして扱う。採用済みの履歴は
+  // そのまま保持するため、statusが'applied'の場合はこの対象にしない。
+  const isStaleRestored = requestRecord && requestRecord.restoredInvalid === true && requestRecord.status !== 'applied';
+
+  const renderChoiceCard = (choice, key, kindLabel) => {
+    const isEditing = editingChoice && editingChoice.key === key;
+    return /*#__PURE__*/React.createElement("div", {
+      key: key,
+      className: "card",
+      style: { marginBottom: 10 }
+    },
+      /*#__PURE__*/React.createElement("div", { style: { fontSize: 13, fontWeight: 700, marginBottom: 4 } }, kindLabel, "：", choice.title),
+      /*#__PURE__*/React.createElement("div", { style: { fontSize: 12, color: 'var(--text-sub)', marginBottom: 6 } }, "理由：", choice.reason),
+      /*#__PURE__*/React.createElement("div", { style: { fontSize: 11.5, color: 'var(--text-sub)', marginBottom: 8 } },
+        "所要時間：", choice.durationMinutes != null ? choice.durationMinutes + '分' : '未定', " ／ 期限：", choice.dueDate || '未定', " （提案）"
+      ),
+      !isEditing && !alreadyApplied && /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
+        /*#__PURE__*/React.createElement("button", {
+          type: "button", className: "btn btn-sm btn-primary",
+          onClick: () => doDecide({ kind: 'adopt', title: choice.title, durationMinutes: choice.durationMinutes, dueDate: choice.dueDate })
+        }, "この案を採用する"),
+        /*#__PURE__*/React.createElement("button", {
+          type: "button", className: "btn btn-sm btn-outline",
+          onClick: () => setEditingChoice({ key, title: choice.title, durationMinutes: choice.durationMinutes != null ? String(choice.durationMinutes) : '', dueDate: choice.dueDate || '' })
+        }, "編集して採用する")
+      ),
+      isEditing && (() => {
+        const durNum = (() => { const n = parseInt(editingChoice.durationMinutes, 10); return Number.isInteger(n) && n > 0 && n <= 480 ? n : null; })();
+        return /*#__PURE__*/React.createElement("div", { style: { marginTop: 8, borderTop: '1px dashed var(--border)', paddingTop: 8 } },
+          /*#__PURE__*/React.createElement("input", { className: "form-input", style: { marginBottom: 6 }, value: editingChoice.title, maxLength: NEXUS_DOT_TITLE_MAX_LEN, onChange: e => setEditingChoice({ ...editingChoice, title: e.target.value }) }),
+          /*#__PURE__*/React.createElement("input", { className: "form-input", style: { marginBottom: 6 }, placeholder: "所要時間（分）", value: editingChoice.durationMinutes, onChange: e => setEditingChoice({ ...editingChoice, durationMinutes: e.target.value }) }),
+          /*#__PURE__*/React.createElement("input", { className: "form-input", style: { marginBottom: 6 }, type: "date", value: editingChoice.dueDate, onChange: e => setEditingChoice({ ...editingChoice, dueDate: e.target.value }) }),
+          /*#__PURE__*/React.createElement("div", { style: { fontSize: 11.5, color: 'var(--text-sub)', marginBottom: 8 } },
+            "現在値：", task.title, " ／ ", task.dotDurationMinutes != null ? task.dotDurationMinutes + '分' : '未定', " ／ ", task.date || '未定',
+            /*#__PURE__*/React.createElement("br"), "変更後：", editingChoice.title, " ／ ", durNum != null ? durNum + '分' : '未定', " ／ ", editingChoice.dueDate || '未定'
+          ),
+          /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 8 } },
+            /*#__PURE__*/React.createElement("button", {
+              type: "button", className: "btn btn-sm btn-primary",
+              onClick: () => doDecide({ kind: 'adopt_edited', title: editingChoice.title, durationMinutes: durNum, dueDate: editingChoice.dueDate || null })
+            }, "この内容で採用する"),
+            /*#__PURE__*/React.createElement("button", { type: "button", className: "btn btn-sm btn-outline", onClick: () => setEditingChoice(null) }, "やめる")
+          )
+        );
+      })()
+    );
+  };
+
+  return /*#__PURE__*/React.createElement("div", { className: "full-screen" },
+    /*#__PURE__*/React.createElement("div", { className: "full-header" },
+      /*#__PURE__*/React.createElement("button", { onClick: onClose, style: { background: 'none', border: 'none', cursor: 'pointer', fontSize: 15, color: 'var(--text-sub)', fontWeight: 600, padding: '4px 8px' } }, "← 戻る"),
+      /*#__PURE__*/React.createElement("div", { style: { flex: 1, fontWeight: 700, fontSize: 15 } }, "🤝 Dotへ相談する")
+    ),
+    /*#__PURE__*/React.createElement("div", { className: "full-content" },
+      /*#__PURE__*/React.createElement("div", {
+        style: { fontSize: 11.5, color: 'var(--text-sub)', marginBottom: 10, lineHeight: 1.7, background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 10, padding: '10px 12px' }
+      }, "依頼JSONには、確認済みの分類・期限・所要時間と、ここで入力した相談内容だけが含まれます。記憶の本文・氏名・住所等は含みません。相談内容は空欄でも使用でき、空欄の場合は提案が一般的な内容になります。Dotからの回答はNEXUS側で検証し、確認済みの事実はこちら側の値をそのまま表示します（応答に書かれた値は使いません）。"),
+
+      /*#__PURE__*/React.createElement("div", { className: "section-header" }, "関連タスク"),
+      /*#__PURE__*/React.createElement("div", { className: "card", style: { marginBottom: 12, fontSize: 13.5, fontWeight: 600 } }, task.title),
+
+      isStaleRestored && /*#__PURE__*/React.createElement("div", {
+        style: { marginBottom: 12, background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: '10px 12px', fontSize: 12.5, color: 'var(--danger)', fontWeight: 600, lineHeight: 1.6 }
+      }, "⚠️ この依頼・回答はバックアップからの復元によるものです。復元前の依頼・回答はそのまま採用できません。下記から新しく依頼を出し直してください。"),
+
+      ((!alreadyApplied && !isHeld) || isStaleRestored) && /*#__PURE__*/React.createElement(React.Fragment, null,
+        /*#__PURE__*/React.createElement("div", { className: "section-header" }, "ご相談内容（任意）"),
+        /*#__PURE__*/React.createElement("div", { className: "card", style: { marginBottom: 12 } },
+          /*#__PURE__*/React.createElement("textarea", { className: "form-textarea", style: { minHeight: 70, marginBottom: 4 }, maxLength: NEXUS_DOT_QUESTION_MAX_LEN, placeholder: "相談（200文字以内・任意）", value: question, onChange: e => setQuestion(e.target.value) }),
+          /*#__PURE__*/React.createElement("div", { style: { fontSize: 11, color: 'var(--text-sub)', marginBottom: 8, textAlign: 'right' } }, question.length, "/", NEXUS_DOT_QUESTION_MAX_LEN),
+          !questionRisk.ok && /*#__PURE__*/React.createElement("div", { style: { marginBottom: 8, background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: '8px 10px', fontSize: 12, color: 'var(--danger)', fontWeight: 600 } }, "⚠️ 個人情報らしき内容が含まれている可能性があります（", questionRisk.issues.map(i => i.pattern).join('・'), "）。コピーする前に内容を見直してください。"),
+          /*#__PURE__*/React.createElement("textarea", { className: "form-textarea", style: { minHeight: 50, marginBottom: 4 }, maxLength: NEXUS_DOT_FUTURE_INTENT_MAX_LEN, placeholder: "未来の意図（120文字以内・任意）", value: futureIntent, onChange: e => setFutureIntent(e.target.value) }),
+          /*#__PURE__*/React.createElement("div", { style: { fontSize: 11, color: 'var(--text-sub)', marginBottom: 8, textAlign: 'right' } }, futureIntent.length, "/", NEXUS_DOT_FUTURE_INTENT_MAX_LEN),
+          !futureIntentRisk.ok && /*#__PURE__*/React.createElement("div", { style: { marginBottom: 8, background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: '8px 10px', fontSize: 12, color: 'var(--danger)', fontWeight: 600 } }, "⚠️ 個人情報らしき内容が含まれている可能性があります（", futureIntentRisk.issues.map(i => i.pattern).join('・'), "）。コピーする前に内容を見直してください。"),
+          /*#__PURE__*/React.createElement("div", { style: { fontSize: 11, color: 'var(--text-sub)' } }, "この検出は補助であり、安全を保証するものではありません。送出前に必ず内容をご自身で確認してください。")
+        ),
+        /*#__PURE__*/React.createElement("button", {
+          type: "button", className: "btn btn-primary btn-full", style: { marginBottom: 10 },
+          disabled: hasRisk,
+          onClick: doEnsureRequest
+        }, requestRecord ? "依頼を更新する" : "依頼を作成する"),
+        requestJson && /*#__PURE__*/React.createElement("div", { className: "card", style: { marginBottom: 12 } },
+          /*#__PURE__*/React.createElement("pre", { style: { fontSize: 10.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 220, overflow: 'auto', marginBottom: 8 } }, JSON.stringify(requestJson, null, 2)),
+          /*#__PURE__*/React.createElement("div", { style: { fontSize: 11, color: 'var(--text-sub)', marginBottom: 8 } }, "コピーすると、この依頼JSONに加えて、回答の形式（許可されるキー・型・文字数・IDをそのまま使う指示）と、この依頼用の回答例が一度に含まれます。"),
+          /*#__PURE__*/React.createElement("button", { type: "button", className: "btn btn-outline btn-full", disabled: hasRisk, onClick: doCopyRequest }, "📋 依頼とDotへの回答指示をコピー")
+        ),
+
+        requestRecord && requestRecord.status !== 'applied' && !isStaleRestored && /*#__PURE__*/React.createElement(React.Fragment, null,
+          /*#__PURE__*/React.createElement("div", { className: "section-header" }, "Dotからの回答を取り込む"),
+          /*#__PURE__*/React.createElement("div", { className: "card", style: { marginBottom: 12 } },
+            /*#__PURE__*/React.createElement("textarea", { className: "form-textarea", style: { minHeight: 140, marginBottom: 8, fontFamily: 'monospace', fontSize: 11 }, placeholder: "Dotからの回答JSONをそのまま貼り付け...", value: pasteText, onChange: e => setPasteText(e.target.value) }),
+            submitErrors && /*#__PURE__*/React.createElement("div", { style: { marginBottom: 8, background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: '8px 10px', fontSize: 11.5, color: 'var(--danger)' } }, RESPONSE_FIELD_ERROR_HINT, /*#__PURE__*/React.createElement("div", { style: { marginTop: 4, fontFamily: 'monospace', wordBreak: 'break-word' } }, submitErrors.join(', '))),
+            /*#__PURE__*/React.createElement("button", { type: "button", className: "btn btn-primary btn-full", disabled: !pasteText.trim(), onClick: doSubmitResponse }, "取り込む")
+          )
+        )
+      ),
+
+      response && !isStaleRestored && /*#__PURE__*/React.createElement(React.Fragment, null,
+        (alreadyApplied || isHeld) && /*#__PURE__*/React.createElement("div", {
+          style: { marginBottom: 12, padding: '8px 12px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, background: alreadyApplied ? '#DCFCE7' : '#F3F4F6', color: alreadyApplied ? '#16A34A' : 'var(--text-sub)' }
+        }, alreadyApplied ? '✅ 採用済み（タスクへ反映済みです）' : '保留中（まだタスクへ反映していません）'),
+        response.facts.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null,
+          /*#__PURE__*/React.createElement("div", { className: "section-header" }, "確認済みの事実（facts）"),
+          /*#__PURE__*/React.createElement("div", { className: "card", style: { marginBottom: 12 } }, response.facts.map(f => /*#__PURE__*/React.createElement("div", { key: f.field, style: { fontSize: 12.5, marginBottom: 4 } },
+            NEXUS_DOT_SOURCE_FIELD_LABELS[f.field] || f.field, "：", Array.isArray(f.value) ? f.value.join('・') : (f.value === null || f.value === undefined ? '（なし）' : String(f.value))
+          )))
+        ),
+        response.unknowns.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null,
+          /*#__PURE__*/React.createElement("div", { className: "section-header" }, "未確認の項目（unknowns）"),
+          /*#__PURE__*/React.createElement("div", { className: "card", style: { marginBottom: 12, fontSize: 12.5, color: 'var(--text-sub)' } }, response.unknowns.map(f => NEXUS_DOT_SOURCE_FIELD_LABELS[f] || f).join('・'))
+        ),
+        response.nextStep && /*#__PURE__*/React.createElement(React.Fragment, null,
+          /*#__PURE__*/React.createElement("div", { className: "section-header" }, "次の行動（提案）"),
+          renderChoiceCard(response.nextStep, 'nextStep', '次の行動')
+        ),
+        response.options.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null,
+          /*#__PURE__*/React.createElement("div", { className: "section-header" }, "他の選択肢（最大3件）"),
+          response.options.map((o, i) => renderChoiceCard(o, 'option' + i, '選択肢'))
+        ),
+        response.futureLink && /*#__PURE__*/React.createElement(React.Fragment, null,
+          /*#__PURE__*/React.createElement("div", { className: "section-header" }, "将来につながる提案"),
+          /*#__PURE__*/React.createElement("div", { className: "card", style: { marginBottom: 12, fontSize: 12.5 } }, response.futureLink)
+        ),
+        !alreadyApplied && /*#__PURE__*/React.createElement("button", {
+          type: "button", className: "btn btn-outline btn-full", style: { marginBottom: 12 },
+          onClick: () => doDecide({ kind: 'held' })
+        }, "今回は保留する"),
+        alreadyApplied && requestRecord.decision && /*#__PURE__*/React.createElement("div", { style: { fontSize: 11.5, color: 'var(--text-sub)', marginBottom: 12 } },
+          "採用内容：", requestRecord.decision.title, "／", requestRecord.decision.durationMinutes != null ? requestRecord.decision.durationMinutes + '分' : '未定', "／", requestRecord.decision.dueDate || '未定',
+          requestRecord.decision.dateSkippedReason === 'unsafe_date_kind' && /*#__PURE__*/React.createElement("div", null, "（このタスクは日付の意味が異なるため、期限は更新していません）")
+        )
+      ),
+
+      (historyRequests || []).length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null,
+        /*#__PURE__*/React.createElement("div", { className: "section-header" }, "これまでの相談"),
+        historyRequests.map(r => /*#__PURE__*/React.createElement("div", { key: r.id, className: "card", style: { marginBottom: 8, fontSize: 12, color: 'var(--text-sub)' } },
+          nexusFormatMemoryDateTime(r.createdAt), "：", r.status === 'applied' ? '採用済み' : r.status === 'held' ? '保留' : r.status
+        ))
+      )
+    ),
+    toast && /*#__PURE__*/React.createElement("div", {
+      style: { position: 'fixed', bottom: 'calc(var(--safe-b) + 16px)', left: '50%', transform: 'translateX(-50%)', background: '#22C55E', color: '#fff', borderRadius: 12, padding: '12px 20px', fontSize: 14, fontWeight: 600, boxShadow: '0 4px 16px rgba(0,0,0,0.2)', zIndex: 100, whiteSpace: 'nowrap' }
+    }, toast)
+  );
+}
+
 function App() {
   // 顧客データ（ins.htmlと同じキーで引継ぎ）
   const [customers, setCustomers] = useLS('customers_v1', []);
@@ -46712,6 +47413,10 @@ function App() {
   const [nexusDotBridgeEnabled, setNexusDotBridgeEnabled] = useLS('ml_dot_bridge_enabled_v1', true);
   const [taskLinkMemoryTarget, setTaskLinkMemoryTarget] = useState(null);
   const [dotExportTarget, setDotExportTarget] = useState(null);
+  // 神メモ第2段階：記憶→dot相談→既存タスクへの反映の依頼一覧。第1段階と同じ
+  // 「機能そのものの停止スイッチ（nexusDotBridgeEnabled）」を共有し、専用の第2スイッチは作らない。
+  const [nexusDotRequests, setNexusDotRequests] = useLS('ml_dot_requests_v1', []);
+  const [dotConsultTarget, setDotConsultTarget] = useState(null);
   // ユーザーが実際に入力したcategory/tags/isPrivateは「確定済み」として扱い、自動整理で
   // 上書きされないようにフラグを立てる（値そのものは書き換えない。あくまでフラグのみ追加）。
   const nexusWithManualConfirmedFlags = data => ({
@@ -47022,6 +47727,234 @@ function App() {
       ok: true
     });
   };
+
+  // ══════════════════════════════════════════════════════════════
+  // ── 神メモ第2段階：依頼の作成・応答の取込・採用（既存タスクへの反映） ──
+  // 第1段階の設計（Web Locksでの直列化、処理中記録を先に書いてから本体を書く、
+  // 書込後の読み直しで確認してから成功とみなす、Reactの状態は検証済みの保存内容で
+  // そのまま置き換える＝他タブの変更を消さない）をそのまま踏襲する。
+  // ══════════════════════════════════════════════════════════════
+  const nexusDotConsultLocksSupported = () => typeof navigator !== 'undefined' && !!(navigator.locks && navigator.locks.request);
+  const nexusDotConsultWithLocks = (memoryId, taskId, fn) => navigator.locks.request('nexus-dot-consult:memory:' + memoryId, () => navigator.locks.request('nexus-dot-consult:task:' + taskId, fn));
+
+  // 依頼の作成・更新（まだ応答を受け取っていない間は、同じ組に対して常に1件のみ）。
+  // sourceは常にその場の最新の記憶・タスクから再生成する（まだ何も送出していないため、
+  // 最新化しても問題ない。応答が来た後の版不一致チェックとは別の話）。
+  const nexusDotConsultEnsureRequest = (memoryId, taskId, question, futureIntent) => {
+    if (!nexusDotBridgeEnabled) return Promise.resolve({ ok: false, reason: 'bridge_disabled' });
+    if (!nexusDotConsultLocksSupported()) return Promise.resolve({ ok: false, reason: 'locks_unsupported' });
+    return nexusDotConsultWithLocks(memoryId, taskId, () => memoryStore.reload().then(freshMemories => {
+      const memoriesById = new Map(freshMemories.map(m => [m.id, m]));
+      const freshMemory = memoriesById.get(memoryId);
+      const tasksRead = nexusReadTasksRawSafe();
+      if (!freshMemory || !tasksRead.ok) return { ok: false, reason: 'missing_target' };
+      const freshTask = tasksRead.tasks.find(t => t.id === taskId);
+      if (!freshTask) return { ok: false, reason: 'missing_target' };
+      if ((freshMemory.linkedTaskIds || [])[0] !== taskId || freshTask.sourceMemoryId !== memoryId) {
+        return { ok: false, reason: 'relink_changed' };
+      }
+      const block = nexusMemoryPrivacyBlockReason(memoryId, memoriesById);
+      if (block) return { ok: false, reason: 'private_blocked', privacyReason: block };
+      // 第1段階と同じ参照ID・版トークンの発行・再利用ロジックをそのまま使う。
+      const refRead = nexusReadDotRefMapSafe();
+      if (!refRead.ok) return refRead;
+      const step1 = nexusDotRefMapEnsure(refRead.map, 'memory', memoryId);
+      const step2 = nexusDotRefMapEnsure(step1.map, 'task', taskId);
+      const sourceFingerprint = nexusMemorySourceFingerprint(freshMemory);
+      const taskFingerprint = nexusTaskFingerprintForDot(freshTask);
+      const step3 = nexusDotRevisionTokenEnsure(step2.map, 'memory', memoryId, sourceFingerprint);
+      const step4 = nexusDotRevisionTokenEnsure(step3.map, 'task', taskId, taskFingerprint);
+      if (step4.map !== refRead.map) {
+        const refWrite = nexusWriteDotRefMapVerified(step4.map);
+        if (!refWrite.ok) return refWrite;
+      }
+      const eligibility = nexusDotDueDateEligibility(freshTask);
+      let source;
+      try {
+        source = nexusBuildDotExportJson({
+          memoryRefId: step1.refId,
+          taskRefId: step2.refId,
+          sourceRevision: step3.version,
+          taskRevision: step4.version,
+          action: freshTask.dotAction || null,
+          actionBasis: freshTask.dotAction ? 'user_confirmed' : 'unknown',
+          status: nexusDotStatusForTask(freshTask),
+          statusBasis: 'existing_explicit',
+          dueDate: eligibility.eligible ? freshTask.date : null,
+          dueDateBasis: eligibility.eligible ? 'existing_explicit' : 'unknown',
+          durationMinutes: freshTask.dotDurationMinutes != null ? freshTask.dotDurationMinutes : null,
+          durationBasis: freshTask.dotDurationMinutes != null ? 'user_confirmed' : 'unknown',
+          timezone: eligibility.eligible ? 'Asia/Tokyo' : null,
+          tags: freshTask.dotTags || [],
+          tagsBasis: (freshTask.dotTags || []).length > 0 ? 'user_confirmed' : 'unknown'
+        });
+      } catch (e) {
+        return { ok: false, reason: 'source_build_failed' };
+      }
+      const requestsRead = nexusReadDotRequestsRawSafe();
+      if (!requestsRead.ok) return requestsRead;
+      const existing = nexusDotFindActiveRequest(requestsRead.requests, memoryId, taskId);
+      const nowIso = new Date().toISOString();
+      let nextRequests;
+      let record;
+      if (existing) {
+        // 「同じ依頼の再コピー」＝まだ応答していない既存の依頼を更新するだけで、requestIdは増やさない。
+        record = { ...existing, source, context: { question: question || null, futureIntent: futureIntent || null }, updatedAt: nowIso };
+        nextRequests = requestsRead.requests.map(r => r.id === existing.id ? record : r);
+      } else {
+        record = {
+          id: uid(), schemaVersion: NEXUS_DOT_PHASE2_SCHEMA_VERSION, memoryId, taskId,
+          requestId: nexusSecureRandomId(), source, context: { question: question || null, futureIntent: futureIntent || null },
+          createdAt: nowIso, status: 'awaiting_response', response: null, decision: null, appliedAt: null
+        };
+        nextRequests = [record, ...requestsRead.requests];
+      }
+      const writeResult = nexusWriteDotRequestsRawVerified(nextRequests);
+      if (!writeResult.ok) return writeResult;
+      setNexusDotRequests(nextRequests);
+      let requestJson;
+      try {
+        requestJson = nexusDotBuildConsultRequestJson({ requestId: record.requestId, source, question: record.context.question, futureIntent: record.context.futureIntent });
+      } catch (e) {
+        return { ok: false, reason: 'request_build_failed' };
+      }
+      return { ok: true, record, requestJson };
+    }));
+  };
+
+  // 応答の取込・検証。requestRecordの保存値（requestId・参照ID・版・source・context）だけを
+  // 信頼し、貼り付けられたJSON自体は一切信頼しない（型・許可値・文字数をすべて検証する）。
+  const nexusDotConsultSubmitResponse = (requestId, rawText) => {
+    if (!nexusDotBridgeEnabled) return Promise.resolve({ ok: false, reason: 'bridge_disabled' });
+    let parsed;
+    try {
+      parsed = JSON.parse(rawText);
+    } catch (e) {
+      return Promise.resolve({ ok: false, reason: 'invalid_json' });
+    }
+    const requestsRead = nexusReadDotRequestsRawSafe();
+    if (!requestsRead.ok) return Promise.resolve(requestsRead);
+    const record = requestsRead.requests.find(r => r.requestId === requestId);
+    if (!record) return Promise.resolve({ ok: false, reason: 'request_not_found' });
+    if (record.restoredInvalid) return Promise.resolve({ ok: false, reason: 'restored_requires_reissue' });
+    if (record.status !== 'awaiting_response') {
+      const sameAsStored = record.responseRaw !== undefined && JSON.stringify(parsed) === JSON.stringify(JSON.parse(record.responseRaw));
+      if (sameAsStored) return Promise.resolve({ ok: true, validated: record.response, duplicate: true });
+      return Promise.resolve({ ok: false, reason: 'response_already_exists_different' });
+    }
+    return memoryStore.reload().then(freshMemories => {
+      const memoriesById = new Map(freshMemories.map(m => [m.id, m]));
+      const freshMemory = memoriesById.get(record.memoryId);
+      const tasksRead = nexusReadTasksRawSafe();
+      if (!freshMemory || !tasksRead.ok) return { ok: false, reason: 'missing_target' };
+      const freshTask = tasksRead.tasks.find(t => t.id === record.taskId);
+      if (!freshTask) return { ok: false, reason: 'missing_target' };
+      if ((freshMemory.linkedTaskIds || [])[0] !== record.taskId || freshTask.sourceMemoryId !== record.memoryId) {
+        return { ok: false, reason: 'relink_changed' };
+      }
+      const block = nexusMemoryPrivacyBlockReason(record.memoryId, memoriesById);
+      if (block) return { ok: false, reason: 'private_blocked', privacyReason: block };
+      const validation = nexusDotValidateConsultResponseJson(parsed, record);
+      if (!validation.ok) return { ok: false, reason: 'invalid_response', errors: validation.errors };
+      const nextRecord = { ...record, status: 'response_received', response: validation.validated, responseRaw: JSON.stringify(parsed), responseReceivedAt: new Date().toISOString() };
+      const nextRequests = requestsRead.requests.map(r => r.id === record.id ? nextRecord : r);
+      const writeResult = nexusWriteDotRequestsRawVerified(nextRequests);
+      if (!writeResult.ok) return writeResult;
+      setNexusDotRequests(nextRequests);
+      return { ok: true, validated: validation.validated };
+    });
+  };
+
+  // 本人の採用／編集して採用／保留。採用の場合だけ、既存タスクへの反映（apply）を行う。
+  const nexusDotConsultDecide = (requestId, decisionInput) => {
+    if (!nexusDotBridgeEnabled) return Promise.resolve({ ok: false, reason: 'bridge_disabled' });
+    const requestsRead = nexusReadDotRequestsRawSafe();
+    if (!requestsRead.ok) return Promise.resolve(requestsRead);
+    const record = requestsRead.requests.find(r => r.requestId === requestId);
+    if (!record) return Promise.resolve({ ok: false, reason: 'request_not_found' });
+    // 復元した未適用の依頼（restoredInvalid）は、保留・採用のどちらも行えない。
+    // 必ず新しく依頼を出し直してから（＝別の、restoredInvalidが付かない依頼として）操作する。
+    if (record.restoredInvalid && record.status !== 'applied') return Promise.resolve({ ok: false, reason: 'restored_requires_reissue' });
+    if (decisionInput.kind === 'held') {
+      if (record.status !== 'response_received' && record.status !== 'held') return Promise.resolve({ ok: false, reason: 'invalid_state' });
+      const nextRecord = { ...record, status: 'held', decision: { kind: 'held', decidedAt: new Date().toISOString() } };
+      const nextRequests = requestsRead.requests.map(r => r.id === record.id ? nextRecord : r);
+      const writeResult = nexusWriteDotRequestsRawVerified(nextRequests);
+      if (!writeResult.ok) return Promise.resolve(writeResult);
+      setNexusDotRequests(nextRequests);
+      return Promise.resolve({ ok: true });
+    }
+    // 採用／編集して採用：同じ内容での再採用は冪等に成功とみなし、別内容での再採用は拒否する。
+    if (record.status === 'applied') {
+      const same = record.decision && record.decision.kind === decisionInput.kind && record.decision.title === decisionInput.title && record.decision.durationMinutes === decisionInput.durationMinutes && record.decision.dueDate === decisionInput.dueDate;
+      return Promise.resolve(same ? { ok: true, alreadyApplied: true } : { ok: false, reason: 'already_applied_different_decision' });
+    }
+    // 「保留」から後で採用することも許可する（保留＝まだ適用していない、という状態の一つ）。
+    if (record.status !== 'response_received' && record.status !== 'held') return Promise.resolve({ ok: false, reason: 'invalid_state' });
+    if (!nexusDotConsultLocksSupported()) return Promise.resolve({ ok: false, reason: 'locks_unsupported' });
+    return nexusDotConsultWithLocks(record.memoryId, record.taskId, () => memoryStore.reload().then(freshMemories => {
+      // 採用直前にも、コピー直前・取込時と同じ観点（PRIVATE／由来不明／未確認のPRIVATE候補・
+      // 記憶の削除・記憶とタスクの再関連付け）を再確認する。応答取込後に時間を置いて採用する
+      // ケース（保留からの採用を含む）があるため、ここで再確認しないと古い前提のまま
+      // タスクへ反映してしまう可能性がある。
+      const memoriesById = new Map(freshMemories.map(m => [m.id, m]));
+      const freshMemory = memoriesById.get(record.memoryId);
+      if (!freshMemory) return { ok: false, reason: 'missing_target' };
+      const block = nexusMemoryPrivacyBlockReason(record.memoryId, memoriesById);
+      if (block) return { ok: false, reason: 'private_blocked', privacyReason: block };
+      const tasksRead = nexusReadTasksRawSafe();
+      if (!tasksRead.ok) return tasksRead;
+      const freshTask = tasksRead.tasks.find(t => t.id === record.taskId);
+      if (!freshTask) return { ok: false, reason: 'task_missing' };
+      if ((freshMemory.linkedTaskIds || [])[0] !== record.taskId || freshTask.sourceMemoryId !== record.memoryId) {
+        return { ok: false, reason: 'relink_changed' };
+      }
+      // 前回の試行が途中中断していないかを、同じrequestIdの処理中記録で確認する。
+      const pendingRead = nexusReadDotApplyPendingMapSafe();
+      if (!pendingRead.ok) return pendingRead;
+      const existingOpId = Object.keys(pendingRead.map).find(k => pendingRead.map[k].requestId === requestId);
+      const existingEntry = existingOpId ? pendingRead.map[existingOpId] : null;
+      if (existingEntry) {
+        const state = nexusDotApplyPendingReconcile(existingEntry, freshTask);
+        if (state === 'conflict') return { ok: false, reason: 'conflict_concurrent_change' };
+        if (state === 'already_applied') {
+          const nextRecord = { ...record, status: 'applied', appliedAt: new Date().toISOString(), decision: { kind: decisionInput.kind, title: decisionInput.title, durationMinutes: decisionInput.durationMinutes, dueDate: decisionInput.dueDate, decidedAt: new Date().toISOString() } };
+          const nextRequests = requestsRead.requests.map(r => r.id === record.id ? nextRecord : r);
+          const writeResult = nexusWriteDotRequestsRawVerified(nextRequests);
+          if (!writeResult.ok) return writeResult;
+          setNexusDotRequests(nextRequests);
+          nexusClearDotApplyPendingEntry(existingOpId);
+          return { ok: true, recovered: true };
+        }
+        // not_started：前回は何も反映されていない。同じ操作IDのまま、下の通常手順でやり直す。
+      }
+      const operationId = existingOpId || uid();
+      const { patch, dateSkippedReason } = nexusDotComputeApplyPatch(freshTask, decisionInput);
+      const before = {};
+      const after = {};
+      Object.keys(patch).forEach(k => {
+        before[k] = freshTask[k] === undefined ? null : freshTask[k];
+        after[k] = patch[k];
+      });
+      const pendingWrite = nexusSetDotApplyPendingVerified(operationId, { requestId, taskId: record.taskId, before, after, startedAt: new Date().toISOString() });
+      if (!pendingWrite.ok) return pendingWrite;
+      const nextTasks = tasksRead.tasks.map(t => t.id === record.taskId ? { ...t, ...patch } : t);
+      const taskWrite = nexusWriteTasksRawVerified(nextTasks);
+      if (!taskWrite.ok) return taskWrite;
+      setTasks(nextTasks);
+      const nextRecord = { ...record, status: 'applied', appliedAt: new Date().toISOString(), decision: { kind: decisionInput.kind, title: decisionInput.title, durationMinutes: decisionInput.durationMinutes, dueDate: decisionInput.dueDate, decidedAt: new Date().toISOString(), dateSkippedReason } };
+      const nextRequests = requestsRead.requests.map(r => r.id === record.id ? nextRecord : r);
+      const writeResult = nexusWriteDotRequestsRawVerified(nextRequests);
+      if (!writeResult.ok) {
+        // タスク側は確認済みだが、依頼レコードの更新が未確定。処理中記録は残し、再試行での復旧に委ねる。
+        return { ok: false, reason: 'request_record_save_failed_task_already_applied' };
+      }
+      setNexusDotRequests(nextRequests);
+      nexusClearDotApplyPendingEntry(operationId);
+      return { ok: true, dateSkippedReason };
+    }));
+  };
+
   const handleMemoryLink = targetId => {
     if (!selectedMemory) return;
     const target = memoryStore.memories.find(m => m.id === targetId);
@@ -47351,6 +48284,7 @@ function App() {
           setNexusServiceLinks,
           setNexusMission,
           setNexusSavedSearches,
+          setNexusDotRequests,
           setNexusAiIdCounter,
           setNexusAiIdMigrationDone,
           setNexusAiContractIdCounter,
@@ -47378,6 +48312,7 @@ function App() {
       nexusServiceLinks,
       nexusMission,
       nexusSavedSearches,
+      nexusDotRequests,
       nexusAiIdCounter,
       nexusAiIdMigrationDone,
       nexusAiContractIdCounter,
@@ -47679,6 +48614,10 @@ function App() {
     onOpenDotExport: task => setDotExportTarget({
       memoryId: selectedMemory.id,
       taskId: task.id
+    }),
+    onOpenDotConsult: task => setDotConsultTarget({
+      memoryId: selectedMemory.id,
+      taskId: task.id
     })
   }), nexusDotBridgeEnabled && taskLinkMemoryTarget && /*#__PURE__*/React.createElement(NexusMemoryTaskLinkScreen, {
     memory: memoryStore.memories.find(x => x.id === taskLinkMemoryTarget.id) || taskLinkMemoryTarget,
@@ -47698,6 +48637,26 @@ function App() {
       task: exportTask,
       onSaveTaskDotFields: handleMemoryTaskDotFieldsSave,
       onClose: () => setDotExportTarget(null)
+    });
+  })(), nexusDotBridgeEnabled && dotConsultTarget && (() => {
+    const consultMemory = memoryStore.memories.find(x => x.id === dotConsultTarget.memoryId);
+    const consultTask = tasks.find(t => t.id === dotConsultTarget.taskId);
+    if (!consultMemory || !consultTask) return null;
+    // nexusDotRequestsは新しい依頼ほど先頭（nexusDotConsultEnsureRequestが先頭に追加する）。
+    // そのため最初の1件が「この組の最新の相談」、残りが「これまでの相談」履歴になる。
+    const pairRequests = nexusDotRequests.filter(r => r.memoryId === dotConsultTarget.memoryId && r.taskId === dotConsultTarget.taskId);
+    const focusRequest = pairRequests[0] || null;
+    const historyRequests = pairRequests.slice(1);
+    return /*#__PURE__*/React.createElement(NexusDotConsultScreen, {
+      memory: consultMemory,
+      task: consultTask,
+      customers: customers,
+      activeRequest: focusRequest,
+      historyRequests: historyRequests,
+      onEnsureRequest: (question, futureIntent) => nexusDotConsultEnsureRequest(dotConsultTarget.memoryId, dotConsultTarget.taskId, question, futureIntent),
+      onSubmitResponse: (requestId, rawText) => nexusDotConsultSubmitResponse(requestId, rawText),
+      onDecide: (requestId, decisionInput) => nexusDotConsultDecide(requestId, decisionInput),
+      onClose: () => setDotConsultTarget(null)
     });
   })(), nexusMemoryExploreTarget && /*#__PURE__*/React.createElement(NexusMemoryExploreScreen, {
     memory: memoryStore.memories.find(x => x.id === nexusMemoryExploreTarget.id) || nexusMemoryExploreTarget,
