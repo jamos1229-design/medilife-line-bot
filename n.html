@@ -9322,6 +9322,7 @@ function NexusFanFollowRecordForm({
   setOpportunities,
   setActivityLogs,
   setCustomers,
+  tasks,
   setTasks,
   onSave,
   onQuickSave,
@@ -9340,17 +9341,23 @@ function NexusFanFollowRecordForm({
     sendMethod: '',
     messageText: '',
     memo: '',
+    // 旧データ（電話フォロー専用設計）：readAt／repliedAt／phoneFollowStatus／phoneFollowDateは
+    // 削除せず残すが、この改修以降、新しい記録UIは二度とこれらへ書き込まない。以後の接触は
+    // すべてcontacts配列（1 contact = 1回の接触）に記録する。表示・集計時はnexusFanNormalizedContacts
+    // が、旧項目からの仮想contactと新しいcontacts実データを常にマージし、重複（method・result・
+    // 日付が一致するもの）だけを取り除く（contactsが増えても旧履歴が消えることはない）。
     readAt: '',
     repliedAt: '',
-    // 電話フォロー：既存データ構造（活動履歴・最終接触・連絡方法等）を調査した結果、
-    // 「電話した／不通／折返し待ち」のような通話結果を記録できる既存項目が無かったため、
-    // 必要最小限のこの2項目のみを追加する。phoneFollowStatusが空文字＝「記録なし（未確認）」、
-    // '未実施'は「確認した結果、まだ電話していない」という明示的な状態として区別する
-    // （「記録が無い」と「まだ電話していない」を同じ意味にしない、という要件のため）。
     phoneFollowStatus: '',
     phoneFollowDate: '',
+    // フォロー・接触記録（新データ）：時系列で何回でも追加できる。
+    contacts: [],
+    // 「次回フォロー」を既存の「次にすること」（tasksストア、source:'fanFollowTask'）へ
+    // 冪等に反映した際のタスクid（nexusFanFollowSyncNextThingTask参照）。
+    nextThingTaskId: '',
     relatedActivityLogId: '',
     nextFollowDate: '',
+    nextFollowMethod: '',
     nextFollowAction: '',
     noFollowNeeded: false,
     createdAt: '',
@@ -9359,10 +9366,77 @@ function NexusFanFollowRecordForm({
   };
   const [form, setForm] = useState(() => ({ ...blank, ...(editing || {}) }));
   const [bridgeOpen, setBridgeOpen] = useState(false);
+  // フォロー・接触記録の入力途中状態（method→resultの2タップで記録。面談予定／紹介ありの
+  // 時だけ、記録前に最小限の追加項目を入力できるようにする）。
+  const [draftDirection, setDraftDirection] = useState('outbound');
+  const [draftMethod, setDraftMethod] = useState('');
+  const [pendingResult, setPendingResult] = useState('');
+  const [meetingAt, setMeetingAt] = useState('');
+  const [meetingMode, setMeetingMode] = useState('');
+  const [meetingPurpose, setMeetingPurpose] = useState('');
+  const [referralCountInput, setReferralCountInput] = useState('');
+  const [referralMemoInput, setReferralMemoInput] = useState('');
+  const [expandedContactId, setExpandedContactId] = useState(null);
+  const [referralRegisterFor, setReferralRegisterFor] = useState(null);
   const s = k => v => setForm(f => ({ ...f, [k]: v }));
   const si = k => e => s(k)(e.target.value);
   const relatedCustomer = (customers || []).find(c => c.id === form.customerId);
   const stage = nexusFanFollowDownstreamStage(form, activityLogs, customers);
+  const timeline = nexusFanContactTimeline(form, campaignType);
+  const hasConsultResult = timeline.some(c => c.result === '相談になった');
+  // フォロー・接触記録を1件追加し、既存のクイック保存（相談・問合せ橋渡しと同じパターン）で
+  // 即座に永続化する。新規記録（まだform.idが無い）でもこの時点でidを確定する。
+  const persistContacts = nextContacts => {
+    const now = new Date().toISOString();
+    setForm(f => {
+      const updated = { ...f, id: f.id || uid(), contacts: nextContacts, createdAt: f.createdAt || now, updatedAt: now };
+      if (onQuickSave) onQuickSave(updated);
+      return updated;
+    });
+  };
+  const resetDraft = () => {
+    setDraftMethod('');
+    setDraftDirection('outbound');
+    setPendingResult('');
+    setMeetingAt('');
+    setMeetingMode('');
+    setMeetingPurpose('');
+    setReferralCountInput('');
+    setReferralMemoInput('');
+  };
+  const commitContact = (resultValue, extra) => {
+    if (!draftMethod) return;
+    const now = new Date().toISOString();
+    const contact = { ...nexusFanContactBlank(), id: uid(), occurredAt: todayStr(), direction: draftDirection, method: draftMethod, result: resultValue, createdAt: now, updatedAt: now, ...(extra || {}) };
+    persistContacts([...(form.contacts || []), contact]);
+    resetDraft();
+  };
+  // 面談予定／紹介ありは、記録そのものを価値あるものにする最小限の追加項目（日時／人数等）が
+  // あるため、この2種類だけ確認の1タップを挟む。それ以外の結果は方法→結果の2タップで即記録する。
+  const handleResultTap = resultValue => {
+    if (!draftMethod) return;
+    if (resultValue === '面談予定' || resultValue === '紹介あり') {
+      setPendingResult(resultValue);
+      return;
+    }
+    commitContact(resultValue);
+  };
+  const confirmPendingResult = () => {
+    if (pendingResult === '面談予定') commitContact('面談予定', { meetingAt, meetingMode, meetingPurpose });
+    else if (pendingResult === '紹介あり') commitContact('紹介あり', { referralCount: referralCountInput, referralMemo: referralMemoInput });
+  };
+  const updateContact = (id, patch) => {
+    const now = new Date().toISOString();
+    persistContacts((form.contacts || []).map(c => c.id === id ? { ...c, ...patch, updatedAt: now } : c));
+  };
+  const deleteContact = id => {
+    const now = new Date().toISOString();
+    persistContacts((form.contacts || []).map(c => c.id === id ? { ...c, deletedAt: now } : c));
+  };
+  const toggleTopic = (contact, topic) => {
+    const has = (contact.topics || []).includes(topic);
+    updateContact(contact.id, { topics: has ? contact.topics.filter(t => t !== topic) : [...(contact.topics || []), topic] });
+  };
   // キャンペーン種類（未設定の場合は従来通り「記事」前提のまま）に応じて、最初のアクションの
   // ラベル・入力欄構成だけを切り替える。相談以降の判定・集計（stage／nexusFanFollowMetricsGroup）
   // は種類に関係なく完全に同じ処理を使う。
@@ -9370,8 +9444,13 @@ function NexusFanFollowRecordForm({
   const save = () => {
     if (!form.customerId && !(form.customerNameText || '').trim()) return;
     const now = new Date().toISOString();
+    // 「次回フォロー」を既存の「次にすること」へ冪等に反映する（新しいタスク機能は作らず、
+    // 既存のnexusSyncNextThingTasksをsource:'fanFollowTask'で再利用。増殖しない）。
+    const sync = nexusFanFollowSyncNextThingTask(tasks, form, now);
+    if (setTasks) setTasks(sync.tasks);
     onSave({
       ...form,
+      nextThingTaskId: sync.nextThingTaskId,
       id: form.id || uid(),
       createdAt: form.createdAt || now,
       updatedAt: now
@@ -9400,41 +9479,144 @@ function NexusFanFollowRecordForm({
     className: `chip ${form.sendMethod === m ? 'active' : ''}`,
     onClick: () => s('sendMethod')(form.sendMethod === m ? '' : m)
   }, m)));
-  const oneTapRow = React.createElement("div", {
-    style: { display: 'flex', gap: 8, marginTop: 4 }
-  }, React.createElement("button", {
+  // ── フォロー・接触記録：方法→結果の2タップで記録。面談予定／紹介ありだけ最小限の
+  // 追加入力を挟む。「1 contact = 1回の接触」。誰から(direction)・方法(method)・結果(result)は
+  // 別項目として保存し、方法と結果を合成した値（例：「LINE返信」）は作らない。
+  const directionChips = React.createElement("div", {
+    style: { display: 'flex', gap: 6, marginBottom: 8 }
+  }, NEXUS_FAN_CONTACT_DIRECTIONS.map(d => React.createElement("button", {
+    key: d,
     type: "button",
-    className: `chip ${form.readAt ? 'active' : ''}`,
-    onClick: () => s('readAt')(form.readAt ? '' : todayStr())
-  }, form.readAt ? `✓ ${typeConfig.reactionLabel}（${form.readAt}）` : `${typeConfig.reactionLabel}にする`), React.createElement("button", {
-    type: "button",
-    className: `chip ${form.repliedAt ? 'active' : ''}`,
-    onClick: () => s('repliedAt')(form.repliedAt ? '' : todayStr())
-  }, form.repliedAt ? `✓ 返信あり（${form.repliedAt}）` : "返信あり"));
-  // 電話フォロー：ステータスチップ＋（電話を試みた場合のみ）実施日。未選択のまま＝「記録なし／
-  // 未確認」とし、「未実施」を明示的に選んだ場合と区別する（既存データの意味を勝手に決めつけない）。
-  const phoneFollowNeedsDate = ['電話した', '不通', '折返し待ち'].includes(form.phoneFollowStatus);
-  const phoneFollowChips = React.createElement("div", {
+    className: `chip ${draftDirection === d ? 'active' : ''}`,
+    style: { fontSize: 11.5 },
+    onClick: () => setDraftDirection(d)
+  }, NEXUS_FAN_CONTACT_DIRECTION_LABELS[d])));
+  const contactMethodChips = React.createElement("div", {
     style: { display: 'flex', flexWrap: 'wrap', gap: 8 }
-  }, NEXUS_FAN_PHONE_FOLLOW_STATUSES.map(st => React.createElement("button", {
-    key: st,
+  }, NEXUS_FAN_CONTACT_METHODS.map(m => React.createElement("button", {
+    key: m,
     type: "button",
-    className: `chip ${form.phoneFollowStatus === st ? 'active' : ''}`,
-    onClick: () => setForm(f => {
-      if (f.phoneFollowStatus === st) return { ...f, phoneFollowStatus: '', phoneFollowDate: '' };
-      const needsDate = ['電話した', '不通', '折返し待ち'].includes(st);
-      return { ...f, phoneFollowStatus: st, phoneFollowDate: needsDate ? (f.phoneFollowDate || todayStr()) : '' };
-    })
-  }, st)));
-  const phoneFollowSection = React.createElement("div", {
-    className: "form-group"
-  }, React.createElement("label", { className: "form-label" }, "電話フォロー（任意）"), phoneFollowChips, phoneFollowNeedsDate && React.createElement("input", {
-    type: "date",
+    className: `chip ${draftMethod === m ? 'active' : ''}`,
+    onClick: () => { setDraftMethod(m); setPendingResult(''); }
+  }, `${NEXUS_FAN_CONTACT_METHOD_ICONS[m] || ''} ${m}`)));
+  const contactResultChips = draftMethod && React.createElement("div", {
+    style: { display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }
+  }, NEXUS_FAN_CONTACT_RESULTS.map(r => React.createElement("button", {
+    key: r,
+    type: "button",
+    className: "chip",
+    onClick: () => handleResultTap(r)
+  }, r)));
+  const pendingMeetingFields = pendingResult === '面談予定' && React.createElement("div", {
+    style: { marginTop: 8, padding: 10, border: '1px dashed var(--border)', borderRadius: 10 }
+  }, React.createElement("div", { className: "form-group" }, React.createElement("label", { className: "form-label" }, "面談日時（任意）"), React.createElement("input", {
+    type: "datetime-local",
     className: "form-input",
-    style: { marginTop: 8 },
-    value: form.phoneFollowDate,
-    onChange: si('phoneFollowDate')
-  }));
+    value: meetingAt,
+    onChange: e => setMeetingAt(e.target.value)
+  })), React.createElement("div", { className: "form-group" }, React.createElement("label", { className: "form-label" }, "形式（任意）"), React.createElement("div", {
+    style: { display: 'flex', gap: 8 }
+  }, NEXUS_FAN_MEETING_MODES.map(m => React.createElement("button", {
+    key: m,
+    type: "button",
+    className: `chip ${meetingMode === m ? 'active' : ''}`,
+    onClick: () => setMeetingMode(meetingMode === m ? '' : m)
+  }, m)))), React.createElement("div", { className: "form-group" }, React.createElement("label", { className: "form-label" }, "面談目的（任意）"), React.createElement("input", {
+    className: "form-input",
+    value: meetingPurpose,
+    onChange: e => setMeetingPurpose(e.target.value)
+  })), React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-full",
+    onClick: confirmPendingResult
+  }, "記録する"));
+  const pendingReferralFields = pendingResult === '紹介あり' && React.createElement("div", {
+    style: { marginTop: 8, padding: 10, border: '1px dashed var(--border)', borderRadius: 10 }
+  }, React.createElement("div", { className: "form-group" }, React.createElement("label", { className: "form-label" }, "紹介人数（任意）"), React.createElement("input", {
+    type: "number",
+    min: 0,
+    className: "form-input",
+    value: referralCountInput,
+    onChange: e => setReferralCountInput(e.target.value)
+  })), React.createElement("div", { className: "form-group" }, React.createElement("label", { className: "form-label" }, "紹介者メモ（任意）"), React.createElement("input", {
+    className: "form-input",
+    value: referralMemoInput,
+    onChange: e => setReferralMemoInput(e.target.value)
+  })), React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-full",
+    onClick: confirmPendingResult
+  }, "記録する"));
+  const renderTimelineItem = c => {
+    const icon = NEXUS_FAN_CONTACT_METHOD_ICONS[c.method] || '📝';
+    const expanded = expandedContactId === c.id;
+    return React.createElement("div", {
+      key: c.id,
+      style: { border: '1px solid var(--border)', borderRadius: 10, marginBottom: 6, overflow: 'hidden' }
+    }, React.createElement("div", {
+      style: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', cursor: c.legacy ? 'default' : 'pointer' },
+      onClick: () => !c.legacy && setExpandedContactId(k => k === c.id ? null : c.id)
+    }, React.createElement("div", {
+      style: { flex: 1, minWidth: 0 }
+    }, React.createElement("div", {
+      style: { fontSize: 12.5, fontWeight: 700 }
+    }, `${icon} ${c.method}${c.legacy ? '（旧データ）' : ''}`), React.createElement("div", {
+      style: { fontSize: 11.5, color: 'var(--text-sub)' }
+    }, `${c.occurredAt || ''}　${NEXUS_FAN_CONTACT_DIRECTION_LABELS[c.direction] || ''}　${c.result || ''}`)), !c.legacy && c.result === '紹介あり' && React.createElement("button", {
+      type: "button",
+      onClick: e => { e.stopPropagation(); setReferralRegisterFor(c.id); },
+      style: { fontSize: 10.5, fontWeight: 700, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--accent)', color: 'var(--accent)', background: 'var(--accent-light)', flexShrink: 0, whiteSpace: 'nowrap' }
+    }, "紹介を登録")), expanded && React.createElement("div", {
+      style: { padding: 10, borderTop: '1px solid var(--border)' }
+    }, c.result === '面談予定' && React.createElement("div", {
+      style: { fontSize: 11.5, color: 'var(--text-sub)', marginBottom: 6 }
+    }, `面談予定：${c.meetingAt || '未定'}${c.meetingMode ? '・' + c.meetingMode : ''}${c.meetingPurpose ? '／' + c.meetingPurpose : ''}`), c.result === '紹介あり' && React.createElement("div", {
+      style: { fontSize: 11.5, color: 'var(--text-sub)', marginBottom: 6 }
+    }, `紹介人数：${c.referralCount || '未入力'}${c.referralMemo ? '／' + c.referralMemo : ''}`), React.createElement("div", {
+      style: { display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6 }
+    }, NEXUS_FAN_CONTACT_TOPICS.map(t => React.createElement("button", {
+      key: t,
+      type: "button",
+      className: `chip ${(c.topics || []).includes(t) ? 'active' : ''}`,
+      style: { fontSize: 11 },
+      onClick: () => toggleTopic(c, t)
+    }, t))), React.createElement("textarea", {
+      className: "form-textarea",
+      style: { minHeight: 40, width: '100%' },
+      placeholder: "メモ（任意）",
+      value: c.memo || '',
+      onChange: e => updateContact(c.id, { memo: e.target.value })
+    }), React.createElement("button", {
+      type: "button",
+      onClick: () => deleteContact(c.id),
+      style: { marginTop: 6, fontSize: 11, color: 'var(--danger)', background: 'none', border: 'none', cursor: 'pointer' }
+    }, "削除")));
+  };
+  const contactSection = React.createElement("div", {
+    className: "form-group"
+  }, React.createElement("label", { className: "form-label" }, "フォロー・接触記録"), directionChips, contactMethodChips, contactResultChips, pendingMeetingFields, pendingReferralFields, timeline.length > 0 && React.createElement("div", {
+    style: { marginTop: 10 }
+  }, timeline.map(renderTimelineItem)));
+  // 紹介があった場合の顧客登録（既存のCustomerForm・紹介管理（referredBy）をそのまま再利用。
+  // 紹介人数のKPIは引き続きnexusReferralCount（referredBy集計）を唯一の正とし、二重計上しない。
+  // 登録した顧客のidをその接触記録のreferredCustomerIdsへ残すことで、将来「この接触で
+  // 紹介された誰か」を辿れるようにする。
+  const referralRegisterSheet = referralRegisterFor && React.createElement(CustomerForm, {
+    editing: { name: '', referredBy: form.customerId || '', status: '未接触', contactMethod: '電話', contracts: [], suspects: [] },
+    customers: customers,
+    onSave: c => {
+      if (setCustomers) {
+        setCustomers(prev => {
+          const idx = prev.findIndex(x => x.id === c.id);
+          return idx >= 0 ? prev.map((x, i) => i === idx ? c : x) : [...prev, c];
+        });
+      }
+      const now = new Date().toISOString();
+      persistContacts((form.contacts || []).map(ct => ct.id === referralRegisterFor ? { ...ct, referredCustomerIds: [...(ct.referredCustomerIds || []), c.id], updatedAt: now } : ct));
+      setReferralRegisterFor(null);
+    },
+    onClose: () => setReferralRegisterFor(null)
+  });
   const handleBridgeSave = a => {
     if (setActivityLogs) {
       setActivityLogs(prev => {
@@ -9484,10 +9666,11 @@ function NexusFanFollowRecordForm({
     }
   }, "✅ 相談・問合せ登録済み（活動履歴で確認できます）") : React.createElement("button", {
     type: "button",
-    className: "btn btn-outline btn-full",
+    // 接触結果に「相談になった」がある場合だけ強調表示する（それ以外は目立たせない）。
+    className: hasConsultResult ? "btn btn-primary btn-full" : "btn btn-outline btn-full",
     disabled: !form.customerId && !(form.customerNameText || '').trim(),
     onClick: () => setBridgeOpen(true)
-  }, "💬 相談になった → 相談・問合せへ登録");
+  }, hasConsultResult ? "💬 相談になった → 相談・問合せとして登録しますか？" : "💬 相談になった → 相談・問合せへ登録");
   // 面談・提案・成約・紹介はボタンを置かず、常に自動判定した結果だけを読み取り専用で表示する
   const downstreamLabels = [stage.metAt && `面談 ${stage.metAt}`, stage.proposedAt && `提案 ${stage.proposedAt}`, stage.closedAt && `成約 ${stage.closedAt}`].filter(Boolean);
   const downstreamSection = downstreamLabels.length > 0 && React.createElement("div", {
@@ -9583,9 +9766,9 @@ function NexusFanFollowRecordForm({
     style: { resize: 'vertical', minHeight: 50 },
     value: form.memo,
     onChange: si('memo')
-  })), phoneFollowSection, oneTapRow, React.createElement("div", {
+  })), contactSection, React.createElement("div", {
     style: { marginTop: 12 }
-  }, consultSection), downstreamSection, bridgeDrawer, React.createElement("div", {
+  }, consultSection), downstreamSection, bridgeDrawer, referralRegisterSheet, React.createElement("div", {
     className: "form-group",
     style: { marginTop: 12 }
   }, React.createElement("label", {
@@ -9613,6 +9796,18 @@ function NexusFanFollowRecordForm({
       cursor: 'pointer'
     }
   }, "クリア"))), React.createElement("div", {
+    className: "form-group"
+  }, React.createElement("label", {
+    className: "form-label"
+  }, "次回フォローの方法（任意）"), React.createElement("div", {
+    style: { display: 'flex', flexWrap: 'wrap', gap: 6 }
+  }, NEXUS_FAN_CONTACT_METHODS.map(m => React.createElement("button", {
+    key: m,
+    type: "button",
+    className: `chip ${form.nextFollowMethod === m ? 'active' : ''}`,
+    style: { fontSize: 11.5 },
+    onClick: () => s('nextFollowMethod')(form.nextFollowMethod === m ? '' : m)
+  }, m)))), React.createElement("div", {
     className: "form-group"
   }, React.createElement("label", {
     className: "form-label"
@@ -9692,6 +9887,7 @@ function NexusFanFollowRecordList({
   opportunities,
   setOpportunities,
   setCustomers,
+  tasks,
   setTasks,
   limit
 }) {
@@ -9722,7 +9918,13 @@ function NexusFanFollowRecordList({
   const badgeStyle = { fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 10, background: '#E3F2FD', color: '#1565C0' };
   const row = f => {
     const stage = nexusFanFollowDownstreamStage(f, activityLogs, customers);
-    const badges = [f.readAt && nexusFanCampaignTypeConfig(campaignType).reactionLabel, f.phoneFollowStatus && `電話：${f.phoneFollowStatus}`, f.repliedAt && '返信', stage.consultedAt && '相談', stage.metAt && '面談', stage.proposedAt && '提案', stage.closedAt && '成約'].filter(Boolean);
+    // 一覧カードには「直近の接触」だけを表示する（複数履歴がある場合も最新の1件のみ）。
+    // 全履歴はこのカードをタップした先の詳細（編集画面）で確認する。
+    const latest = nexusFanLatestContact(f, campaignType);
+    const latestLine = latest && `${NEXUS_FAN_CONTACT_METHOD_ICONS[latest.method] || ''} ${latest.method}${latest.legacy ? '' : '（' + (NEXUS_FAN_CONTACT_DIRECTION_LABELS[latest.direction] || '') + '）'}`;
+    const latestResultLine = latest && latest.result;
+    const nextLine = f.nextFollowDate && `次回：${f.nextFollowDate}${f.nextFollowMethod ? ' ' + f.nextFollowMethod : ''}`;
+    const badges = [stage.consultedAt && '相談', stage.metAt && '面談', stage.proposedAt && '提案', stage.closedAt && '成約'].filter(Boolean);
     const rowCustomer = f.customerId ? findCustomer(f.customerId) : null;
     return React.createElement("div", {
       key: f.id,
@@ -9757,7 +9959,15 @@ function NexusFanFollowRecordList({
       style: { fontSize: 11.5, color: 'var(--text-sub)', flexShrink: 0 }
     }, f.sentDate)), f.articleTitle && React.createElement("div", {
       style: { fontSize: 12.5, color: 'var(--text-sub)', marginTop: 2 }
-    }, "📄 ", f.articleTitle), badges.length > 0 && React.createElement("div", {
+    }, "📄 ", f.articleTitle), latestLine && React.createElement("div", {
+      style: { marginTop: 4 }
+    }, React.createElement("div", {
+      style: { fontSize: 13, fontWeight: 700 }
+    }, latestLine), latestResultLine && React.createElement("div", {
+      style: { fontSize: 12.5, color: 'var(--text-sub)' }
+    }, latestResultLine)), nextLine && React.createElement("div", {
+      style: { fontSize: 11.5, color: 'var(--accent)', fontWeight: 700, marginTop: 4 }
+    }, nextLine), badges.length > 0 && React.createElement("div", {
       style: { display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }
     }, badges.map(b => React.createElement("span", {
       key: b,
@@ -9810,6 +10020,7 @@ function NexusFanFollowRecordList({
     setOpportunities: setOpportunities,
     setActivityLogs: setActivityLogs,
     setCustomers: setCustomers,
+    tasks: tasks,
     setTasks: setTasks,
     onSave: r => { saveRecord(r); setEditingRecord(null); },
     onQuickSave: r => saveRecord(r),
@@ -9825,6 +10036,7 @@ function NexusFanFollowRecordList({
     setOpportunities: setOpportunities,
     setActivityLogs: setActivityLogs,
     setCustomers: setCustomers,
+    tasks: tasks,
     setTasks: setTasks,
     onSave: r => { saveRecord(r); setAdding(false); },
     onQuickSave: r => saveRecord(r),
@@ -9951,7 +10163,14 @@ function NexusFanCampaignDashboardPanel({ campaign, follows, activityLogs, custo
   const attributeSection = attributeRows.length > 0 && React.createElement("div", {
     style: { marginTop: 14 }
   }, React.createElement("div", { className: "section-header" }, "属性別の反応"), attributeRows.map(r => breakdownRow(r.attribute, r.attribute, r)));
-  return React.createElement(React.Fragment, null, statGrid, funnelCard, articleSection, attributeSection);
+  // 接触方法別の件数（フォロー・接触記録より。初回送付は含まない）。
+  const methodRows = nexusFanContactMethodBreakdown(scopedFollows).filter(r => r.count > 0);
+  const methodSection = methodRows.length > 0 && React.createElement("div", {
+    style: { marginTop: 14 }
+  }, React.createElement("div", { className: "section-header" }, "接触方法別の件数"), React.createElement("div", {
+    style: { display: 'flex', flexWrap: 'wrap', gap: '4px 10px', fontSize: 11.5, color: 'var(--text-sub)' }
+  }, methodRows.map(r => React.createElement("span", { key: r.method }, `${NEXUS_FAN_CONTACT_METHOD_ICONS[r.method] || ''} ${r.method} ${r.count}`))));
+  return React.createElement(React.Fragment, null, statGrid, funnelCard, articleSection, attributeSection, methodSection);
 }
 // ── ファン化フォロー：最上位の全画面。キャンペーン選択＋ダッシュボード／今日のフォロー／記録一覧の
 // タブ切替＋キャンペーン追加。NexusAIAnalysisScreenと同じ.full-screen/.full-headerパターン。 ──
@@ -10058,6 +10277,7 @@ function NexusFanFollowScreen({
     opportunities: opportunities,
     setOpportunities: setOpportunities,
     setCustomers: setCustomers,
+    tasks: tasks,
     setTasks: setTasks,
     onRegisterCustomer: setRegisterCustomerName
   });
@@ -10072,6 +10292,7 @@ function NexusFanFollowScreen({
     opportunities: opportunities,
     setOpportunities: setOpportunities,
     setCustomers: setCustomers,
+    tasks: tasks,
     setTasks: setTasks,
     onRegisterCustomer: setRegisterCustomerName
   });
@@ -10156,18 +10377,26 @@ function nexusFanFollowIndividualProgressCsvRows(individualProgress) {
   const rowsOut = (individualProgress || []).map(r => [r.code, r.campaignName, r.measure, r.status, r.doneDate, r.reaction, r.phoneFollowStatus, r.phoneFollowDate, r.lineRegistered, r.consulted, r.met, r.proposed, r.closed, r.nextFollowDate, r.nextFollowAction]);
   return [header, ...rowsOut];
 }
-function nexusFanFollowAnalysisCsvText(rows, overview, individualProgress) {
+// 接触履歴明細（③・案B）：1 contact = 1行。顧客コード・キャンペーンIDのみで個人を識別し、
+// 自由記述は一切含めない（nexusFanContactDetailRowsのコメント参照）。
+function nexusFanFollowContactDetailCsvRows(contactDetails) {
+  const header = ['顧客コード', 'キャンペーンID', '種別', '発生日', '方向', '方法', '結果', 'テーマ', '面談形式', '紹介人数', '相談化', '面談化', '紹介化', '何回目の接触か', '初回送付からの日数'];
+  const rowsOut = (contactDetails || []).map(r => [r.code, r.campaignId, r.eventType, r.occurredAt, r.direction, r.method, r.result, (r.topics || []).join('・'), r.meetingMode, r.referralCount, r.consultedFlag ? 'あり' : '', r.metFlag ? 'あり' : '', r.referredFlag ? 'あり' : '', r.contactSequence, r.daysFromInitialSend === null ? '' : r.daysFromInitialSend]);
+  return [header, ...rowsOut];
+}
+function nexusFanFollowAnalysisCsvText(rows, overview, individualProgress, contactDetails) {
   const esc = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
   const toCsv = csvRows => csvRows.map(r => r.map(esc).join(',')).join('\n');
   const sections = [
     '■ キャンペーン概要', toCsv(nexusFanFollowOverviewCsvRows(overview)),
     '', '■ キャンペーン全体集計（従来通り）', toCsv(nexusFanFollowAnalysisCsvRows(rows)),
-    '', '■ キャンペーン個別進捗明細（顧客コードは氏名と無関係の匿名IDです）', toCsv(nexusFanFollowIndividualProgressCsvRows(individualProgress))
+    '', '■ キャンペーン個別進捗明細（顧客コードは氏名と無関係の匿名IDです）', toCsv(nexusFanFollowIndividualProgressCsvRows(individualProgress)),
+    '', '■ 接触履歴明細（1接触=1行。顧客コード・キャンペーンIDのみで識別し、自由記述は含みません）', toCsv(nexusFanFollowContactDetailCsvRows(contactDetails))
   ];
   return '﻿' + sections.join('\n');
 }
-function nexusDownloadFanFollowAnalysisCsv(rows, overview, individualProgress) {
-  return nexusShareOrDownloadFile(`NEXUS_FANFOLLOW_ANALYSIS_${todayStr()}.csv`, nexusFanFollowAnalysisCsvText(rows, overview, individualProgress), 'text/csv;charset=utf-8');
+function nexusDownloadFanFollowAnalysisCsv(rows, overview, individualProgress, contactDetails) {
+  return nexusShareOrDownloadFile(`NEXUS_FANFOLLOW_ANALYSIS_${todayStr()}.csv`, nexusFanFollowAnalysisCsvText(rows, overview, individualProgress, contactDetails), 'text/csv;charset=utf-8');
 }
 // AI向けJSON出力専用に、ハガキ等「既読」を計測できない種類のキャンペーンのreadを
 // 文字列「計測対象外」に差し替えた複製を作る。exportData自体（元のオブジェクト）は
@@ -10197,7 +10426,7 @@ function nexusDownloadFanFollowAnalysisJson(exportData) {
 }
 // ユーザーが指定した固定プロンプト文言（既存の顧客AI分析用・営業KPI用のプロンプトとは別物）。
 function nexusFanFollowAnalysisPromptTemplate() {
-  return ['以下は、FP・保険代理店のnote配信・ファン化フォロー施策から', '個人情報を匿名化した集計データです。', '', '個人を特定することを目的に分析しないでください。', 'すべての数値はキャンペーン単位・記事単位・属性単位・送信方法単位の', '集計であり、個人を含みません。', '', 'データには「キャンペーン概要」「キャンペーン全体集計」に加えて、', '「キャンペーン個別進捗明細」が含まれます。', '明細の「顧客コード」は氏名と結びつかない匿名の管理コード（例：C0333）であり、', '個人を特定する情報ではありません。', '「未確認」「記録なし／未確認」等の表記は、実施していないという意味ではなく、', '単にNEXUS上に記録が無い・未確認であることを表します。断定せず、', '「記録が無いため不明」として扱ってください。', '', 'このデータから、', '', '①キャンペーン全体の傾向', '', '②反応が良い記事とその特徴の仮説', '', '③反応が悪い記事の改善余地', '', '④属性別（既契約者・見込客等）の反応の違い', '', '⑤送信方法別（LINE・SMS等）の反応の違い', '', '⑥送信→既読→返信→相談→面談→成約のどの段階で離脱が多いか', '', '⑦次に書くとよいnote記事のテーマ案', '', '⑧次に注力すべき属性・送信方法の提案', '', '⑨見込売上・確定売上から見た費用対効果の傾向', '', '⑩個別進捗明細をもとに、顧客コードごとに「次に何をすべきか」（例：発送済みだが反応未確認なので電話フォロー候補、等）', '', 'を分析してください。', '', '', 'さらに、それぞれについて', '', '・件数や率', '・なぜそう考えられるか', '・次のアクション提案', '', 'まで示してください。', '', '', 'ただし、', '', '「保険を売ること」', '', 'だけを目的にしないでください。', '', 'お客様との関係を深め、', '', '役立つ情報を届けることを優先してください。', '', '不明な情報は推測せず、', '', '「データからは判断できない」', '', 'としてください。', '', '---', '', '【データ】', '（この下に、Nexusから出力したCSVまたはJSONデータを貼り付けてください）'].join('\n');
+  return ['以下は、FP・保険代理店のnote配信・ファン化フォロー施策から', '個人情報を匿名化した集計データです。', '', '個人を特定することを目的に分析しないでください。', 'すべての数値はキャンペーン単位・記事単位・属性単位・送信方法単位の', '集計であり、個人を含みません。', '', 'データには「キャンペーン概要」「キャンペーン全体集計」「キャンペーン個別進捗明細」に加えて、', '「接触履歴明細」（1回の接触＝1行の時系列データ）が含まれます。', '明細の「顧客コード」は氏名と結びつかない匿名の管理コード（例：C0333）であり、', '「キャンペーンID」もランダムな識別子であり、いずれも個人・キャンペーン名を特定する情報ではありません。', '接触履歴明細の「種別」はinitial_send（初回送付）またはfollowup_contact（その後の接触）であり、', '同じ初回送付をフォローとしての接触と混同しないでください。', '「未確認」「記録なし／未確認」等の表記は、実施していないという意味ではなく、', '単にNEXUS上に記録が無い・未確認であることを表します。断定せず、', '「記録が無いため不明」として扱ってください。', '', 'このデータから、', '', '①キャンペーン全体の傾向', '', '②反応が良い記事とその特徴の仮説', '', '③反応が悪い記事の改善余地', '', '④属性別（既契約者・見込客等）の反応の違い', '', '⑤送信方法別（LINE・SMS等）の反応の違い', '', '⑥送信→既読→返信→相談→面談→成約のどの段階で離脱が多いか', '', '⑦次に書くとよいnote記事のテーマ案', '', '⑧次に注力すべき属性・送信方法の提案', '', '⑨見込売上・確定売上から見た費用対効果の傾向', '', '⑩個別進捗明細をもとに、顧客コードごとに「次に何をすべきか」（例：発送済みだが反応未確認なので電話フォロー候補、等）', '', '⑪接触履歴明細（何回目の接触か・初回送付からの日数・接触方法・結果の並び）をもとに、', 'どの接触方法が返信・相談化・面談化につながりやすいか', '', '⑫何回目の接触、または初回送付から何日後のフォローが相談化・面談化につながりやすいか', '', '⑬どのテーマ（topics）から相談化しやすいか', '', '⑭LINE→電話のような接触方法の組み合わせ・順序で、成果につながりやすい流れがあるか', '', 'を分析してください。', '', '', 'さらに、それぞれについて', '', '・件数や率', '・なぜそう考えられるか', '・次のアクション提案', '', 'まで示してください。', '', '', 'ただし、', '', '「保険を売ること」', '', 'だけを目的にしないでください。', '', 'お客様との関係を深め、', '', '役立つ情報を届けることを優先してください。', '', '不明な情報は推測せず、', '', '「データからは判断できない」', '', 'としてください。', '', '---', '', '【データ】', '（この下に、Nexusから出力したCSVまたはJSONデータを貼り付けてください）'].join('\n');
 }
 
 // ── ファン化フォローのAI戦略分析用データ出力：最上位の全画面 ──
@@ -10320,14 +10549,14 @@ function NexusFanFollowAiExportScreen({ campaigns, follows, activityLogs, custom
   );
   const previewScreen = phase === 'preview' && React.createElement("div", { style: { padding: 16 } },
     scanBox,
-    React.createElement("div", { style: { fontSize: 12.5, color: 'var(--text-sub)', marginBottom: 10 } }, exportData.campaigns.length, "キャンペーン（", nexusFanSentCountLabel(exportData.campaigns), exportData.overall.sent, "件）を集計しました。内容を確認してください。個別進捗明細（", exportData.individualProgress.length, "件）もCSV／JSONに含まれます。"),
+    React.createElement("div", { style: { fontSize: 12.5, color: 'var(--text-sub)', marginBottom: 10 } }, exportData.campaigns.length, "キャンペーン（", nexusFanSentCountLabel(exportData.campaigns), exportData.overall.sent, "件）を集計しました。内容を確認してください。個別進捗明細（", exportData.individualProgress.length, "件）・接触履歴明細（", exportData.contactDetails.length, "件）もCSV／JSONに含まれます。"),
     metricsTiles,
     React.createElement("div", { style: { marginTop: 12 } }, exportData.campaigns.map((c, i) => campaignPreviewCard(c, exportData.overview[i]))),
     React.createElement("div", { style: { display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 } },
       React.createElement("button", {
         type: "button", className: "btn btn-primary btn-full",
         disabled: !scanResult || !scanResult.ok,
-        onClick: () => copyText(nexusFanFollowAnalysisCsvText(rows, exportData.overview, exportData.individualProgress))
+        onClick: () => copyText(nexusFanFollowAnalysisCsvText(rows, exportData.overview, exportData.individualProgress, exportData.contactDetails))
       }, "📋 CSVをコピー（推奨）"),
       React.createElement("button", {
         type: "button", className: "btn btn-outline btn-full",
@@ -10344,7 +10573,7 @@ function NexusFanFollowAiExportScreen({ campaigns, follows, activityLogs, custom
         disabled: !scanResult || !scanResult.ok,
         onClick: () => {
           try {
-            const result = nexusDownloadFanFollowAnalysisCsv(rows, exportData.overview, exportData.individualProgress);
+            const result = nexusDownloadFanFollowAnalysisCsv(rows, exportData.overview, exportData.individualProgress, exportData.contactDetails);
             showToast(result === 'shared-file' || result === 'shared-text' ? '共有シートを開きました' : 'ダウンロードを開始しました');
           } catch (e) {
             showToast('ダウンロードに失敗しました：' + (e && e.message || e));
@@ -17133,6 +17362,10 @@ function nexusIsStaleTask(task, todayStr, thresholdDays) {
 // いずれも日付未定（date=''）で保存できる。未定を期限切れとして扱わない。
 const NEXT_THING_KINDS = ['self', 'waiting', 'nextContact'];
 const NEXT_THING_METHODS = ['面談', '電話', 'LINE', 'メール', 'その他'];
+// 「次にすること」を作れる既存のsource。商談メモ（negotiationTask）に加え、ファン化フォローの
+// 「フォロー・接触記録」（fanFollowTask）も同じtasksストア・同じ編集UI・同じ冪等ロジックを
+// そのまま使う（新しい簡易タスク機能を別途作らない。UI・保存思想を分裂させない）。
+const NEXT_THING_SOURCES = ['negotiationTask', 'fanFollowTask'];
 // 基準日時点の「期限切れ／今日／今後／未定」を判定する。date未入力は必ず「未定」とし、
 // 期限切れにも今日にも分類しない（勝手な期限切れ扱いを防ぐ）。
 function nexusNextThingUrgencyBucket(dateStr, todayStrVal) {
@@ -17155,14 +17388,14 @@ function nexusNextThingDateLabel(d) {
 // ある顧客に紐づく「次にすること」タスク（全商談メモ分を横断。特定の商談メモに限定しない）。
 function nexusCustomerNextThings(tasks, customerId) {
   if (!customerId) return [];
-  return (tasks || []).filter(t => t.source === 'negotiationTask' && NEXT_THING_KINDS.includes(t.kind) && t.customerId === customerId);
+  return (tasks || []).filter(t => NEXT_THING_SOURCES.includes(t.source) && NEXT_THING_KINDS.includes(t.kind) && t.customerId === customerId);
 }
 // ホーム「今日やること」：①②は今日が期限／確認日のもの＋期限切れ（未完了のみ）、
 // ③は「今日予定されている」もののみ（期限切れは対象外、仕様通り）。日付未定は対象外
 // （未来の返事待ち・未定の仕事をAIが勝手に「今日やること」化しない）。
 function nexusTodayNextThings(tasks, todayStrVal) {
   return (tasks || []).filter(t => {
-    if (t.source !== 'negotiationTask' || t.completed) return false;
+    if (!NEXT_THING_SOURCES.includes(t.source) || t.completed) return false;
     if (!NEXT_THING_KINDS.includes(t.kind)) return false;
     if (!t.date) return false;
     if (t.kind === 'nextContact') return t.date === todayStrVal;
@@ -17177,7 +17410,9 @@ function nexusTodayNextThings(tasks, todayStrVal) {
 // 所有物のみを操作し、他の商談メモ・他の顧客のタスクには一切触れない）。
 // 再実行（保存連打・再編集・再保存）しても既存タスクのidはそのまま更新されるだけなので、
 // タスクが増殖しない（同じmemo.idから複数回呼んでも同じtaskIdセットに収束する）。
-function nexusSyncNextThingTasks(tasks, prevTaskIds, items, { customerId, now }) {
+// source省略時は従来通り'negotiationTask'（商談メモ）。ファン化フォローは'fanFollowTask'を渡す。
+function nexusSyncNextThingTasks(tasks, prevTaskIds, items, { customerId, now, source }) {
+  const taskSource = source || 'negotiationTask';
   const prevSet = new Set(prevTaskIds || []);
   const list = tasks || [];
   const byId = new Map(list.map(t => [t.id, t]));
@@ -17187,12 +17422,12 @@ function nexusSyncNextThingTasks(tasks, prevTaskIds, items, { customerId, now })
     const id = existing ? existing.id : uid();
     const base = existing || {
       id,
-      source: 'negotiationTask',
+      source: taskSource,
       createdAt: now
     };
     byId.set(id, {
       ...base,
-      source: 'negotiationTask',
+      source: taskSource,
       kind: item.kind,
       customerId: customerId || '',
       title: item.title || '',
@@ -17222,6 +17457,25 @@ function nexusSyncNextThingTasks(tasks, prevTaskIds, items, { customerId, now })
     }
   });
   return { tasks: updatedTasks, nextThingTaskIds };
+}
+// ファン化フォロー記録の「次回フォロー日・方法・内容」を、既存の「次にすること」と同じ
+// tasksストア・同じ冪等ロジック（nexusSyncNextThingTasks）へ1件だけ反映する。kindは常に
+// 'nextContact'（日時・方法・目的を持つ形）を使う。新しい簡易タスク機能は作らず、既存の
+// 仕組みをそのまま再利用する。record.nextThingTaskIdを唯一の所有権マーカーとして使うため、
+// 再実行してもタスクが増殖しない。nextFollowDateが空になった場合は、既存の紐づくタスクを削除する。
+function nexusFanFollowSyncNextThingTask(tasks, record, now) {
+  const prevTaskIds = record.nextThingTaskId ? [record.nextThingTaskId] : [];
+  const items = record.nextFollowDate ? [{
+    taskId: record.nextThingTaskId || null,
+    kind: 'nextContact',
+    date: record.nextFollowDate,
+    time: '',
+    method: record.nextFollowMethod || '',
+    memo: record.nextFollowAction || ''
+  }] : [];
+  const customerId = record.customerId || '';
+  const { tasks: updatedTasks, nextThingTaskIds } = nexusSyncNextThingTasks(tasks, prevTaskIds, items, { customerId, now, source: 'fanFollowTask' });
+  return { tasks: updatedTasks, nextThingTaskId: nextThingTaskIds[0] || '' };
 }
 // ── 営業活動履歴（activityLogs）：種類マスタ・KPI集計・論理削除フィルタ・二重タップ防止 ──
 // 「クイック活動登録」で作る活動は tasks に直接1件+1するのではなく、この履歴配列に保存し、
@@ -17871,6 +18125,24 @@ const NEXUS_FAN_CAMPAIGN_STATUSES = ['進行中', '終了', '一時停止'];
 // まだ電話していない、という明示的な状態）とは区別する。'電話した'/'不通'/'折返し待ち'は
 // いずれも実際に電話を試みた記録のため、phoneFollowDateに実施日を保存する。
 const NEXUS_FAN_PHONE_FOLLOW_STATUSES = ['未実施', '電話した', '不通', '折返し待ち'];
+// ── フォロー・接触記録（改修：電話フォロー専用設計をやめ、LINE・電話・SMS・メール・訪問・
+// オンライン面談・対面面談・ハガキ・手紙等、複数の方法を時系列で何回でも記録できるようにする）。
+// 「1 contact = 1回の接触」。方法(method)・誰から(direction)・結果(result)を別項目として持ち、
+// 「LINEを送った」と「LINEの返信があった」を別の接触として区別する。
+const NEXUS_FAN_CONTACT_METHODS = ['LINE', '電話', 'SMS', 'メール', '訪問', 'オンライン面談', '対面面談', 'ハガキ', '手紙', 'その他'];
+const NEXUS_FAN_CONTACT_METHOD_ICONS = { 'LINE': '💬', '電話': '📞', 'SMS': '📱', 'メール': '📧', '訪問': '🏠', 'オンライン面談': '🎥', '対面面談': '🤝', 'ハガキ': '📮', '手紙': '✉️', 'その他': '📝' };
+// outbound＝こちらから、inbound＝お客様から、mutual＝面談・会話等、双方による接触。
+const NEXUS_FAN_CONTACT_DIRECTIONS = ['outbound', 'inbound', 'mutual'];
+const NEXUS_FAN_CONTACT_DIRECTION_LABELS = { outbound: 'こちらから', inbound: 'お客様から', mutual: '双方' };
+// 結果は「状態」のみとし、方法・誰からの情報を含めない（例：「LINE返信」ではなく「返信あり」）。
+const NEXUS_FAN_CONTACT_RESULTS = ['未対応', '送信済み', '連絡済み', '不通', '未読', '既読', '返信あり', '折返し待ち', '返事待ち', '会話できた', '相談になった', '面談予定', '面談実施', '今回は見送り', '連絡不要', '特に相談なし', '紹介あり', 'その他'];
+// 相談にならなかった接触も関係維持として価値があるため、「失敗」のニュアンスを持たせない
+// 中立的な結果（今回は見送り／連絡不要／特に相談なし等）も対等な選択肢として用意する。
+const NEXUS_FAN_CONTACT_TOPICS = ['近況確認', '結婚', '出産', '子ども', '進学', '転職', '住宅購入', '住宅ローン', '独立', '法人設立', '介護', '相続', '保険見直し', '保険金請求', '給付金請求', '住所変更', '名義変更', '資産形成', '税金', '雑談', 'その他'];
+const NEXUS_FAN_MEETING_MODES = ['オンライン', '対面'];
+function nexusFanContactBlank() {
+  return { id: '', occurredAt: '', direction: 'outbound', method: '', result: '', topics: [], memo: '', meetingAt: '', meetingMode: '', meetingPurpose: '', referralCount: '', referralMemo: '', referredCustomerIds: [], createdAt: '', updatedAt: '', deletedAt: '' };
+}
 // キャンペーン種類：記録する最初のアクション・表示名をキャンペーンごとに変えるための項目。
 // 既存キャンペーンにはこの項目が存在しない（undefined）ため、空文字列＝「未設定」のまま扱い、
 // 名前から自動判定することはしない（未設定の場合は従来通り「記事」前提の表示・項目のまま動く）。
@@ -17900,6 +18172,89 @@ function nexusFanFollowReadMeasurable(campaignTypeList) {
 // ソフトデリートフィルタ（既存のnexusActiveLogsと同じ規約）
 function nexusFanActiveFollows(follows) {
   return (follows || []).filter(f => !f.deletedAt);
+}
+// ソフトデリートフィルタ（contacts配列用、既存の規約と同じ）
+function nexusFanActiveContacts(record) {
+  return ((record && record.contacts) || []).filter(c => !c.deletedAt);
+}
+// 初回送付（sentDate／sendMethod）は、contacts配列とは別系統の、常に1件だけ存在する恒久的な
+// 出来事として扱う。contacts側に「初回送付」に相当する項目を作ることは無いため、二重化しない。
+function nexusFanInitialSendVirtualContact(record, campaignType) {
+  if (!record || !record.sentDate) return null;
+  const typeConfig = nexusFanCampaignTypeConfig(campaignType);
+  return { id: `legacy-sent-${record.id}`, occurredAt: record.sentDate, direction: 'outbound', method: record.sendMethod || typeConfig.measureLabel, result: typeConfig.completedStatusLabel, topics: [], memo: record.articleTitle || '', legacy: true };
+}
+// 旧スカラー項目（readAt／repliedAt／phoneFollowStatus＋phoneFollowDate）から、表示専用の
+// 仮想contactを作る（保存データは一切書き換えない）。contacts配列の有無に関わらず常に
+// 生成する（contactsが増えても旧履歴を消さないため。二重防止は呼び出し側のdedupで行う）。
+function nexusFanLegacyFollowupVirtualContacts(record) {
+  if (!record) return [];
+  const out = [];
+  if (record.readAt) {
+    out.push({ id: `legacy-read-${record.id}`, occurredAt: record.readAt, direction: 'inbound', method: record.sendMethod || 'その他', result: '既読', topics: [], memo: '', legacy: true });
+  }
+  if (record.repliedAt) {
+    out.push({ id: `legacy-replied-${record.id}`, occurredAt: record.repliedAt, direction: 'inbound', method: record.sendMethod || 'その他', result: '返信あり', topics: [], memo: '', legacy: true });
+  }
+  if (record.phoneFollowStatus && record.phoneFollowStatus !== '未実施') {
+    const resultMap = { '電話した': '連絡済み', '不通': '不通', '折返し待ち': '折返し待ち' };
+    out.push({ id: `legacy-phone-${record.id}`, occurredAt: record.phoneFollowDate || record.sentDate || '', direction: 'outbound', method: '電話', result: resultMap[record.phoneFollowStatus] || record.phoneFollowStatus, topics: [], memo: '', legacy: true });
+  }
+  return out;
+}
+// legacy（旧スカラー項目からの仮想contact）のうち、real（contacts実データ）に
+// method・result・occurredAt（日付）が完全一致するものが既にあれば、legacy側を取り除く
+// （二重表示・二重集計の防止）。旧データ（readAt／repliedAt／phoneFollowDate）・新データ
+// （contact.occurredAt）は両方とも時刻を持たない"YYYY-MM-DD"のみの日付文字列で精度が
+// 揃っているため、完全一致での判定で安全（精度の異なるデータを誤って一致・不一致と
+// 判定することはない）。method・resultも一致させるため、別の日・別の方法・別の結果の
+// legacy項目を誤って消すことはない。
+function nexusFanDedupeLegacyContacts(legacyContacts, realContacts) {
+  const realKeys = new Set((realContacts || []).map(c => `${c.method}|${c.result}|${c.occurredAt}`));
+  return (legacyContacts || []).filter(c => !realKeys.has(`${c.method}|${c.result}|${c.occurredAt}`));
+}
+// ── 正規化済みcontact一覧（1つの共通関数）──
+// 旧データ（readAt／repliedAt／phoneFollowStatus）から作る仮想contactと、新データ（contacts
+// 実データ）を必ずマージし、重複（nexusFanDedupeLegacyContacts）だけを取り除いて日付の新しい
+// 順に返す。「旧データか新データかの二者択一」ではなく「マージ＋重複排除」であるため、
+// contactsが増えても旧データ由来の履歴が消えることはない（ケース：旧10/13電話した＋新
+// 10/20LINE送信→両方残る。旧10/13電話した＋新contactsに同じ10/13電話・連絡済みが
+// 追加された場合→重複する方だけ1件に収まる）。
+// 読了／返信の判定（nexusFanFollowMetricsGroup）・接触方法別集計（nexusFanContactMethodBreakdown）・
+// タイムライン表示（nexusFanContactTimeline）は、すべてこの1つの関数の結果を見る。
+// 初回送付（nexusFanInitialSendVirtualContact）は含まない（キャンペーンの送信チャネル集計
+// である既存nexusFanMethodBreakdownと、接触方法の集計を混同しないため）。
+function nexusFanNormalizedContacts(record) {
+  const real = nexusFanActiveContacts(record).map(c => ({ ...c, legacy: false }));
+  const legacy = nexusFanLegacyFollowupVirtualContacts(record);
+  const survivingLegacy = nexusFanDedupeLegacyContacts(legacy, real);
+  return [...survivingLegacy, ...real].sort((a, b) => (b.occurredAt || '').localeCompare(a.occurredAt || ''));
+}
+// 記録1件分の接触タイムライン（初回送付＋正規化済みの以降の接触）を新しい順で返す。一覧カードの
+// 「最新の接触」・詳細画面の全履歴表示の両方がこれを使う。
+function nexusFanContactTimeline(record, campaignType) {
+  const initial = nexusFanInitialSendVirtualContact(record, campaignType);
+  const followups = nexusFanNormalizedContacts(record);
+  const all = [...(initial ? [initial] : []), ...followups];
+  return all.sort((a, b) => (b.occurredAt || '').localeCompare(a.occurredAt || ''));
+}
+// 一覧カード表示用：直近の接触（無ければ初回送付自体）。
+function nexusFanLatestContact(record, campaignType) {
+  return nexusFanContactTimeline(record, campaignType)[0] || null;
+}
+// 接触方法別の件数（初回送付は含まない、正規化済みの以降の接触のみ）。旧データ・新データが
+// 混在していても、nexusFanNormalizedContactsの時点で重複が除かれているため二重計上されない。
+function nexusFanContactMethodBreakdown(follows) {
+  const counts = {};
+  nexusFanActiveFollows(follows).forEach(record => {
+    nexusFanNormalizedContacts(record).forEach(c => {
+      const key = c.method || 'その他';
+      counts[key] = (counts[key] || 0) + 1;
+    });
+  });
+  const known = NEXUS_FAN_CONTACT_METHODS.map(m => ({ method: m, count: counts[m] || 0 }));
+  const extra = Object.keys(counts).filter(k => !NEXUS_FAN_CONTACT_METHODS.includes(k)).map(k => ({ method: k, count: counts[k] }));
+  return [...known, ...extra];
 }
 // 1件のファン化フォロー記録から、相談・問合せ以降の進捗を常に自動判定する（読み取り専用、
 // 保存されたフラグは一切持たない）。relatedOpportunityIdでは絶対にマッチさせない：
@@ -17953,8 +18308,10 @@ function nexusFanExpectedRevenueForRecord(record, stage, tasks) {
 }
 function nexusFanFollowMetricsGroup(recordsWithStage) {
   const sent = recordsWithStage.length;
-  const read = recordsWithStage.filter(r => r.record.readAt).length;
-  const replied = recordsWithStage.filter(r => r.record.repliedAt).length;
+  // 既読／返信は、旧データ・新データをマージした正規化済み一覧（nexusFanNormalizedContacts、
+  // 重複排除込み）から判定する。旧データ由来の既読・返信が、新しい接触を追加しても消えない。
+  const read = recordsWithStage.filter(r => nexusFanNormalizedContacts(r.record).some(c => c.result === '既読')).length;
+  const replied = recordsWithStage.filter(r => nexusFanNormalizedContacts(r.record).some(c => c.result === '返信あり')).length;
   const consulted = recordsWithStage.filter(r => r.stage.consultedAt).length;
   const met = recordsWithStage.filter(r => r.stage.metAt).length;
   const proposed = recordsWithStage.filter(r => r.stage.proposedAt).length;
@@ -18126,16 +18483,91 @@ function nexusFanFollowIndividualProgressRow(recordWithStage, campaign, customer
     nextFollowAction: record.nextFollowAction || ''
   };
 }
+// ── 接触履歴明細（AI分析用・案B）：1 contact = 1行 ──
+// 既存のnexusFanFollowIndividualProgressRow（1記録＝1行）は変更せず残す。これは別の、
+// より粒度の細かい出力で、初回送付（eventType:'initial_send'）とその後の接触
+// （eventType:'followup_contact'、nexusFanNormalizedContactsで旧データ・新データをマージ
+// ＋重複排除済みのもの）を、1つの時系列として並べる。
+// 【匿名化優先】自由記述（memo／referralMemo／meetingPurpose／messageText／
+// customerNameText等）は一切含めない。既存の残留PII走査（nexusFanFollowScanForResidualPii）
+// による事後検出に頼るのではなく、そもそも出力対象のキーに含めないことを優先する。
+// 出力する値はいずれも固定の選択肢（method／result／direction／topics／meetingMode）か、
+// 個人情報を含まない数値（referralCount／contactSequence／daysFromInitialSend）のみ。
+// campaignNameは自由入力（個人名・法人名が入る可能性がある）のため使わず、campaign.id
+// （uid()生成のランダム文字列。氏名等から導出されない）をそのまま使う。
+// 初回送付チャネルの集計（既存nexusFanMethodBreakdown）と、以降の接触方法の集計
+// （nexusFanContactMethodBreakdown）は、この明細とは別物のまま変更しない（意味を混同しない）。
+function nexusFanContactDetailRows(recordWithStage, campaign, customers) {
+  const record = recordWithStage.record;
+  const customer = record.customerId ? (customers || []).find(c => c.id === record.customerId) : null;
+  let code;
+  if (record.customerId) {
+    code = customer ? (customer.aiAnalysisId || 'C-UNASSIGNED') : '（削除済み顧客）';
+  } else {
+    code = `未登録（記録ID:${record.id}）`;
+  }
+  // metFlagは「面談実施」のみをtrueとする（「面談予定」は予定であり、実際に面談したこととは
+  // 区別する。「予定を入れた＝面談した」にしないという既存の設計方針に合わせる）。
+  const flagsFor = result => ({
+    consultedFlag: result === '相談になった',
+    metFlag: result === '面談実施',
+    referredFlag: result === '紹介あり'
+  });
+  // 初回送付からの経過日数。時刻を持たないYYYY-MM-DDの日付文字列どうしの差分のため、
+  // タイムゾーンの影響を受けないUTC固定で計算する（日付の前後関係だけを見るため安全）。
+  const daysFromInitialSend = (sentDate, occurredAt) => {
+    if (!sentDate || !occurredAt) return null;
+    const d1 = new Date(sentDate + 'T00:00:00Z').getTime();
+    const d2 = new Date(occurredAt + 'T00:00:00Z').getTime();
+    if (isNaN(d1) || isNaN(d2)) return null;
+    return Math.round((d2 - d1) / 86400000);
+  };
+  const baseRow = (eventType, c, contactSequence, days) => ({
+    code,
+    campaignId: campaign.id,
+    eventType,
+    occurredAt: c.occurredAt || '',
+    direction: c.direction || '',
+    method: c.method || '',
+    result: c.result || '',
+    topics: Array.isArray(c.topics) ? c.topics : [],
+    meetingMode: c.meetingMode || '',
+    referralCount: c.referralCount || '',
+    ...flagsFor(c.result),
+    contactSequence,
+    daysFromInitialSend: days
+  });
+  const rows = [];
+  const initial = nexusFanInitialSendVirtualContact(record, campaign.campaignType);
+  if (initial) {
+    rows.push(baseRow('initial_send', initial, 0, 0));
+  }
+  // contactSequenceは「発生順」（古い接触から1,2,3...）で振る。nexusFanNormalizedContactsは
+  // 画面のタイムライン表示用に新しい順（降順）で返す設計のままにし、ここでは古い順に並べ直す。
+  // 日付が同じ場合（occurredAtのみでは前後関係が分からない場合）は、createdAt（実際に記録
+  // された時刻、contacts実データのみが持つ）を補助キーに使う。createdAtを持たない旧データ
+  // （readAt／repliedAt／phoneFollowStatusからの仮想contact）は、他の旧データ・新データと
+  // 同日になった場合、実際の前後関係を推測せず、常に先（契約上「''」が最小）として並べる
+  // 固定の規約とする。これは実際の前後関係の主張ではなく、順序を一意に決めるための規約である。
+  const sameDateOrderKey = c => `${c.occurredAt || ''}_${c.createdAt || ''}`;
+  const followups = nexusFanNormalizedContacts(record).slice().sort((a, b) => sameDateOrderKey(a).localeCompare(sameDateOrderKey(b)));
+  followups.forEach((c, idx) => {
+    rows.push(baseRow('followup_contact', c, idx + 1, daysFromInitialSend(record.sentDate, c.occurredAt)));
+  });
+  return rows;
+}
 function nexusFanFollowAnonymizedExport({ campaigns, follows, activityLogs, customers, tasks, campaignIds, sentFrom, sentTo }) {
   const targetCampaigns = (campaigns || []).filter(c => !campaignIds || campaignIds.length === 0 || campaignIds.includes(c.id));
   const inRange = f => (!sentFrom || (f.sentDate || '') >= sentFrom) && (!sentTo || (f.sentDate || '') <= sentTo);
   const individualProgress = [];
+  const contactDetails = [];
   const overview = [];
   const campaignExports = targetCampaigns.map(c => {
     const scoped = (follows || []).filter(f => f.campaignId === c.id).filter(inRange);
     const recordsWithStage = nexusFanBuildRecordsWithStage(scoped, activityLogs, customers, tasks);
     const metrics = nexusFanFollowMetricsGroup(recordsWithStage);
     recordsWithStage.forEach(r => individualProgress.push(nexusFanFollowIndividualProgressRow(r, c, customers)));
+    recordsWithStage.forEach(r => contactDetails.push(...nexusFanContactDetailRows(r, c, customers)));
     // 対象人数(targetCount)は既存の手入力項目をそのまま使う。未入力（0）の場合、未実施人数を
     // 「0」と断定できる根拠が無いため、推測せずnullのまま返す（CSV/JSON出力側で「不明」と表示する）。
     const implementedCount = recordsWithStage.length;
@@ -18176,7 +18608,8 @@ function nexusFanFollowAnonymizedExport({ campaigns, follows, activityLogs, cust
     overall,
     overview,
     campaigns: campaignExports,
-    individualProgress
+    individualProgress,
+    contactDetails
   };
 }
 // CSV出力用に1行＝1グループへフラット化する（キャンペーン全体／記事別／属性別／送信方法別。
