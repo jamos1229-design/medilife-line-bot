@@ -2454,6 +2454,74 @@ function nexusComputeSplitAmounts(contract, basis) {
   }));
   return { baseAmount, parties };
 }
+// ── 最終統合改修：手数料・AC・分担契約の一括改修 ──────────────────────
+// ACと見込手数料の同義性に対応し、ACを「分担前見込手数料×自分の分担割合×AC評価係数」の
+// 計算結果として扱う（指示書2）。既存のcontract.acAmount（手入力・万円）は削除・上書き
+// しない。計算結果と既存値が異なる場合は、呼び出し側（UI）で「要確認」として表示し、
+// 自動では統一しない。
+const NEXUS_AC_METHODS = [
+  { key: 'deemed12', label: 'みなし12か月', coefficient: 1 },
+  { key: 'perTwelfth', label: '12分の1', coefficient: 1 / 12 },
+  { key: 'normal', label: '通常', coefficient: 1 }
+];
+function nexusAcMethodCoefficient(method) {
+  const def = NEXUS_AC_METHODS.find(m => m.key === method);
+  return def ? def.coefficient : 1;
+}
+// 分担契約における「自分」の割合（%）。分担なし、またはpartiesが無い場合は100%。
+function nexusSelfSplitPercentage(split) {
+  if (!split || split.mode === 'none') return 100;
+  const self = (split.parties || []).find(p => p.partyRef && p.partyRef.kind === 'self');
+  return self ? (Number(self.percentage) || 0) : 100;
+}
+// 分担前見込手数料（税抜。あくまでestimateのみを基準とする＝確定額とは混同しない。
+// nexusCommissionBaseExclTaxは確定額優先のため、見込みACの算出にはそのまま使えない）。
+function nexusEstimateExclTaxOf(contract) {
+  const commission = nexusCommissionOf(contract);
+  const v = commission.estimate ? commission.estimate.amountExclTax : null;
+  return v === null || v === undefined ? null : v;
+}
+// 分担後見込手数料（税抜）＝分担前見込手数料（税抜）×自分の分担割合（指示書5の計算式）。
+function nexusComputeSplitAfterEstimateExclTax(contract) {
+  const base = nexusEstimateExclTaxOf(contract);
+  if (base === null) return null;
+  const split = nexusCommissionSplitOf(contract);
+  const pct = nexusSelfSplitPercentage(split);
+  return base * (pct / 100);
+}
+// 見込みAC（税抜・円）＝分担後見込手数料×AC評価係数。みなし12か月・通常は係数1、
+// 12分の1は係数1/12（指示書5）。保険会社名・商品名からは方式を自動決定しない
+// （contract.acMethodが未設定の場合は、既存データの推測を避けるため計算しない＝null）。
+function nexusComputeEstimatedAcYen(contract) {
+  const splitAfter = nexusComputeSplitAfterEstimateExclTax(contract);
+  if (splitAfter === null) return null;
+  if (!contract.acMethod) return null;
+  return splitAfter * nexusAcMethodCoefficient(contract.acMethod);
+}
+// 見込みAC（万円・四捨五入）。既存のacAmount（万円単位）と同じ単位に揃えて比較・表示する。
+function nexusComputeEstimatedAcManyen(contract) {
+  const yen = nexusComputeEstimatedAcYen(contract);
+  return yen === null ? null : Math.round(yen / 10000);
+}
+// 既存のAC（手入力・万円）と、計算結果の見込みAC（万円）を比較する。両方が存在し値が
+// 異なる場合のみmismatch=trueとする（指示書2・10：自動で統一しない。要確認として表示）。
+function nexusAcReconciliation(contract) {
+  const computedManyen = nexusComputeEstimatedAcManyen(contract);
+  const legacy = contract.acAmount;
+  const legacyManyen = legacy === null || legacy === undefined || legacy === '' ? null : Number(legacy);
+  const mismatch = computedManyen !== null && legacyManyen !== null && !isNaN(legacyManyen) && computedManyen !== legacyManyen;
+  return { computedManyen, legacyManyen: isNaN(legacyManyen) ? null : legacyManyen, mismatch };
+}
+// 見込みAC（税抜・円）と代理店確定手数料（税抜）の差額。どちらか未入力ならnull
+// （指示書6：見込みAC・確定手数料・実入金額は別々に管理し、差額を表示するだけで
+// 自動的に置き換えない）。
+function nexusAcVsConfirmedDiff(contract) {
+  const acYen = nexusComputeEstimatedAcYen(contract);
+  const commission = nexusCommissionOf(contract);
+  const confirmedExcl = commission.confirmed ? commission.confirmed.amountExclTax : null;
+  if (acYen === null || confirmedExcl === null || confirmedExcl === undefined) return null;
+  return confirmedExcl - acYen;
+}
 function nexusDefaultSecuritiesPrep() {
   return {
     caseType: 'unconfirmed',
@@ -2569,8 +2637,14 @@ function nexusContractApplicationMonth(contract) {
   const d = (contract.applicationDate || '').slice(0, 7);
   return d || null;
 }
-// AC金額を数値として取得する（未入力はnullのまま返す。0円と決めつけない＝指示書5）。
+// AC金額を数値（万円）として取得する。最終統合改修：分担後見込手数料から計算できる場合は
+// それを優先し（指示書8：集計には原則、自分の分担後見込みACを使用する）、計算できない
+// 旧データ（acMethod未設定・estimate未入力等）は、既存のacAmount（手入力・万円）を保持して
+// そのまま使う（指示書10：旧データのAC・手数料をどちらか一方だけでも保護する）。
+// どちらも無い場合は未入力として扱う（0円と決めつけない＝指示書8）。
 function nexusContractAcAmount(contract) {
+  const computed = nexusComputeEstimatedAcManyen(contract);
+  if (computed !== null) return computed;
   const v = contract.acAmount;
   if (v === null || v === undefined || v === '') return null;
   const n = Number(v);
@@ -4216,13 +4290,12 @@ function ContractProductDetailsBlock({ contract, onChange, customers, currentCon
       }, c))
     )
   );
-  const acField = /*#__PURE__*/React.createElement("div", null,
-    /*#__PURE__*/React.createElement("label", { className: "form-label" }, "AC（見込み・万円。見込み客管理の「見込みAC」を引き継ぐ値）"),
-    /*#__PURE__*/React.createElement("input", {
-      className: "form-input", type: "number",
-      value: contract.acAmount === null || contract.acAmount === undefined ? '' : contract.acAmount,
-      onChange: e => onChange({ ...contract, acAmount: e.target.value === '' ? null : Number(e.target.value) })
-    })
+  // 最終統合改修：AC（見込み）は「手数料・入金管理」ブロック内で、分担後見込手数料と
+  // AC計算方式から自動計算する値に統一し、独立した手入力欄は廃止した（指示書2）。
+  // 既存データのacAmount自体は削除していない（nexusContractAcAmount/nexusAcReconciliation
+  // 参照）。
+  const acNote = /*#__PURE__*/React.createElement("div", { style: { fontSize: 11, color: 'var(--text-sub)' } },
+    "AC（見込み）は、分担後見込手数料とAC計算方式から自動計算されます（下のブロックで確認できます）。"
   );
   const remarksField = /*#__PURE__*/React.createElement("div", null,
     /*#__PURE__*/React.createElement("label", { className: "form-label" }, "備考"),
@@ -4252,7 +4325,7 @@ function ContractProductDetailsBlock({ contract, onChange, customers, currentCon
     categoryField,
     characteristicsField,
     textField('保障期間', 'coverageTerm', '例：終身／10年／60歳まで'),
-    acField,
+    acNote,
     remarksField
   );
 }
@@ -4295,6 +4368,61 @@ function ContractApplicationStatusBlock({ contract, onChange }) {
 // P6a-2追加：手数料・入金管理ブロック（design doc 3-3・3-4）。原額(enteredAmount)は
 // そのまま保持し、税抜金額だけを内部の基準値として同時に保存する。消費税額・税込金額・
 // 未入金残高は常にその場で計算し、別途保存しない。
+// 最終統合改修：手数料→分担→AC計算方式→見込みAC の計算結果をその場で表示する共通ブロック
+// （指示書9：新契約登録フォームと契約編集画面の両方に同じロジックを適用する）。
+// contractは{commission, commissionSplit, acMethod, acAmount}の形を持つ対象で、新契約登録
+// フォームではまだ本物のcontractが無いため、同じ形の仮オブジェクトを渡して共用する。
+function NexusAcCalculationBlock({ contract, onChangeAcMethod, onAdoptComputedAc }) {
+  const commission = nexusCommissionOf(contract);
+  const split = nexusCommissionSplitOf(contract);
+  const selfPct = nexusSelfSplitPercentage(split);
+  const estimate = commission.estimate;
+  const splitAfterExclYen = nexusComputeSplitAfterEstimateExclTax(contract);
+  const splitAfterDisplay = splitAfterExclYen === null ? null : nexusCalcTaxDisplay(splitAfterExclYen, estimate.taxRatePercent, estimate.roundingMethod);
+  const acMethod = contract.acMethod || '';
+  const computedAcManyen = nexusComputeEstimatedAcManyen(contract);
+  const reconciliation = nexusAcReconciliation(contract);
+  const confirmedDiffYen = nexusAcVsConfirmedDiff(contract);
+  const outstanding = nexusCalcOutstandingBalance(contract);
+  const paymentStatus = nexusCalcPaymentStatus(contract);
+  const fmtYen = v => v === null || v === undefined ? '未確認' : Math.round(v).toLocaleString() + '円';
+  return /*#__PURE__*/React.createElement("div", { style: { fontSize: 12, lineHeight: 1.8 } },
+    /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, marginBottom: 4 } }, "AC計算方式・見込みAC"),
+    /*#__PURE__*/React.createElement("div", null, `分担前見込手数料（税抜）：${fmtYen(estimate.amountExclTax)} ／ 自分の分担割合：${selfPct}%`),
+    /*#__PURE__*/React.createElement("div", null, `分担後見込手数料：税抜${fmtYen(splitAfterDisplay && splitAfterDisplay.amountExclTax)} ／ 税込${fmtYen(splitAfterDisplay && splitAfterDisplay.amountInclTax)}`),
+    /*#__PURE__*/React.createElement("div", { style: { marginTop: 4 } },
+      /*#__PURE__*/React.createElement("div", { className: "form-label" }, "AC計算方式"),
+      /*#__PURE__*/React.createElement("div", { className: "toggle-group" },
+        NEXUS_AC_METHODS.map(m => /*#__PURE__*/React.createElement("button", {
+          key: m.key, type: "button", className: `toggle-btn ${acMethod === m.key ? 'sel' : ''}`,
+          onClick: () => onChangeAcMethod(m.key)
+        }, m.label))
+      ),
+      /*#__PURE__*/React.createElement("div", { style: { fontSize: 11, color: 'var(--text-sub)', marginTop: 2 } },
+        "保険会社名・商品名だけで自動決定しません。契約ごとに選択してください。"
+      )
+    ),
+    /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, marginTop: 4 } },
+      `見込みAC：${computedAcManyen === null ? '計算には見込手数料とAC計算方式の入力が必要です' : computedAcManyen.toLocaleString() + '万円'}`
+    ),
+    reconciliation.mismatch ? /*#__PURE__*/React.createElement("div", {
+      style: { background: '#fff3cd', border: '1px solid #ffc107', borderRadius: 6, padding: '8px 10px', fontSize: 11.5, color: '#7a5b00', marginTop: 4 }
+    },
+      `⚠ 既存のAC（${reconciliation.legacyManyen}万円）と、計算結果の見込みAC（${reconciliation.computedManyen}万円）が異なります。自動では統一しません。`,
+      onAdoptComputedAc ? /*#__PURE__*/React.createElement("div", { style: { marginTop: 4 } },
+        /*#__PURE__*/React.createElement("button", { type: "button", className: "btn btn-sm", onClick: () => onAdoptComputedAc(reconciliation.computedManyen) }, "計算結果をACとして採用する")
+      ) : null
+    ) : (!reconciliation.mismatch && computedAcManyen === null && reconciliation.legacyManyen !== null ? /*#__PURE__*/React.createElement("div", { style: { fontSize: 11, color: 'var(--text-sub)' } },
+      `既存のAC（${reconciliation.legacyManyen}万円）をそのまま使用しています（見込手数料・AC計算方式が未入力のため）。`
+    ) : null),
+    /*#__PURE__*/React.createElement("div", { style: { marginTop: 6 } },
+      `見込みACと確定手数料の差額：${fmtYen(confirmedDiffYen)}`
+    ),
+    /*#__PURE__*/React.createElement("div", null,
+      `確定手数料と実入金額の差額（未入金残高）：${outstanding === null ? '未確認' : fmtYen(outstanding)}　／　入金状況：${paymentStatus}`
+    )
+  );
+}
 function ContractCommissionBlock({ contract, onChange }) {
   const commission = nexusCommissionOf(contract);
   const split = nexusCommissionSplitOf(contract);
@@ -4446,9 +4574,16 @@ function ContractCommissionBlock({ contract, onChange }) {
     ))
   );
   const splitSection = /*#__PURE__*/React.createElement("div", null, splitModeRow, partyRows, splitWarning, splitAmountsRow);
+  // 最終統合改修：AC計算方式・見込みACの表示（分担契約の直後。指示書9の入力順序：
+  // 手数料→税込税抜→分担→AC計算方式→見込みAC→確定手数料→実入金）。
+  const acCalcSection = /*#__PURE__*/React.createElement(NexusAcCalculationBlock, {
+    contract: contract,
+    onChangeAcMethod: m => onChange({ ...contract, acMethod: m }),
+    onAdoptComputedAc: v => onChange({ ...contract, acAmount: v })
+  });
 
   return /*#__PURE__*/React.createElement(NexusCollapsibleSection, { title: "手数料・入金管理" },
-    estimateRow, confirmedRow, expectedMonthRow, balanceRow, paymentSection, splitSection
+    estimateRow, confirmedRow, splitSection, acCalcSection, expectedMonthRow, balanceRow, paymentSection
   );
 }
 // P6a-2追加：証券ケース・お客様へのお渡し管理ブロック（design doc 3-5・3-6）。
@@ -4623,7 +4758,9 @@ function nexusContractListRowValues(row, amountBasis) {
     { key: 'applicationNum', label: '申込番号', value: ct.applicationNum || '' },
     { key: 'premium', label: '保険料', value: nexusContractPremiumText(ct) || '' },
     { key: 'paymentCycle', label: '払込方法', value: ct.paymentCycle || '' },
-    { key: 'acAmount', label: 'AC', value: ct.acAmount === null || ct.acAmount === undefined ? '' : `${ct.acAmount}万円` },
+    // 最終統合改修：AC列は計算結果（分担後見込手数料×AC評価係数）を優先し、計算できない
+    // 旧データは既存のacAmount（手入力）にフォールバックする（nexusContractAcAmount）。
+    { key: 'acAmount', label: 'AC', value: (() => { const v = nexusContractAcAmount(ct); return v === null ? '' : `${v}万円`; })() },
     { key: 'policyIssuedDate', label: '成立日', value: ct.policyIssuedDate || '' },
     { key: 'caseType', label: '証券ケース', value: NEXUS_SECURITIES_CASE_TYPE_LABELS[prep.caseType] || '' },
     { key: 'prepStatus', label: '資料準備状況', value: prepSummary },
@@ -4655,13 +4792,19 @@ function NexusNewContractIntakeForm({ customers, onCreateContract, onClose, onSa
     productCategory: '', productCharacteristics: [], insuredName: '', premium: '',
     // 最終確定指示書2・3：NEXUSに登録する時点で申込送信は完了している前提のため、
     // 初期値は「成立待ち」とする（下書き等の送信前段階は選択肢から削除）。
-    paymentCycle: '', applicationNum: '', policyNum: '', acAmount: '', applicationStatus: '成立待ち', remarks: ''
+    // 最終統合改修：AC（見込み・万円）の独立した手入力欄は廃止したため、ここには含めない
+    // （分担後見込手数料とAC計算方式から計算する。nexusComputeEstimatedAcManyen）。
+    paymentCycle: '', applicationNum: '', policyNum: '', applicationStatus: '成立待ち', remarks: ''
   });
   // 最終確定指示書5・6：新契約登録フォームにも「手数料・税込税抜」「分担契約」セクションを
   // 必ず表示する。既存の手数料・分担データ構造（nexusDefaultCommission/
   // nexusDefaultCommissionSplit等）をそのまま再利用し、別の構造を新設しない。
   const [commission, setCommission] = useState(() => nexusDefaultCommission());
   const [commissionSplit, setCommissionSplit] = useState(() => nexusDefaultCommissionSplit());
+  // 最終統合改修：AC計算方式（みなし12か月／12分の1／通常）。保険会社名・商品名からは
+  // 自動決定しない（指示書5）。既定値「通常」はニュートラルな初期値であり、必要に応じて
+  // 契約ごとに変更する。
+  const [acMethod, setAcMethod] = useState('normal');
   // 最終確定指示書8：新契約登録フォームにも証券ケース・印刷物・お渡しのセクションを表示する。
   const [securitiesPrep, setSecuritiesPrep] = useState(() => nexusDefaultSecuritiesPrep());
   const [delivery, setDelivery] = useState(() => nexusDefaultDelivery());
@@ -4696,14 +4839,14 @@ function NexusNewContractIntakeForm({ customers, onCreateContract, onClose, onSa
   const setSplitPartyName = (i, name) => setCommissionSplit(s => ({ ...s, parties: s.parties.map((p, idx) => idx === i ? { ...p, partyRef: { ...p.partyRef, name } } : p) }));
   const splitTotal = nexusCommissionSplitTotalPercentage(commissionSplit);
   // 分担前・分担後の手数料（表示専用。見込額(enteredAmount)自体は書き換えない）。
-  const splitPreviewContract = { commission, commissionSplit };
+  const splitPreviewContract = { commission, commissionSplit, acMethod, acAmount: null };
   const splitAmountsExcl = commissionSplit.mode !== 'none' ? nexusComputeSplitAmounts(splitPreviewContract, 'excl') : null;
   const splitAmountsIncl = commissionSplit.mode !== 'none' ? nexusComputeSplitAmounts(splitPreviewContract, 'incl') : null;
   const fmtAmt = v => v === null || v === undefined ? '未確認' : v.toLocaleString() + '円';
   const handleSave = () => {
     if (!canSave) return;
     const contractFields = {
-      ...fields, acAmount: fields.acAmount === '' ? null : Number(fields.acAmount),
+      ...fields, acMethod,
       applicationStatusHistory: [{ status: fields.applicationStatus, changedAt: new Date().toISOString() }],
       commission, commissionSplit, securitiesPrep, delivery
     };
@@ -4788,7 +4931,6 @@ function NexusNewContractIntakeForm({ customers, onCreateContract, onClose, onSa
             key: p, type: "button", className: `toggle-btn ${fields.paymentCycle === p ? 'sel' : ''}`, onClick: () => setFields(f => ({ ...f, paymentCycle: p }))
           }, p))
         )),
-        field('AC（見込み・万円）', /*#__PURE__*/React.createElement("input", { className: "form-input", type: "number", value: fields.acAmount, onChange: set('acAmount') })),
         field('備考', /*#__PURE__*/React.createElement("textarea", { className: "form-input", value: fields.remarks, onChange: set('remarks') }))
       ),
       /*#__PURE__*/React.createElement("div", { className: "card", style: { marginBottom: 10, padding: 10 } },
@@ -4850,10 +4992,22 @@ function NexusNewContractIntakeForm({ customers, onCreateContract, onClose, onSa
           ))
         ) : null
       ),
+      // 最終統合改修：手数料・分担のすぐ後にAC計算方式・見込みACを表示する（指示書2・9の
+      // 入力順序：手数料→税込税抜→分担→AC計算方式→見込みAC→確定手数料→実入金）。
+      // ACの独立した手入力欄は廃止し、計算結果として表示する（instanceには既存ACが無い
+      // ため「要確認」は発生しない）。
+      /*#__PURE__*/React.createElement("div", { className: "card", style: { marginBottom: 10, padding: 10 } },
+        /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, fontSize: 13, marginBottom: 4 } }, "⑥ AC計算方式・見込みAC"),
+        /*#__PURE__*/React.createElement(NexusAcCalculationBlock, {
+          contract: splitPreviewContract,
+          onChangeAcMethod: setAcMethod,
+          onAdoptComputedAc: null
+        })
+      ),
       // 最終確定指示書8：新契約登録フォームにも証券ケース・印刷物の要否・お渡し状況を
       // 必ず表示する（既存のnexusDefaultSecuritiesPrep/nexusDefaultDeliveryを再利用）。
       /*#__PURE__*/React.createElement("div", { className: "card", style: { marginBottom: 10, padding: 10 } },
-        /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, fontSize: 13, marginBottom: 4 } }, "⑥ 証券ケース・印刷物・お渡し"),
+        /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, fontSize: 13, marginBottom: 4 } }, "⑦ 証券ケース・印刷物・お渡し"),
         field('証券ケース', /*#__PURE__*/React.createElement("div", { className: "toggle-group" },
           ['必要', '不要', '未確認'].map(v => /*#__PURE__*/React.createElement("button", {
             key: v, type: "button", className: `toggle-btn ${securitiesPrep.caseNeeded === v ? 'sel' : ''}`,
