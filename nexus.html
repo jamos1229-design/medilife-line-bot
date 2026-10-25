@@ -2480,11 +2480,36 @@ function nexusFlattenAllContracts(customers) {
   });
   return rows;
 }
+// 最終指示書3：申込番号・証券番号のいずれかが一致する他の契約を検出する（警告表示のみ。
+// 自動統合・自動削除は一切行わない）。番号は文字列として比較し、先頭の0等を数値変換で
+// 失わない。保険会社ごとに発行方式を固定せず、契約単位でどちらの番号でも検索できるように、
+// 申込番号・証券番号のどちらか一方でも一致すれば候補として挙げる。
+function nexusFindDuplicateContractsByNumber(customers, applicationNum, policyNum, excludeContractId) {
+  const an = String(applicationNum || '').trim();
+  const pn = String(policyNum || '').trim();
+  if (!an && !pn) return [];
+  const matches = [];
+  (customers || []).forEach(c => {
+    (c.contracts || []).forEach(ct => {
+      if (ct.id === excludeContractId) return;
+      const matchesApplication = !!an && String(ct.applicationNum || '').trim() === an;
+      const matchesPolicy = !!pn && String(ct.policyNum || '').trim() === pn;
+      if (matchesApplication || matchesPolicy) {
+        matches.push({
+          customer: c, contract: ct,
+          matchedOn: matchesApplication && matchesPolicy ? '申込番号・証券番号' : matchesApplication ? '申込番号' : '証券番号'
+        });
+      }
+    });
+  });
+  return matches;
+}
 function ContractBlock({
   contract,
   onChange,
   onRemove,
-  index
+  index,
+  customers
 }) {
   const s = k => e => onChange({
     ...contract,
@@ -4026,7 +4051,9 @@ function ContractBlock({
   // 3ブロックを追加する（design doc 4-1：「折りたたみ可能なブロック」として配置）。
   return /*#__PURE__*/React.createElement(React.Fragment, null, baseBlock, /*#__PURE__*/React.createElement(ContractProductDetailsBlock, {
     contract: contract,
-    onChange: onChange
+    onChange: onChange,
+    customers: customers,
+    currentContractId: contract.id
   }), /*#__PURE__*/React.createElement(ContractCommissionBlock, {
     contract: contract,
     onChange: onChange
@@ -4048,7 +4075,7 @@ function NexusCollapsibleSection({ title, children }) {
 }
 // P6a-2追加：商品詳細ブロック（design doc 3-1）。既存のtype（自由入力）は変更せず、
 // productCategory（固定選択）を並行運用する。
-function ContractProductDetailsBlock({ contract, onChange }) {
+function ContractProductDetailsBlock({ contract, onChange, customers, currentContractId }) {
   const s = k => e => onChange({ ...contract, [k]: e.target.value });
   const characteristics = Array.isArray(contract.productCharacteristics) ? contract.productCharacteristics : [];
   const toggleCharacteristic = v => onChange({
@@ -4090,11 +4117,26 @@ function ContractProductDetailsBlock({ contract, onChange }) {
     /*#__PURE__*/React.createElement("label", { className: "form-label" }, "備考"),
     /*#__PURE__*/React.createElement("textarea", { className: "form-input", value: contract.remarks || '', onChange: s('remarks') })
   );
+  // 最終指示書3：申込番号・証券番号のいずれかが他の契約と一致する場合、警告のみ表示する
+  // （自動統合・自動削除は行わない）。
+  const dupMatches = nexusFindDuplicateContractsByNumber(customers, contract.applicationNum, contract.policyNum, currentContractId);
+  const dupWarning = dupMatches.length > 0 ? /*#__PURE__*/React.createElement("div", {
+    style: { background: '#fff3cd', border: '1px solid #ffc107', borderRadius: 6, padding: '8px 10px', fontSize: 13, color: '#7a5b00' }
+  },
+    "⚠ ", dupMatches.map(m => `${m.matchedOn}が一致：${nexusDisplayName(m.customer)}様「${m.contract.productName || m.contract.company || '契約'}」`).join(' / '),
+    "（重複の可能性があります。自動統合・削除は行われません。内容をご確認ください）"
+  ) : null;
   return /*#__PURE__*/React.createElement(NexusCollapsibleSection, { title: "商品詳細（申込日・商品名・商品特性等）" },
     dateField('申込日', 'applicationDate'),
-    dateField('契約日', 'contractDate'),
+    // 最終指示書での重複整理：既存のContractBlock（保険種類の下にある「契約日」、
+    // contract.date）と、P6a導入時に新設していたcontractDateが同じ意味で二重に
+    // 存在していたため、既存の長年使われているdateフィールドに統一する（他の多数の
+    // 既存計算・表示（源泉税率参照・ポートフォリオ集計・一覧表示等）がdateを前提にして
+    // いるため、新しい方を合わせる）。
+    dateField('契約日', 'date'),
     dateField('契約成立日', 'policyIssuedDate'),
     textField('申込番号', 'applicationNum'),
+    dupWarning,
     textField('商品名', 'productName'),
     categoryField,
     characteristicsField,
@@ -4284,7 +4326,7 @@ function nexusContractStatusFlags(contract) {
   const ct = contract;
   const now = new Date();
   const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  const contractMonth = (ct.contractDate || ct.applicationDate || '').slice(0, 7);
+  const contractMonth = (ct.date || ct.contractDate || ct.applicationDate || '').slice(0, 7);
   const paymentStatus = nexusCalcPaymentStatus(ct);
   const commission = nexusCommissionOf(ct);
   const expectedMonth = commission.expectedPaymentMonth || '';
@@ -4356,7 +4398,7 @@ function nexusContractListRowValues(row, amountBasis) {
   const splitRatioText = split.mode === 'none' ? '分割なし（100%）' : (split.parties || []).map(p => `${p.partyRef.kind === 'self' ? '自分' : (p.partyRef.name || '相手')}${p.percentage}%`).join('／');
   const splitAmountText = splitAmounts ? splitAmounts.parties.map(p => `${p.partyRef.kind === 'self' ? '自分' : (p.partyRef.name || '相手')}:${p.amount === null ? '未確認' : p.amount.toLocaleString() + '円'}`).join('／') : '-';
   return [
-    { key: 'contractDate', label: '契約日', value: ct.contractDate || '' },
+    { key: 'contractDate', label: '契約日', value: ct.date || ct.contractDate || '' },
     { key: 'policyholder', label: '契約者', value: nexusDisplayName(row.customer) },
     { key: 'policyholder', label: '契約者', value: nexusDisplayName(row.customer) },
     { key: 'insuredName', label: '被保険者', value: ct.insuredName || nexusDisplayName(row.customer) },
@@ -4384,12 +4426,148 @@ function nexusContractListRowValues(row, amountBasis) {
     { key: 'remarks', label: '備考', value: ct.remarks || '' }
   ];
 }
-function NexusContractManagementScreen({ customers, onOpenCustomer }) {
+// ── 最終指示書「新契約管理 最終完成指示」セクション2：新契約管理画面から直接、新しい契約を
+// 登録できる常設の「＋新契約登録」フォーム。既存顧客の選択／新規登録のどちらにも対応し、
+// 作成した契約は必ず既存のcustomers[].contracts[]へ追加する（別配列は新設しない）。
+// 申込番号・証券番号はどちらか一方だけでも、両方でも、どちらも未入力（下書き）でも保存できる
+// ようにし、文字列としてそのまま保存する（数値変換はしない＝先頭の0を失わない）。
+function NexusNewContractIntakeForm({ customers, onCreateContract, onClose, onSaved }) {
+  const [customerMode, setCustomerMode] = useState('existing');
+  const [customerQuery, setCustomerQuery] = useState('');
+  const [selectedCustomerId, setSelectedCustomerId] = useState('');
+  const [newCustomerName, setNewCustomerName] = useState('');
+  const [newCustomerType, setNewCustomerType] = useState('個人');
+  const [fields, setFields] = useState({
+    applicationDate: '', date: '', policyIssuedDate: '', company: '', productName: '',
+    productCategory: '', productCharacteristics: [], insuredName: '', premium: '',
+    paymentCycle: '', applicationNum: '', policyNum: '', acAmount: '', remarks: ''
+  });
+  const [errorMsg, setErrorMsg] = useState('');
+  const set = k => e => setFields(f => ({ ...f, [k]: e.target.value }));
+  const toggleCharacteristic = v => setFields(f => ({
+    ...f,
+    productCharacteristics: f.productCharacteristics.includes(v) ? f.productCharacteristics.filter(x => x !== v) : [...f.productCharacteristics, v]
+  }));
+  const q = customerQuery.trim().toLowerCase();
+  const matchedCustomers = (q ? customers.filter(c => nexusDisplayName(c).toLowerCase().includes(q)) : customers).slice(0, 30);
+  // 入力中の申込番号・証券番号が既存の契約と一致していないか、保存前にリアルタイムで警告表示
+  // する（保存をブロックしない。自動統合・自動削除は行わない）。
+  const dupMatches = nexusFindDuplicateContractsByNumber(customers, fields.applicationNum, fields.policyNum, null);
+  const canSave = customerMode === 'existing' ? !!selectedCustomerId : !!newCustomerName.trim();
+  const labelStyle = { className: 'form-label' };
+  const field = (label, el) => /*#__PURE__*/React.createElement("div", { style: { marginBottom: 10 } },
+    /*#__PURE__*/React.createElement("label", labelStyle, label), el
+  );
+  const handleSave = () => {
+    if (!canSave) return;
+    const contractFields = { ...fields, acAmount: fields.acAmount === '' ? null : Number(fields.acAmount) };
+    const selection = customerMode === 'existing'
+      ? { mode: 'existing', customerId: selectedCustomerId }
+      : { mode: 'new', name: newCustomerName.trim(), customerType: newCustomerType };
+    const result = onCreateContract(selection, contractFields);
+    if (!result.ok) {
+      setErrorMsg(result.reason === 'customer_not_found'
+        ? '選択した顧客が見つかりませんでした（他の場所で削除された可能性があります）。画面を閉じて選び直してください。'
+        : '保存に失敗しました。もう一度お試しください。');
+      return;
+    }
+    onSaved(result.customer, result.contract);
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: { position: 'fixed', inset: 0, zIndex: 9999, background: 'var(--bg)', display: 'flex', flexDirection: 'column' }
+  },
+    /*#__PURE__*/React.createElement("div", {
+      style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px', borderBottom: '1px solid var(--border)', flex: 'none' }
+    },
+      /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, fontSize: 15 } }, "＋新契約登録"),
+      /*#__PURE__*/React.createElement("button", { type: "button", className: "btn btn-sm", onClick: onClose }, "✕ 閉じる")
+    ),
+    /*#__PURE__*/React.createElement("div", { style: { flex: 1, overflowY: 'auto', padding: '14px 16px 100px' } },
+      /*#__PURE__*/React.createElement("div", { className: "card", style: { marginBottom: 10, padding: 10 } },
+        /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, fontSize: 13, marginBottom: 8 } }, "① 契約者を選択"),
+        /*#__PURE__*/React.createElement("div", { className: "toggle-group", style: { marginBottom: 8 } },
+          /*#__PURE__*/React.createElement("button", { type: "button", className: `toggle-btn ${customerMode === 'existing' ? 'sel' : ''}`, onClick: () => setCustomerMode('existing') }, "既存の顧客"),
+          /*#__PURE__*/React.createElement("button", { type: "button", className: `toggle-btn ${customerMode === 'new' ? 'sel' : ''}`, onClick: () => setCustomerMode('new') }, "新しい人を登録")
+        ),
+        customerMode === 'existing' ? /*#__PURE__*/React.createElement(React.Fragment, null,
+          /*#__PURE__*/React.createElement("input", {
+            className: "form-input", style: { marginBottom: 6 }, placeholder: "お名前で検索",
+            value: customerQuery, onChange: e => setCustomerQuery(e.target.value)
+          }),
+          /*#__PURE__*/React.createElement("div", { style: { maxHeight: 160, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 6 } },
+            matchedCustomers.length === 0 ? /*#__PURE__*/React.createElement("div", { style: { padding: 10, fontSize: 12, color: 'var(--text-sub)' } }, "該当する顧客がいません") :
+              matchedCustomers.map(c => /*#__PURE__*/React.createElement("div", {
+                key: c.id, onClick: () => setSelectedCustomerId(c.id),
+                style: {
+                  padding: '8px 10px', fontSize: 13, cursor: 'pointer', minHeight: 40, display: 'flex', alignItems: 'center',
+                  background: selectedCustomerId === c.id ? 'var(--primary-bg, #eef4ff)' : 'transparent', borderBottom: '1px solid var(--border)'
+                }
+              }, selectedCustomerId === c.id ? '✓ ' : '', nexusDisplayName(c)))
+          )
+        ) : /*#__PURE__*/React.createElement(React.Fragment, null,
+          field('お名前', /*#__PURE__*/React.createElement("input", { className: "form-input", value: newCustomerName, onChange: e => setNewCustomerName(e.target.value) })),
+          /*#__PURE__*/React.createElement("div", { className: "toggle-group" },
+            ['個人', '法人'].map(t => /*#__PURE__*/React.createElement("button", {
+              key: t, type: "button", className: `toggle-btn ${newCustomerType === t ? 'sel' : ''}`, onClick: () => setNewCustomerType(t)
+            }, t))
+          )
+        )
+      ),
+      /*#__PURE__*/React.createElement("div", { className: "card", style: { marginBottom: 10, padding: 10 } },
+        /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, fontSize: 13, marginBottom: 8 } }, "② 契約の基本情報"),
+        field('申込日', /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", value: fields.applicationDate, onChange: set('applicationDate') })),
+        field('契約日', /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", value: fields.date, onChange: set('date') })),
+        field('契約成立日', /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", value: fields.policyIssuedDate, onChange: set('policyIssuedDate') })),
+        field('保険会社', /*#__PURE__*/React.createElement("input", { className: "form-input", value: fields.company, onChange: set('company') })),
+        field('商品名', /*#__PURE__*/React.createElement("input", { className: "form-input", value: fields.productName, onChange: set('productName') })),
+        field('商品種類', /*#__PURE__*/React.createElement("select", { className: "form-select", value: fields.productCategory, onChange: set('productCategory') },
+          /*#__PURE__*/React.createElement("option", { value: "" }, "未選択"),
+          NEXUS_PRODUCT_CATEGORIES.map(c => /*#__PURE__*/React.createElement("option", { key: c, value: c }, c))
+        )),
+        field('商品特性（複数選択可）', /*#__PURE__*/React.createElement("div", { className: "toggle-group" },
+          NEXUS_PRODUCT_CHARACTERISTICS.map(c => /*#__PURE__*/React.createElement("button", {
+            key: c, type: "button", className: `toggle-btn ${fields.productCharacteristics.includes(c) ? 'sel' : ''}`, onClick: () => toggleCharacteristic(c)
+          }, c))
+        )),
+        field('被保険者', /*#__PURE__*/React.createElement("input", { className: "form-input", value: fields.insuredName, onChange: set('insuredName') })),
+        field('保険料', /*#__PURE__*/React.createElement("input", { className: "form-input", type: "number", value: fields.premium, onChange: set('premium') })),
+        field('払込方法', /*#__PURE__*/React.createElement("div", { className: "toggle-group" },
+          PAYMENT_CYCLES.map(p => /*#__PURE__*/React.createElement("button", {
+            key: p, type: "button", className: `toggle-btn ${fields.paymentCycle === p ? 'sel' : ''}`, onClick: () => setFields(f => ({ ...f, paymentCycle: p }))
+          }, p))
+        )),
+        field('AC（見込み・万円）', /*#__PURE__*/React.createElement("input", { className: "form-input", type: "number", value: fields.acAmount, onChange: set('acAmount') })),
+        field('備考', /*#__PURE__*/React.createElement("textarea", { className: "form-input", value: fields.remarks, onChange: set('remarks') }))
+      ),
+      /*#__PURE__*/React.createElement("div", { className: "card", style: { marginBottom: 10, padding: 10 } },
+        /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, fontSize: 13, marginBottom: 4 } }, "③ 申込番号・証券番号"),
+        /*#__PURE__*/React.createElement("div", { style: { fontSize: 11, color: 'var(--text-sub)', marginBottom: 8 } }, "どちらか一方だけ分かっている場合や、どちらもまだ分からない場合（下書き保存）でも登録できます。後から証券番号だけを追記することもできます。"),
+        field('申込番号', /*#__PURE__*/React.createElement("input", { className: "form-input", value: fields.applicationNum, onChange: set('applicationNum') })),
+        field('証券番号', /*#__PURE__*/React.createElement("input", { className: "form-input", value: fields.policyNum, onChange: set('policyNum') })),
+        dupMatches.length > 0 && /*#__PURE__*/React.createElement("div", {
+          style: { background: '#fff3cd', border: '1px solid #ffc107', borderRadius: 6, padding: '8px 10px', fontSize: 12, color: '#7a5b00' }
+        },
+          "⚠ ", dupMatches.map(m => `${m.matchedOn}が一致：${nexusDisplayName(m.customer)}様「${m.contract.productName || m.contract.company || '契約'}」`).join(' / '),
+          "（重複の可能性があります。自動統合・削除は行われません。内容をご確認ください）"
+        )
+      ),
+      errorMsg && /*#__PURE__*/React.createElement("div", { style: { color: '#c0392b', fontSize: 12, marginBottom: 10 } }, errorMsg)
+    ),
+    /*#__PURE__*/React.createElement("div", {
+      style: { flex: 'none', padding: '10px 16px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8 }
+    },
+      /*#__PURE__*/React.createElement("button", { type: "button", className: "btn btn-outline", style: { flex: 1 }, onClick: onClose }, "キャンセル"),
+      /*#__PURE__*/React.createElement("button", { type: "button", className: "btn btn-primary", style: { flex: 2 }, disabled: !canSave, onClick: handleSave }, "この内容で登録する")
+    )
+  );
+}
+function NexusContractManagementScreen({ customers, onOpenCustomer, onCreateContract }) {
   // 初期表示は「今月の新契約」を中心とした業務管理画面とする（最終指示書3-1）。
   const [activeTab, setActiveTab] = useState('newThisMonth');
   const [search, setSearch] = useState('');
   const [sortKey, setSortKey] = useState('contractDateDesc');
   const [amountBasis, setAmountBasis] = useState('excl');
+  const [showIntake, setShowIntake] = useState(false);
   const rows = useMemo(() => nexusFlattenAllContracts(customers).map(row => ({ ...row, flags: nexusContractStatusFlags(row.contract) })), [customers]);
   const counted = NEXUS_CONTRACT_STATUS_TABS.map(t => ({ ...t, count: rows.filter(r => t.test(r.flags)).length }));
   const activeTabDef = NEXUS_CONTRACT_STATUS_TABS.find(t => t.key === activeTab);
@@ -4397,7 +4575,9 @@ function NexusContractManagementScreen({ customers, onOpenCustomer }) {
     if (activeTabDef && !activeTabDef.test(r.flags)) return false;
     if (!search) return true;
     const q = search.toLowerCase();
-    return [nexusDisplayName(r.customer), r.contract.company, r.contract.productName, r.contract.policyNum].some(v => v && String(v).toLowerCase().includes(q));
+    // 最終指示書：被保険者・申込番号でも検索できるようにする（保険会社・商品名・顧客名・
+    // 証券番号は既存のまま）。
+    return [nexusDisplayName(r.customer), r.contract.company, r.contract.productName, r.contract.policyNum, r.contract.insuredName, r.contract.applicationNum].some(v => v && String(v).toLowerCase().includes(q));
   });
   const sorted = [...filtered].sort((a, b) => {
     if (sortKey === 'expectedPaymentAsc') {
@@ -4405,10 +4585,16 @@ function NexusContractManagementScreen({ customers, onOpenCustomer }) {
       const eb = (nexusCommissionOf(b.contract).expectedPaymentMonth) || '';
       return ea.localeCompare(eb);
     }
-    return (b.contract.contractDate || '').localeCompare(a.contract.contractDate || '');
+    return (b.contract.date || b.contract.contractDate || '').localeCompare(a.contract.date || a.contract.contractDate || '');
   });
 
-  const headerRow = /*#__PURE__*/React.createElement("div", { style: { padding: '12px 16px 0', fontWeight: 700, fontSize: 16 } }, "📋 新契約管理");
+  const headerRow = /*#__PURE__*/React.createElement("div", { style: { padding: '12px 16px 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+    /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, fontSize: 16 } }, "📋 新契約管理"),
+    // 最終指示書：どのタブでも、件数が0件でも常に表示される「＋新契約登録」ボタン（最優先項目）。
+    /*#__PURE__*/React.createElement("button", {
+      type: "button", className: "btn btn-primary btn-sm", onClick: () => setShowIntake(true)
+    }, "＋新契約登録")
+  );
   const subHeaderRow = /*#__PURE__*/React.createElement("div", { style: { padding: '0 16px 10px', fontSize: 11.5, color: 'var(--text-sub)' } },
     "新規申込みから成立・手数料入金・資料準備・お客様へのお渡しまでを1画面で管理します。"
   );
@@ -4441,8 +4627,11 @@ function NexusContractManagementScreen({ customers, onOpenCustomer }) {
       )),
       /*#__PURE__*/React.createElement("tbody", null, sorted.map((row, idx) => {
         const cells = nexusContractListRowValues(row, amountBasis);
+        // 最終指示書9：idを持たない旧データの契約も一覧に表示できるよう、idが無い場合は
+        // 顧客id＋行番号で安全なキーを作る（idそのものは書き換えない）。
+        const rowKey = row.contract.id || `${row.customer.id}-${idx}`;
         return /*#__PURE__*/React.createElement("tr", {
-          key: row.contract.id, style: { cursor: 'pointer', borderBottom: '1px solid var(--border)' }, onClick: () => onOpenCustomer(row.customer)
+          key: rowKey, style: { cursor: 'pointer', borderBottom: '1px solid var(--border)' }, onClick: () => onOpenCustomer(row.customer)
         },
           /*#__PURE__*/React.createElement("td", { style: { padding: '6px 8px' } }, idx + 1),
           /*#__PURE__*/React.createElement("td", { style: { padding: '6px 8px' } }, cells.find(c => c.key === 'policyholder').value),
@@ -4452,7 +4641,18 @@ function NexusContractManagementScreen({ customers, onOpenCustomer }) {
     )
   );
   const emptyState = sorted.length === 0 ? /*#__PURE__*/React.createElement("div", { className: "empty", style: { padding: '30px 16px' } }, "該当する契約がありません") : null;
-  return /*#__PURE__*/React.createElement("div", null, headerRow, subHeaderRow, tabsRow, searchRow, sortRow, emptyState, table);
+  const intakeForm = showIntake ? /*#__PURE__*/React.createElement(NexusNewContractIntakeForm, {
+    customers: customers,
+    onCreateContract: onCreateContract,
+    onClose: () => setShowIntake(false),
+    onSaved: (customer, contract) => {
+      setShowIntake(false);
+      // 登録後は、今登録した契約が実際に一覧へ反映されたことを確認しやすいよう
+      // 「すべての契約」タブへ切り替える（当月以外の日付で登録した場合でも必ず見える）。
+      setActiveTab('all');
+    }
+  }) : null;
+  return /*#__PURE__*/React.createElement("div", null, headerRow, subHeaderRow, tabsRow, searchRow, sortRow, emptyState, table, intakeForm);
 }
 
 // ── P6b：職域別営業分析（design doc 4章のMVP実装） ──────────────────────────
@@ -6656,7 +6856,8 @@ function CustomerForm({
     contract: c,
     index: i,
     onChange: data => updateContract(c.id, data),
-    onRemove: () => removeContract(c.id)
+    onRemove: () => removeContract(c.id),
+    customers: customers
   })), /*#__PURE__*/React.createElement("button", {
     className: "btn btn-outline btn-full",
     style: {
@@ -51336,6 +51537,45 @@ function App() {
     return { ok: true, customer: nextC };
   };
   const deleteCustomer = id => setCustomers(prev => prev.filter(c => c.id !== id));
+  // 新契約管理画面の「＋新契約登録」用の安全な書き込み処理。saveCustomer（CustomerForm用）とは
+  // editingCustomerの編集セッション状態が無関係に独立しているため、別の専用関数とする。
+  // 別タブでの最新変更を上書きしないよう、書き込み直前に必ずlocalStorageの最新値を読み直し、
+  // そこへ今回追加する契約だけをマージする（saveCustomerと同じ安全策）。
+  // customerSelection: { mode: 'existing', customerId } または { mode: 'new', name, customerType }
+  // 戻り値：{ok:true, customer, contract} / {ok:false, reason:'customer_not_found'|'write_failed'}
+  const createContractForIntake = (customerSelection, contractFields) => {
+    let latestCustomers;
+    try {
+      const raw = localStorage.getItem('customers_v1');
+      latestCustomers = raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      latestCustomers = null;
+    }
+    if (!Array.isArray(latestCustomers)) latestCustomers = customers;
+    const newContract = { id: uid(), ...contractFields };
+    let nextCustomers, targetCustomer;
+    if (customerSelection.mode === 'existing') {
+      const idx = latestCustomers.findIndex(x => x.id === customerSelection.customerId);
+      if (idx < 0) return { ok: false, reason: 'customer_not_found' };
+      targetCustomer = {
+        ...latestCustomers[idx],
+        contracts: [...(latestCustomers[idx].contracts || []), newContract],
+        updatedAt: new Date().toISOString()
+      };
+      nextCustomers = latestCustomers.map((x, i) => i === idx ? targetCustomer : x);
+    } else {
+      targetCustomer = {
+        id: uid(), name: customerSelection.name || '', customerType: customerSelection.customerType || '個人',
+        status: '未接触', suspects: [], referredBy: '', referredTo: [],
+        contracts: [newContract], updatedAt: new Date().toISOString()
+      };
+      nextCustomers = [...latestCustomers, targetCustomer];
+    }
+    const writeResult = nexusLifePlanWriteCustomersVerified(nextCustomers);
+    if (!writeResult.ok) return { ok: false, reason: 'write_failed' };
+    setCustomers(nextCustomers);
+    return { ok: true, customer: targetCustomer, contract: newContract };
+  };
   const openNewCustomer = () => {
     setEditingCustomer(null);
     setShowCustomerForm(true);
@@ -51803,7 +52043,8 @@ function App() {
     onOpenCustomer: c => {
       setTab('list');
       setSelectedCustomer(c);
-    }
+    },
+    onCreateContract: createContractForIntake
   }), tab === 'occupation' && /*#__PURE__*/React.createElement(NexusOccupationAnalyticsScreen, {
     customers: customers,
     setCustomers: setCustomers,
