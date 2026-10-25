@@ -782,6 +782,188 @@ function nexusOwnerRefMatchesMember(ownerRef, member) {
   if (ownerRef.kind === 'linkedCustomer' && member.customerId && ownerRef.linkedCustomerId === member.customerId) return true;
   return false;
 }
+// ── P2a：本人/配偶者/夫婦合算/家族全体の統一集計ロジック ──────────────
+// 資産項目1件分の評価額を、資産種別ごとの既存ロジック（nexusStockEval等、変更しない）を
+// そのまま再利用して求める。
+function nexusAssetKindItemValue(item, kind) {
+  if (kind === 'stocks') return nexusStockEval(item).value;
+  if (kind === 'funds') {
+    const resolved = nexusFundResolvedValue(item, nexusFundEval(item));
+    return resolved ? resolved.amount : 0;
+  }
+  if (kind === 'corporateDc' || kind === 'ideco') return parseFloat(item.currentValue) || 0;
+  if (kind === 'mutualPension') {
+    const currentValue = parseFloat(item.currentValue) || 0;
+    const principal = parseFloat(item.principal) || 0;
+    return currentValue > 0 ? currentValue : principal;
+  }
+  if (kind === 'realEstate') return nexusRealEstateYenValue(item);
+  return parseFloat(item.value) || 0; // deposits/bonds/fx/crypto/others
+}
+const NEXUS_PORTFOLIO_ASSET_KINDS = ['deposits', 'bonds', 'fx', 'crypto', 'others', 'stocks', 'funds', 'corporateDc', 'ideco', 'mutualPension', 'realEstate'];
+// 資産項目1件を、指定した対象メンバー一覧(targetMembers)へ持分に応じて配分する。
+// 戻り値の5項目を足すと必ず評価額（旧方式の単純合計の1件分）に一致する（design doc
+// STEP2#1,6「新旧合計の差額は名義未確認・持分不明・第三者名義で説明できる」ための土台）。
+//   targetAmount      … targetMembersのいずれかに帰属する分
+//   unconfirmedAmount … owners[]が一度も設定されていない（名義未確認）分
+//   unclearShareAmount… 持分合計が100%に届かない、割り当て先が無い残り（持分不明）分
+//   externalAmount    … 家族以外（external）に帰属する分
+//   otherAmount       … 家族の中でもtargetMembersに含まれない別の人に帰属する分
+function nexusAttributeAssetItem(item, kind, targetMembers) {
+  const value = nexusAssetKindItemValue(item, kind);
+  const owners = nexusOwnersOf(item);
+  const isAllUnset = owners.every(o => !o.ownerRef || o.ownerRef.kind === 'unset');
+  if (isAllUnset) {
+    return { targetAmount: 0, unconfirmedAmount: value, unclearShareAmount: 0, externalAmount: 0, otherAmount: 0 };
+  }
+  const percentTotal = nexusOwnersPercentageTotal(owners);
+  const unclearShareAmount = percentTotal < 100 ? value * ((100 - percentTotal) / 100) : 0;
+  let targetAmount = 0, externalAmount = 0, otherAmount = 0;
+  owners.forEach(o => {
+    const share = value * ((Number(o.percentage) || 0) / 100);
+    if (!o.ownerRef || o.ownerRef.kind === 'unset') return;
+    if (o.ownerRef.kind === 'external') { externalAmount += share; return; }
+    if ((targetMembers || []).some(m => nexusOwnerRefMatchesMember(o.ownerRef, m))) targetAmount += share;
+    else otherAmount += share;
+  });
+  return { targetAmount, unconfirmedAmount: 0, unclearShareAmount, externalAmount, otherAmount };
+}
+// scopeKeyごとに、横断して集計すべき「物理的なポートフォリオの持ち主（顧客レコード）」を
+// 決める。本人('self')・配偶者('spouse')は、既存の夫婦合算機能と同じく配偶者が別の顧客
+// として登録・連携済み(linkedCustomerId)の場合のみ対象にできる。家族全体('household')は
+// 本人および家族情報のうち登録済みの家族全員を対象にする（suspectのみ＝未登録の子等は、
+// 本人側のportfolio配列にそもそも別個のデータを持たないため対象に加える物理データが無い）。
+function nexusPortfoliosForScope(customer, customers, scopeKey, household) {
+  const spouseMember = (household || []).find(m => m.relation === '配偶者');
+  const spouseCustomer = spouseMember && spouseMember.personKind === 'linkedCustomer' ? (customers || []).find(c => c.id === spouseMember.customerId) : null;
+  if (scopeKey === 'self') return [customer];
+  if (scopeKey === 'spouse') return spouseCustomer ? [spouseCustomer] : [];
+  if (scopeKey === 'couple') return spouseCustomer ? [customer, spouseCustomer] : [customer];
+  const linkedMembers = (household || []).filter(m => m.personKind === 'linkedCustomer').map(m => (customers || []).find(c => c.id === m.customerId)).filter(Boolean);
+  return [customer, ...linkedMembers];
+}
+// 本人/配偶者/夫婦合算/家族全体の統一集計。scopeKey: 'self'|'spouse'|'couple'|'household'。
+// legacyTotal（対象ポートフォリオの単純合計＝旧方式）と、target+unconfirmed+unclearShare+
+// external+otherの合計（新方式）が常に一致することを検算できるようにする
+// （design doc STEP4「現在の資産合計と新しい名義別集計結果を比較できること」）。
+function nexusComputeOwnerAttributedSummary(customer, customers, scopeKey) {
+  const household = nexusResolveHousehold(customer, customers);
+  let targetMembers;
+  if (scopeKey === 'self') targetMembers = household.filter(m => m.personKind === 'self');
+  else if (scopeKey === 'spouse') targetMembers = household.filter(m => m.relation === '配偶者');
+  else if (scopeKey === 'couple') targetMembers = household.filter(m => m.personKind === 'self' || m.relation === '配偶者');
+  else targetMembers = household;
+  const portfolios = nexusPortfoliosForScope(customer, customers, scopeKey, household).map(c => (c.lp && c.lp.portfolio) || {});
+  let legacyTotal = 0, targetTotal = 0, unconfirmedTotal = 0, unclearShareTotal = 0, externalTotal = 0, otherTotal = 0;
+  const byAssetClass = {};
+  portfolios.forEach(portfolio => {
+    NEXUS_PORTFOLIO_ASSET_KINDS.forEach(kind => {
+      (portfolio[kind] || []).forEach(item => {
+        legacyTotal += nexusAssetKindItemValue(item, kind);
+        const a = nexusAttributeAssetItem(item, kind, targetMembers);
+        targetTotal += a.targetAmount;
+        unconfirmedTotal += a.unconfirmedAmount;
+        unclearShareTotal += a.unclearShareAmount;
+        externalTotal += a.externalAmount;
+        otherTotal += a.otherAmount;
+        byAssetClass[kind] = (byAssetClass[kind] || 0) + a.targetAmount;
+      });
+    });
+  });
+  const reconciledTotal = targetTotal + unconfirmedTotal + unclearShareTotal + externalTotal + otherTotal;
+  return {
+    scopeKey, targetTotal, unconfirmedTotal, unclearShareTotal, externalTotal, otherTotal,
+    legacyTotal, reconciledTotal,
+    reconciles: Math.abs(legacyTotal - reconciledTotal) < 1,
+    byAssetClass
+  };
+}
+// ── P2c：重複候補検出（検出のみ・自動統合はしない） ──────────────
+// 同一スコープ内の資産項目同士を、資産種別・名前の緩い一致・評価額の近さ(既定5%以内)で
+// 比較し、重複の可能性がある組を検出する（design doc 3-3「財産目録」前段の重複防止）。
+// 自動統合・自動削除は一切行わず、候補の提示のみ（指示書の確定方針）。
+function nexusFindDuplicateAssetCandidates(customer, customers, scopeKey, tolerancePercent) {
+  const household = nexusResolveHousehold(customer, customers);
+  const portfolios = nexusPortfoliosForScope(customer, customers, scopeKey || 'household', household);
+  const entries = [];
+  portfolios.forEach(c => {
+    const portfolio = (c.lp && c.lp.portfolio) || {};
+    NEXUS_PORTFOLIO_ASSET_KINDS.forEach(kind => {
+      (portfolio[kind] || []).forEach(item => {
+        entries.push({ customerId: c.id, customerName: nexusDisplayName(c), kind, item, value: nexusAssetKindItemValue(item, kind), name: (item.name || item.productName || '').trim() });
+      });
+    });
+  });
+  const tol = (tolerancePercent === undefined ? 5 : tolerancePercent) / 100;
+  const pairs = [];
+  for (let i = 0; i < entries.length; i++) {
+    for (let j = i + 1; j < entries.length; j++) {
+      const a = entries[i], b = entries[j];
+      if (a.kind !== b.kind) continue;
+      if (!a.name || !b.name) continue;
+      const nameMatches = a.name === b.name || a.name.includes(b.name) || b.name.includes(a.name);
+      if (!nameMatches) continue;
+      const base = Math.max(Math.abs(a.value), Math.abs(b.value), 1);
+      const valueClose = Math.abs(a.value - b.value) / base <= tol;
+      if (!valueClose) continue;
+      pairs.push({ a, b, suggestedGroupId: `dup-${a.item.id}-${b.item.id}` });
+    }
+  }
+  return pairs;
+}
+// P2b：名義未確認・持分不明・第三者名義の別枠表示＋新旧合計の検算表示。
+// 「普段の画面は本人/夫婦合算のまま変更しない」方針のため、既存画面の末尾に、必要な
+// ときだけ開く追加パネルとして表示する（design doc STEP5「配偶者版・家族全体版は
+// 必要なときだけ選べる形で追加」）。
+const NEXUS_OWNER_SCOPE_LABELS = { self: '本人', spouse: '配偶者', couple: '夫婦合算', household: '家族全体' };
+function nexusFormatJpy(n) {
+  return `${Math.round(n).toLocaleString('ja-JP')}円`;
+}
+function NexusOwnerAttributedPanel({ customer, customers }) {
+  const [open, setOpen] = useState(false);
+  const [scope, setScope] = useState('self');
+  const [showDup, setShowDup] = useState(false);
+  if (!open) {
+    return /*#__PURE__*/React.createElement("button", {
+      type: "button", className: "btn btn-outline", style: { fontSize: 12 },
+      onClick: () => setOpen(true)
+    }, "▼ 名義人別集計・重複候補の確認（新機能）");
+  }
+  const summary = nexusComputeOwnerAttributedSummary(customer, customers, scope);
+  const dupPairs = showDup ? nexusFindDuplicateAssetCandidates(customer, customers, scope) : [];
+  return /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("div", {
+      style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }
+    }, /*#__PURE__*/React.createElement("span", { style: { fontWeight: 700, fontSize: 13 } }, "名義人別集計（新機能）"),
+       /*#__PURE__*/React.createElement("button", { type: "button", className: "btn btn-sm", onClick: () => setOpen(false) }, "▲ 閉じる")),
+    /*#__PURE__*/React.createElement("div", { className: "toggle-group", style: { marginBottom: 8 } },
+      Object.keys(NEXUS_OWNER_SCOPE_LABELS).map(k => /*#__PURE__*/React.createElement("button", {
+        key: k, type: "button", className: `toggle-btn ${scope === k ? 'sel' : ''}`, onClick: () => setScope(k)
+      }, NEXUS_OWNER_SCOPE_LABELS[k]))
+    ),
+    /*#__PURE__*/React.createElement("div", { style: { fontSize: 12.5, lineHeight: 1.8 } },
+      /*#__PURE__*/React.createElement("div", null, `${NEXUS_OWNER_SCOPE_LABELS[scope]}の資産合計：`, /*#__PURE__*/React.createElement("b", null, nexusFormatJpy(summary.targetTotal))),
+      /*#__PURE__*/React.createElement("div", { style: { color: 'var(--text-sub)' } }, "【別枠（対象合計には含めない）】"),
+      summary.unconfirmedTotal > 0 && /*#__PURE__*/React.createElement("div", null, "　名義未確認：", nexusFormatJpy(summary.unconfirmedTotal)),
+      summary.unclearShareTotal > 0 && /*#__PURE__*/React.createElement("div", null, "　持分不明：", nexusFormatJpy(summary.unclearShareTotal)),
+      summary.externalTotal > 0 && /*#__PURE__*/React.createElement("div", null, "　第三者名義：", nexusFormatJpy(summary.externalTotal)),
+      summary.otherTotal > 0 && /*#__PURE__*/React.createElement("div", null, "　他の家族の分：", nexusFormatJpy(summary.otherTotal)),
+      /*#__PURE__*/React.createElement("div", { style: { marginTop: 6, color: summary.reconciles ? 'var(--text-sub)' : 'var(--danger)' } },
+        `検算：旧方式の単純合計 ${nexusFormatJpy(summary.legacyTotal)} ＝ 新方式の合計 ${nexusFormatJpy(summary.reconciledTotal)}`,
+        summary.reconciles ? '（一致）' : '（⚠️不一致：計算ロジックをご確認ください）'
+      )
+    ),
+    /*#__PURE__*/React.createElement("button", {
+      type: "button", className: "btn btn-sm", style: { marginTop: 8 }, onClick: () => setShowDup(v => !v)
+    }, showDup ? '重複候補を閉じる' : '重複候補を確認する'),
+    showDup && /*#__PURE__*/React.createElement("div", { style: { marginTop: 8 } },
+      dupPairs.length === 0 ? /*#__PURE__*/React.createElement("div", { style: { fontSize: 12, color: 'var(--text-sub)' } }, "重複の可能性がある項目は見つかりませんでした。") :
+        dupPairs.map((p, i) => /*#__PURE__*/React.createElement("div", {
+          key: i, className: "card", style: { padding: 8, marginBottom: 6, fontSize: 12 }
+        }, `${p.a.customerName}「${p.a.name}」（${nexusFormatJpy(p.a.value)}） ⇔ ${p.b.customerName}「${p.b.name}」（${nexusFormatJpy(p.b.value)}）`))
+    )
+  );
+}
 // 名義人1名分の選択UI（本人／家族／登録済みの家族／その他から選ぶ）。
 function NexusOwnerRefSelect({ ownerRef, onChange, candidates }) {
   const current = ownerRef || nexusDefaultOwnerRef();
@@ -39144,7 +39326,9 @@ function NexusPlanningSection({
     }
     return () => document.body.classList.remove('ml-printing');
   }, [showPrint]);
-  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  // P2追加：既存の巨大な単一JSXツリーは変更せず、末尾に新しい「名義人別集計（新機能）」
+  // パネルを別コンポーネントとして追加する（ContractBlockと同じ安全な拡張パターン）。
+  const baseSection = /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement(CustomerSelect, {
     label: "対象顧客",
@@ -42662,6 +42846,12 @@ function NexusPlanningSection({
     setContractExcludeFlag: setContractExcludeFlag,
     setAssetExcludeFlag: setAssetExcludeFlag
   }));
+  return /*#__PURE__*/React.createElement(React.Fragment, null, baseSection, customer && /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement(NexusOwnerAttributedPanel, {
+    customer: customer,
+    customers: customers
+  })));
 }
 
 // ── 資料出力範囲の選択画面（「今回、何を資料に載せるか」）──────────────────────────────
