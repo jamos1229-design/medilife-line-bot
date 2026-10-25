@@ -23272,6 +23272,9 @@ function nexusApplyFullBackupData(data, handlers, options) {
   if (data.nexusServiceLinks && handlers.setNexusServiceLinks) { handlers.setNexusServiceLinks(data.nexusServiceLinks); applied.nexusServiceLinks = data.nexusServiceLinks; }
   if (data.nexusMission && handlers.setNexusMission) { handlers.setNexusMission(data.nexusMission); applied.nexusMission = data.nexusMission; }
   if (data.nexusSavedSearches && handlers.setNexusSavedSearches) { handlers.setNexusSavedSearches(data.nexusSavedSearches); applied.nexusSavedSearches = data.nexusSavedSearches; }
+  // P6b追加（バックアップ対象漏れの修正）：CSB基準人数（手入力の比較用参考値）。
+  // kpiSettings等と同じ、useLS経由の通常項目として扱う。
+  if (data.nexusCsbOccupationCounts && handlers.setNexusCsbOccupationCounts) { handlers.setNexusCsbOccupationCounts(data.nexusCsbOccupationCounts); applied.nexusCsbOccupationCounts = data.nexusCsbOccupationCounts; }
   if (data.nexusDotRequests && handlers.setNexusDotRequests) {
     const restoredRequests = tagRestored ? data.nexusDotRequests.map(r => r.status === 'applied' ? r : { ...r, restoredInvalid: true }) : data.nexusDotRequests;
     handlers.setNexusDotRequests(restoredRequests);
@@ -23285,6 +23288,15 @@ function nexusApplyFullBackupData(data, handlers, options) {
     try {
       localStorage.setItem('ml_dot_ref_map_v1', JSON.stringify(data.nexusDotRefMap));
       applied.nexusDotRefMap = data.nexusDotRefMap;
+    } catch (e) {}
+  }
+  // P0d/P6b追加（バックアップ対象漏れの修正）：顧客統合履歴(nexus_merge_history_v1)は
+  // nexusDotRefMapと同じ「非リアクティブな単純ストア」のため、Reactのstate・useLSを
+  // 経由せず常にlocalStorageへ直接書き込む（既存の統合履歴の読み書き関数自体には触れない）。
+  if (data.nexusMergeHistory) {
+    try {
+      localStorage.setItem('nexus_merge_history_v1', JSON.stringify(data.nexusMergeHistory));
+      applied.nexusMergeHistory = data.nexusMergeHistory;
     } catch (e) {}
   }
   return applied;
@@ -23302,13 +23314,13 @@ function nexusValidateFullBackupStructure(data) {
   }
   const arrayFields = ['tasks', 'memos', 'activityLogs', 'opportunities', 'nexusFanCampaigns',
     'nexusFanFollows', 'clients', 'suspects', 'logs', 'nexusServices', 'nexusServiceLinks',
-    'nexusSavedSearches', 'nexusDotRequests'];
+    'nexusSavedSearches', 'nexusDotRequests', 'nexusMergeHistory'];
   for (const f of arrayFields) {
     if (data[f] !== undefined && data[f] !== null && !Array.isArray(data[f])) {
       return { ok: false, reason: 'field_type_invalid', field: f };
     }
   }
-  const objectFields = ['vision', 'kpiSettings', 'sales', 'nexusMission'];
+  const objectFields = ['vision', 'kpiSettings', 'sales', 'nexusMission', 'nexusCsbOccupationCounts'];
   for (const f of objectFields) {
     if (data[f] !== undefined && data[f] !== null && (typeof data[f] !== 'object' || Array.isArray(data[f]))) {
       return { ok: false, reason: 'field_type_invalid', field: f };
@@ -23384,7 +23396,8 @@ const NEXUS_FULL_BACKUP_LS_KEY_MAP = {
   nexusMission: 'nexus_mission_v1', nexusSavedSearches: 'nexus_saved_searches_v1',
   nexusDotRequests: 'ml_dot_requests_v1', nexusAiIdCounter: 'nexus_ai_id_counter_v1',
   nexusAiIdMigrationDone: 'nexus_ai_id_migration_done_v1', nexusAiContractIdCounter: 'nexus_ai_contract_id_counter_v1',
-  nexusAiContractIdMigrationDone: 'nexus_ai_contract_id_migration_done_v1', nexusDotRefMap: 'ml_dot_ref_map_v1'
+  nexusAiContractIdMigrationDone: 'nexus_ai_contract_id_migration_done_v1', nexusDotRefMap: 'ml_dot_ref_map_v1',
+  nexusCsbOccupationCounts: 'nexus_csb_occupation_counts_v1', nexusMergeHistory: 'nexus_merge_history_v1'
 };
 const NEXUS_LEGACY_FORMAT1_LS_KEY_MAP = {
   tasks: 'ml_tasks_v1', clients: 'ml_clients_v1', suspects: 'ml_suspects_v1', logs: 'ml_logs_v1',
@@ -23439,7 +23452,9 @@ const NEXUS_FULL_BACKUP_FIELD_DEFS = [
   { key: 'nexusServiceLinks', label: 'サービス連携', kind: 'array' },
   { key: 'nexusMission', label: 'ミッション', kind: 'object' },
   { key: 'nexusSavedSearches', label: '保存検索', kind: 'array' },
-  { key: 'nexusDotRequests', label: 'Dot連携依頼', kind: 'array' }
+  { key: 'nexusDotRequests', label: 'Dot連携依頼', kind: 'array' },
+  { key: 'nexusCsbOccupationCounts', label: 'CSB基準人数（職域分析）', kind: 'object' },
+  { key: 'nexusMergeHistory', label: '顧客統合履歴', kind: 'array' }
 ];
 const NEXUS_LEGACY_FORMAT1_FIELD_DEFS = [
   { key: 'tasks', label: 'タスク', kind: 'array' },
@@ -26242,6 +26257,8 @@ function nexusReadBackupSnapshotFromStorage(extra) {
     nexusAiIdMigrationDone: readJSON('nexus_ai_id_migration_done_v1', null),
     nexusAiContractIdCounter: readJSON('nexus_ai_contract_id_counter_v1', null),
     nexusAiContractIdMigrationDone: readJSON('nexus_ai_contract_id_migration_done_v1', null),
+    nexusCsbOccupationCounts: readJSON('nexus_csb_occupation_counts_v1', {}),
+    nexusMergeHistory: readJSON('nexus_merge_history_v1', []),
     ...(extra || {})
   };
 }
@@ -26421,11 +26438,19 @@ function exportJSON(state) {
     const raw = localStorage.getItem('ml_dot_ref_map_v1');
     if (raw) nexusDotRefMap = JSON.parse(raw);
   } catch (e) {}
+  // P0d/P6b追加（バックアップ対象漏れの修正）：顧客統合履歴も同様に非リアクティブな
+  // 単純ストアのため、常にlocalStorageの現在値を直接読む。
+  let nexusMergeHistory = null;
+  try {
+    const raw = localStorage.getItem('nexus_merge_history_v1');
+    if (raw) nexusMergeHistory = JSON.parse(raw);
+  } catch (e) {}
   const data = JSON.stringify({
     __medilifeBackup: true,
     version: 1,
     exportedAt: new Date().toISOString(),
     nexusDotRefMap: nexusDotRefMap,
+    nexusMergeHistory: nexusMergeHistory,
     customers: state.customers,
     memos: state.memos,
     kpiSettings: state.kpiSettings,
@@ -26447,7 +26472,8 @@ function exportJSON(state) {
     nexusAiIdCounter: state.nexusAiIdCounter,
     nexusAiIdMigrationDone: state.nexusAiIdMigrationDone,
     nexusAiContractIdCounter: state.nexusAiContractIdCounter,
-    nexusAiContractIdMigrationDone: state.nexusAiContractIdMigrationDone
+    nexusAiContractIdMigrationDone: state.nexusAiContractIdMigrationDone,
+    nexusCsbOccupationCounts: state.nexusCsbOccupationCounts
   }, null, 2);
   const blob = new Blob([data], {
     type: 'application/json'
@@ -51317,7 +51343,8 @@ function App() {
     setNexusAiIdCounter,
     setNexusAiIdMigrationDone,
     setNexusAiContractIdCounter,
-    setNexusAiContractIdMigrationDone
+    setNexusAiContractIdMigrationDone,
+    setNexusCsbOccupationCounts
   };
   // バックアップ・復元操作のたびに画面表示を更新するための再描画トリガー
   // （exportJSON・自動退避データの読み書きはReactのstateを経由しないため）。
@@ -51447,7 +51474,8 @@ function App() {
         nexusAiIdCounter,
         nexusAiIdMigrationDone,
         nexusAiContractIdCounter,
-        nexusAiContractIdMigrationDone
+        nexusAiContractIdMigrationDone,
+        nexusCsbOccupationCounts
       });
       setBackupMetaTick(t => t + 1);
     },
@@ -51587,7 +51615,8 @@ function App() {
       nexusAiIdCounter,
       nexusAiIdMigrationDone,
       nexusAiContractIdCounter,
-      nexusAiContractIdMigrationDone
+      nexusAiContractIdMigrationDone,
+      nexusCsbOccupationCounts
     },
     onClose: () => setShowAiIdMigration(false),
     onComplete: () => {
