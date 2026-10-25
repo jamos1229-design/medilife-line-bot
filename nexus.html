@@ -1658,6 +1658,189 @@ const csStyle = st => ({
   bg: '#DCFCE7',
   color: '#15803D'
 };
+// ── P6a：新契約・手数料入金・証券お渡し管理（データ設計・計算ロジック） ──────
+// 商品種類（固定選択）。既存のtype（自由入力）は削除・変更せず、並行運用する新しい
+// 選択式フィールド（productCategory）用の選択肢（design doc 3-1・8章-5参照）。
+const NEXUS_PRODUCT_CATEGORIES = ['終身保険', '定期保険', '医療保険', 'がん保険', '個人年金保険', '養老保険', '学資保険', '就業不能保険', '介護保険', 'その他'];
+// 商品特性（複数選択）。既存のpurposes[]と同じトグルボタンUIで扱う。
+const NEXUS_PRODUCT_CHARACTERISTICS = ['変額', '外貨建', '円建', '積立型', '無配当', '有配当', 'その他'];
+const NEXUS_SECURITIES_PREP_ITEM_DEFS = [{
+  key: 'designSheet',
+  label: '設計書'
+}, {
+  key: 'policy',
+  label: '保険証券'
+}, {
+  key: 'confirmationDoc',
+  label: '契約内容確認資料'
+}, {
+  key: 'case',
+  label: '証券ケース'
+}];
+const NEXUS_SECURITIES_CASE_TYPE_LABELS = {
+  unconfirmed: '未確認',
+  case_needed: '証券ケース必要',
+  case_not_needed_print_only: '証券ケース不要（印刷物のみ）',
+  no_materials_needed: '資料不要'
+};
+const NEXUS_SECURITIES_CASE_TYPES = Object.keys(NEXUS_SECURITIES_CASE_TYPE_LABELS);
+const NEXUS_DELIVERY_STATUSES = ['未対応', '手渡し予定', '手渡し済み', '郵送予定', '郵送済み', '配達確認済み'];
+const NEXUS_ITEM_PREP_STATUSES = ['未着手', '準備中', '完了'];
+// 端数処理（消費税額・税込金額の計算にのみ使う。原額(enteredAmount)自体には使わない）。
+function nexusRoundAmount(value, method) {
+  if (value === null || value === undefined || isNaN(value)) return null;
+  if (method === 'floor') return Math.floor(value);
+  if (method === 'ceil') return Math.ceil(value);
+  return Math.round(value);
+}
+// 入力金額(enteredAmount)が税抜/税込のどちらで入力されたか(enteredAs)に応じて、
+// 内部の基準値である税抜金額(amountExclTax)を算出する（design doc 3-3）。
+function nexusDeriveAmountExclTax(enteredAmount, enteredAs, taxRatePercent) {
+  if (enteredAmount === null || enteredAmount === undefined || enteredAmount === '' || isNaN(enteredAmount)) return null;
+  const amount = Number(enteredAmount);
+  const rate = (Number(taxRatePercent) || 0) / 100;
+  if (enteredAs === 'incl') return amount / (1 + rate);
+  return amount;
+}
+// 税抜金額(amountExclTax)から、表示専用の消費税額・税込金額を計算する
+// （常にその場で計算し、保存しない＝design doc 3-3の4・5）。
+function nexusCalcTaxDisplay(amountExclTax, taxRatePercent, roundingMethod) {
+  if (amountExclTax === null || amountExclTax === undefined || isNaN(amountExclTax)) {
+    return { amountExclTax: null, taxAmount: null, amountInclTax: null };
+  }
+  const rate = (Number(taxRatePercent) || 0) / 100;
+  return {
+    amountExclTax: nexusRoundAmount(amountExclTax, roundingMethod),
+    taxAmount: nexusRoundAmount(amountExclTax * rate, roundingMethod),
+    amountInclTax: nexusRoundAmount(amountExclTax * (1 + rate), roundingMethod)
+  };
+}
+// 手数料ブロック（estimate/confirmed/paymentHistoryの各要素）に共通の組み立て処理。
+// 原額(enteredAmount)はそのまま保持し、amountExclTaxだけを内部の基準値として同時に
+// 保存する（design doc 3-3：原額は絶対に上書きしない）。
+function nexusBuildCommissionAmountEntry(enteredAmount, enteredAs, taxRatePercent, roundingMethod, extra) {
+  const normalizedAmount = enteredAmount === '' || enteredAmount === undefined ? null : enteredAmount;
+  return {
+    enteredAmount: normalizedAmount,
+    enteredAs: enteredAs || 'excl',
+    amountExclTax: nexusDeriveAmountExclTax(normalizedAmount, enteredAs, taxRatePercent),
+    taxRatePercent: taxRatePercent === undefined || taxRatePercent === null ? 10 : taxRatePercent,
+    roundingMethod: roundingMethod || 'round',
+    ...(extra || {})
+  };
+}
+function nexusDefaultCommission() {
+  return {
+    estimate: nexusBuildCommissionAmountEntry(null, 'excl', 10, 'round'),
+    confirmed: nexusBuildCommissionAmountEntry(null, 'excl', 10, 'round', { confirmedAt: '' }),
+    expectedPaymentMonth: '',
+    paymentHistory: []
+  };
+}
+function nexusCommissionOf(contract) {
+  return contract.commission || nexusDefaultCommission();
+}
+// 未入金残高の算出に使う基準額＝確定額（あれば）、無ければ見込額（design doc 3-3の7）。
+function nexusCommissionBaseExclTax(commission) {
+  if (commission.confirmed && commission.confirmed.amountExclTax !== null && commission.confirmed.amountExclTax !== undefined) {
+    return commission.confirmed.amountExclTax;
+  }
+  return commission.estimate ? commission.estimate.amountExclTax : null;
+}
+// 未入金残高＝（確定額があれば確定額、無ければ見込額）－入金履歴の合計。
+function nexusCalcOutstandingBalance(contract) {
+  const commission = nexusCommissionOf(contract);
+  const baseExclTax = nexusCommissionBaseExclTax(commission);
+  if (baseExclTax === null || baseExclTax === undefined) return null;
+  const paidTotal = (commission.paymentHistory || []).reduce((sum, p) => sum + (p.amountExclTax || 0), 0);
+  return baseExclTax - paidTotal;
+}
+// 入金状況＝残高により自動判定（残高＝確定額→未入金／0＜残高＜確定額→一部入金／残高≦0→全額入金済み）。
+function nexusCalcPaymentStatus(contract) {
+  const commission = nexusCommissionOf(contract);
+  const baseExclTax = nexusCommissionBaseExclTax(commission);
+  if (baseExclTax === null || baseExclTax === undefined) return '未確認';
+  const balance = nexusCalcOutstandingBalance(contract);
+  if (balance === null) return '未確認';
+  if (balance <= 0) return '全額入金済み';
+  if (balance < baseExclTax) return '一部入金';
+  return '未入金';
+}
+function nexusDefaultCommissionSplit() {
+  return {
+    mode: 'none',
+    parties: [{ partyRef: { kind: 'self' }, percentage: 100 }],
+    changeHistory: []
+  };
+}
+function nexusCommissionSplitOf(contract) {
+  return contract.commissionSplit || nexusDefaultCommissionSplit();
+}
+// モードを切り替えたその瞬間にのみpartiesを初期化する（design doc 3-4）。
+// 'half'：自分50%・相手50%を自動初期化。'custom'：既存partiesがあれば保持、無ければ空のまま
+// （50:50を自動で入れない）。'none'：自分100%の単独に戻す。
+function nexusApplyCommissionSplitModeChange(split, newMode) {
+  const history = split.changeHistory || [];
+  const before = split.parties || [];
+  let parties;
+  if (newMode === 'half') {
+    parties = [{ partyRef: { kind: 'self' }, percentage: 50 }, { partyRef: { kind: 'otherAgent', name: '' }, percentage: 50 }];
+  } else if (newMode === 'none') {
+    parties = [{ partyRef: { kind: 'self' }, percentage: 100 }];
+  } else {
+    parties = before.length > 0 ? before : [];
+  }
+  return {
+    ...split,
+    mode: newMode,
+    parties,
+    changeHistory: [...history, { changedAt: new Date().toISOString(), before, after: parties, memo: `モードを${newMode}に変更` }]
+  };
+}
+// 自分の割合を入力すると、2名構成の場合のみ相手の割合を自動計算する（100-自分）。
+// 3名以上は自動計算しない（人が入力し、合計が100%にならない場合は保存前に警告する＝
+// nexusCommissionSplitTotalPercentageを呼び出し側で確認する）。
+function nexusUpdateCommissionSplitPercentage(split, index, percentage) {
+  const parties = split.parties || [];
+  if (parties.length !== 2) {
+    return { ...split, parties: parties.map((p, i) => i === index ? { ...p, percentage } : p) };
+  }
+  const otherIndex = index === 0 ? 1 : 0;
+  const complement = Math.max(0, 100 - (Number(percentage) || 0));
+  return {
+    ...split,
+    parties: parties.map((p, i) => i === index ? { ...p, percentage } : i === otherIndex ? { ...p, percentage: complement } : p)
+  };
+}
+function nexusCommissionSplitTotalPercentage(split) {
+  return (split.parties || []).reduce((sum, p) => sum + (Number(p.percentage) || 0), 0);
+}
+function nexusDefaultSecuritiesPrep() {
+  return {
+    caseType: 'unconfirmed',
+    items: NEXUS_SECURITIES_PREP_ITEM_DEFS.map(def => ({ key: def.key, label: def.label, status: '未着手', completedAt: '', memo: '' }))
+  };
+}
+function nexusSecuritiesPrepOf(contract) {
+  return contract.securitiesPrep || nexusDefaultSecuritiesPrep();
+}
+function nexusDefaultDelivery() {
+  return { status: '未対応', handDeliveryDate: '', shippedAt: '', deliveryConfirmedAt: '', shippingMethod: '', trackingNumber: '' };
+}
+function nexusDeliveryOf(contract) {
+  return contract.delivery || nexusDefaultDelivery();
+}
+// 全顧客のcontracts[]を横断して「顧客×契約」のペアを1件ずつのリストに展開する
+// （design doc 4-2の一覧画面で使用）。
+function nexusFlattenAllContracts(customers) {
+  const rows = [];
+  (customers || []).forEach(c => {
+    (c.contracts || []).forEach(ct => {
+      rows.push({ customer: c, contract: ct });
+    });
+  });
+  return rows;
+}
 function ContractBlock({
   contract,
   onChange,
@@ -1986,7 +2169,11 @@ function ContractBlock({
       marginTop: 4
     }
   }, "確認済みの源泉分離課税対象期間終了日（参考）：", confirmedFiveYearEndDate, "（", confirmedFiveYearStatus, "・起算日に基づく参考計算。要件確認が必要です）")), principalAmountInput, taxEstimateAsOfDateInput)));
-  return /*#__PURE__*/React.createElement("div", {
+  // P6a追加：既存の巨大な単一JSXツリーを変更せず、末尾に新しいブロック（商品詳細・
+  // 手数料入金管理・証券ケース/お渡し）を別コンポーネントとして追加する。既存ツリーの
+  // 深いネストを手で編み直す必要が無いよう、まず従来通りの内容をbaseBlockとして
+  // 保持し、関数の最後でFragmentにまとめて返す（下記の新しいreturn文を参照）。
+  const baseBlock = /*#__PURE__*/React.createElement("div", {
     className: `contract-block${isInactive ? ' inactive' : ''}`,
     style: {
       borderTop: `3px solid ${isInactive ? cst === '解約' ? '#DC2626' : cst === '失効' ? '#D97706' : '#7C3AED' : cat === '損保' ? '#F59E0B' : 'var(--accent)'}`
@@ -3196,6 +3383,240 @@ function ContractBlock({
     onChange: s('periodicAmtJpy'),
     placeholder: "例：4500000"
   }))))));
+  // P6a追加：既存ブロックの下に、商品詳細・手数料入金管理・証券ケース/お渡しの
+  // 3ブロックを追加する（design doc 4-1：「折りたたみ可能なブロック」として配置）。
+  return /*#__PURE__*/React.createElement(React.Fragment, null, baseBlock, /*#__PURE__*/React.createElement(ContractProductDetailsBlock, {
+    contract: contract,
+    onChange: onChange
+  }), /*#__PURE__*/React.createElement(ContractCommissionBlock, {
+    contract: contract,
+    onChange: onChange
+  }), /*#__PURE__*/React.createElement(ContractSecuritiesDeliveryBlock, {
+    contract: contract,
+    onChange: onChange
+  }));
+}
+
+// P6a追加：折りたたみ可能なブロックの共通枠（design doc 4-1）。
+function NexusCollapsibleSection({ title, children }) {
+  const [open, setOpen] = useState(false);
+  const header = /*#__PURE__*/React.createElement("div", {
+    onClick: () => setOpen(o => !o),
+    style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', fontWeight: 600, fontSize: 13 }
+  }, title, /*#__PURE__*/React.createElement("span", null, open ? '▲' : '▼'));
+  const body = open ? /*#__PURE__*/React.createElement("div", { style: { marginTop: 8, display: 'flex', flexDirection: 'column', gap: 10 } }, children) : null;
+  return /*#__PURE__*/React.createElement("div", { className: "card", style: { margin: '8px 0', padding: 10 } }, header, body);
+}
+// P6a-2追加：商品詳細ブロック（design doc 3-1）。既存のtype（自由入力）は変更せず、
+// productCategory（固定選択）を並行運用する。
+function ContractProductDetailsBlock({ contract, onChange }) {
+  const s = k => e => onChange({ ...contract, [k]: e.target.value });
+  const characteristics = Array.isArray(contract.productCharacteristics) ? contract.productCharacteristics : [];
+  const toggleCharacteristic = v => onChange({
+    ...contract,
+    productCharacteristics: characteristics.includes(v) ? characteristics.filter(x => x !== v) : [...characteristics, v]
+  });
+  const dateField = (label, key) => /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("label", { className: "form-label" }, label),
+    /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", value: contract[key] || '', onChange: s(key) })
+  );
+  const textField = (label, key, placeholder) => /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("label", { className: "form-label" }, label),
+    /*#__PURE__*/React.createElement("input", { className: "form-input", placeholder: placeholder || '', value: contract[key] || '', onChange: s(key) })
+  );
+  const categoryField = /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("label", { className: "form-label" }, "商品種類（新・選択式。既存「種類」欄は変更しません）"),
+    /*#__PURE__*/React.createElement("select", { className: "form-select", value: contract.productCategory || '', onChange: s('productCategory') },
+      /*#__PURE__*/React.createElement("option", { value: "" }, "未選択"),
+      NEXUS_PRODUCT_CATEGORIES.map(c => /*#__PURE__*/React.createElement("option", { key: c, value: c }, c))
+    )
+  );
+  const characteristicsField = /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("label", { className: "form-label" }, "商品特性（複数選択可）"),
+    /*#__PURE__*/React.createElement("div", { className: "toggle-group" },
+      NEXUS_PRODUCT_CHARACTERISTICS.map(c => /*#__PURE__*/React.createElement("button", {
+        key: c, type: "button", className: `toggle-btn ${characteristics.includes(c) ? 'sel' : ''}`, onClick: () => toggleCharacteristic(c)
+      }, c))
+    )
+  );
+  const acField = /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("label", { className: "form-label" }, "AC（見込み・万円。見込み客管理の「見込みAC」を引き継ぐ値）"),
+    /*#__PURE__*/React.createElement("input", {
+      className: "form-input", type: "number",
+      value: contract.acAmount === null || contract.acAmount === undefined ? '' : contract.acAmount,
+      onChange: e => onChange({ ...contract, acAmount: e.target.value === '' ? null : Number(e.target.value) })
+    })
+  );
+  const remarksField = /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("label", { className: "form-label" }, "備考"),
+    /*#__PURE__*/React.createElement("textarea", { className: "form-input", value: contract.remarks || '', onChange: s('remarks') })
+  );
+  return /*#__PURE__*/React.createElement(NexusCollapsibleSection, { title: "商品詳細（申込日・商品名・商品特性等）" },
+    dateField('申込日', 'applicationDate'),
+    dateField('契約日', 'contractDate'),
+    dateField('契約成立日', 'policyIssuedDate'),
+    textField('申込番号', 'applicationNum'),
+    textField('商品名', 'productName'),
+    categoryField,
+    characteristicsField,
+    textField('保障期間', 'coverageTerm', '例：終身／10年／60歳まで'),
+    acField,
+    remarksField
+  );
+}
+// P6a-2追加：手数料・入金管理ブロック（design doc 3-3・3-4）。原額(enteredAmount)は
+// そのまま保持し、税抜金額だけを内部の基準値として同時に保存する。消費税額・税込金額・
+// 未入金残高は常にその場で計算し、別途保存しない。
+function ContractCommissionBlock({ contract, onChange }) {
+  const commission = nexusCommissionOf(contract);
+  const split = nexusCommissionSplitOf(contract);
+  const updateCommission = patch => onChange({ ...contract, commission: { ...commission, ...patch } });
+  const setEstimateAmount = v => {
+    const amt = v === '' ? null : Number(v);
+    updateCommission({ estimate: { ...commission.estimate, enteredAmount: amt, amountExclTax: nexusDeriveAmountExclTax(amt, commission.estimate.enteredAs, commission.estimate.taxRatePercent) } });
+  };
+  const setEstimateBasis = basis => updateCommission({ estimate: { ...commission.estimate, enteredAs: basis, amountExclTax: nexusDeriveAmountExclTax(commission.estimate.enteredAmount, basis, commission.estimate.taxRatePercent) } });
+  const setConfirmedAmount = v => {
+    const amt = v === '' ? null : Number(v);
+    updateCommission({ confirmed: { ...commission.confirmed, enteredAmount: amt, amountExclTax: nexusDeriveAmountExclTax(amt, commission.confirmed.enteredAs, commission.confirmed.taxRatePercent) } });
+  };
+  const setConfirmedBasis = basis => updateCommission({ confirmed: { ...commission.confirmed, enteredAs: basis, amountExclTax: nexusDeriveAmountExclTax(commission.confirmed.enteredAmount, basis, commission.confirmed.taxRatePercent) } });
+  const setConfirmedAt = v => updateCommission({ confirmed: { ...commission.confirmed, confirmedAt: v } });
+  const estimateDisplay = nexusCalcTaxDisplay(commission.estimate.amountExclTax, commission.estimate.taxRatePercent, commission.estimate.roundingMethod);
+  const confirmedDisplay = nexusCalcTaxDisplay(commission.confirmed.amountExclTax, commission.confirmed.taxRatePercent, commission.confirmed.roundingMethod);
+  const outstandingBalance = nexusCalcOutstandingBalance(contract);
+  const paymentStatus = nexusCalcPaymentStatus(contract);
+  const addPayment = () => updateCommission({
+    paymentHistory: [...(commission.paymentHistory || []), {
+      id: uid(), paidAt: todayStr(), enteredAmount: null, enteredAs: 'excl', amountExclTax: null,
+      taxRatePercent: commission.confirmed.taxRatePercent || 10, roundingMethod: 'round', memo: '',
+      recordedAt: new Date().toISOString(), splitSnapshot: split.parties
+    }]
+  });
+  const updatePaymentAmount = (id, v) => {
+    const amt = v === '' ? null : Number(v);
+    updateCommission({
+      paymentHistory: (commission.paymentHistory || []).map(p => p.id === id ? { ...p, enteredAmount: amt, amountExclTax: nexusDeriveAmountExclTax(amt, p.enteredAs, p.taxRatePercent) } : p)
+    });
+  };
+  const updatePaymentField = (id, key, v) => updateCommission({
+    paymentHistory: (commission.paymentHistory || []).map(p => p.id === id ? { ...p, [key]: v } : p)
+  });
+  const removePayment = id => updateCommission({ paymentHistory: (commission.paymentHistory || []).filter(p => p.id !== id) });
+  const setSplitMode = mode => onChange({ ...contract, commissionSplit: nexusApplyCommissionSplitModeChange(split, mode) });
+  const setSplitPercentage = (index, v) => onChange({ ...contract, commissionSplit: nexusUpdateCommissionSplitPercentage(split, index, Number(v)) });
+  const setSplitPartyName = (index, name) => onChange({
+    ...contract,
+    commissionSplit: { ...split, parties: split.parties.map((p, i) => i === index ? { ...p, partyRef: { ...p.partyRef, name } } : p) }
+  });
+  const splitTotal = nexusCommissionSplitTotalPercentage(split);
+
+  const amountBasisRow = (label, amountValue, basisValue, onAmount, onBasis, extra) => /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("label", { className: "form-label" }, label),
+    /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 6 } },
+      /*#__PURE__*/React.createElement("input", { className: "form-input", type: "number", value: amountValue === null || amountValue === undefined ? '' : amountValue, onChange: e => onAmount(e.target.value) }),
+      /*#__PURE__*/React.createElement("select", { className: "form-select", style: { maxWidth: 90 }, value: basisValue, onChange: e => onBasis(e.target.value) },
+        /*#__PURE__*/React.createElement("option", { value: "excl" }, "税抜"),
+        /*#__PURE__*/React.createElement("option", { value: "incl" }, "税込")
+      )
+    ),
+    extra || null
+  );
+  const estimateRow = amountBasisRow(
+    '① 手数料見込額', commission.estimate.enteredAmount, commission.estimate.enteredAs, setEstimateAmount, setEstimateBasis,
+    /*#__PURE__*/React.createElement("div", { style: { fontSize: 11.5, color: 'var(--text-sub)', marginTop: 4 } },
+      `税抜：${estimateDisplay.amountExclTax ?? '未入力'} ／ 消費税額：${estimateDisplay.taxAmount ?? '-'} ／ 税込：${estimateDisplay.amountInclTax ?? '-'}`)
+  );
+  const confirmedRow = amountBasisRow(
+    '② 代理店確定額（確定明細の金額をそのまま入力）', commission.confirmed.enteredAmount, commission.confirmed.enteredAs, setConfirmedAmount, setConfirmedBasis,
+    /*#__PURE__*/React.createElement(React.Fragment, null,
+      /*#__PURE__*/React.createElement("div", { style: { fontSize: 11.5, color: 'var(--text-sub)', marginTop: 4 } },
+        `③税抜：${confirmedDisplay.amountExclTax ?? '未入力'} ／ ④消費税額：${confirmedDisplay.taxAmount ?? '-'} ／ ⑤税込：${confirmedDisplay.amountInclTax ?? '-'}`),
+      /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", style: { marginTop: 6 }, placeholder: "確定日", value: commission.confirmed.confirmedAt || '', onChange: e => setConfirmedAt(e.target.value) })
+    )
+  );
+  const expectedMonthRow = /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("label", { className: "form-label" }, "入金予定年月"),
+    /*#__PURE__*/React.createElement("input", { className: "form-input", type: "month", value: commission.expectedPaymentMonth || '', onChange: e => updateCommission({ expectedPaymentMonth: e.target.value }) })
+  );
+  const balanceRow = /*#__PURE__*/React.createElement("div", { style: { fontSize: 12.5, fontWeight: 600 } },
+    `⑦未入金残高：${outstandingBalance === null ? '未確認' : outstandingBalance}　／　入金状況：${paymentStatus}`
+  );
+  const paymentRows = (commission.paymentHistory || []).map(p => {
+    const display = nexusCalcTaxDisplay(p.amountExclTax, p.taxRatePercent, p.roundingMethod);
+    return /*#__PURE__*/React.createElement("div", { key: p.id, className: "card", style: { padding: 8, marginBottom: 6 } },
+      /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 6 } },
+        /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", value: p.paidAt || '', onChange: e => updatePaymentField(p.id, 'paidAt', e.target.value) }),
+        /*#__PURE__*/React.createElement("input", { className: "form-input", type: "number", placeholder: "⑥入金額", value: p.enteredAmount === null ? '' : p.enteredAmount, onChange: e => updatePaymentAmount(p.id, e.target.value) }),
+        /*#__PURE__*/React.createElement("button", { className: "btn btn-sm", type: "button", onClick: () => removePayment(p.id) }, "削除")
+      ),
+      /*#__PURE__*/React.createElement("div", { style: { fontSize: 11, color: 'var(--text-sub)', marginTop: 4 } }, `税抜：${display.amountExclTax ?? '-'} ／ 税込：${display.amountInclTax ?? '-'}`)
+    );
+  });
+  const paymentSection = /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("label", { className: "form-label" }, "⑥入金履歴（複数回対応）"),
+    paymentRows,
+    /*#__PURE__*/React.createElement("button", { className: "btn btn-sm", type: "button", onClick: addPayment }, "＋入金を追加")
+  );
+  const splitModeRow = /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("label", { className: "form-label" }, "分割方法"),
+    /*#__PURE__*/React.createElement("div", { className: "toggle-group" },
+      /*#__PURE__*/React.createElement("button", { type: "button", className: `toggle-btn ${split.mode === 'none' ? 'sel' : ''}`, onClick: () => setSplitMode('none') }, "分割なし"),
+      /*#__PURE__*/React.createElement("button", { type: "button", className: `toggle-btn ${split.mode === 'half' ? 'sel' : ''}`, onClick: () => setSplitMode('half') }, "折半（50:50）"),
+      /*#__PURE__*/React.createElement("button", { type: "button", className: `toggle-btn ${split.mode === 'custom' ? 'sel' : ''}`, onClick: () => setSplitMode('custom') }, "任意設定")
+    )
+  );
+  const partyRows = split.mode === 'none' ? null : (split.parties || []).map((p, i) => /*#__PURE__*/React.createElement("div", { key: i, style: { display: 'flex', gap: 6, marginTop: 6 } },
+    p.partyRef.kind === 'self' ? /*#__PURE__*/React.createElement("div", { className: "form-input", style: { flex: 1, background: 'var(--bg)' } }, "自分") :
+      /*#__PURE__*/React.createElement("input", { className: "form-input", style: { flex: 1 }, placeholder: "分割相手の名前", value: p.partyRef.name || '', onChange: e => setSplitPartyName(i, e.target.value) }),
+    /*#__PURE__*/React.createElement("input", { className: "form-input", style: { maxWidth: 80 }, type: "number", value: p.percentage === null || p.percentage === undefined ? '' : p.percentage, onChange: e => setSplitPercentage(i, e.target.value) }),
+    /*#__PURE__*/React.createElement("span", { style: { alignSelf: 'center' } }, "%")
+  ));
+  const splitWarning = split.mode !== 'none' && splitTotal !== 100 ? /*#__PURE__*/React.createElement("div", { style: { fontSize: 11.5, color: 'var(--danger)', marginTop: 4 } }, `⚠️ 合計が100%になっていません（現在：${splitTotal}%）`) : null;
+  const splitSection = /*#__PURE__*/React.createElement("div", null, splitModeRow, partyRows, splitWarning);
+
+  return /*#__PURE__*/React.createElement(NexusCollapsibleSection, { title: "手数料・入金管理" },
+    estimateRow, confirmedRow, expectedMonthRow, balanceRow, paymentSection, splitSection
+  );
+}
+// P6a-2追加：証券ケース・お客様へのお渡し管理ブロック（design doc 3-5・3-6）。
+function ContractSecuritiesDeliveryBlock({ contract, onChange }) {
+  const prep = nexusSecuritiesPrepOf(contract);
+  const delivery = nexusDeliveryOf(contract);
+  const updatePrep = patch => onChange({ ...contract, securitiesPrep: { ...prep, ...patch } });
+  const updateDelivery = patch => onChange({ ...contract, delivery: { ...delivery, ...patch } });
+  const cycleItemStatus = key => {
+    const idx = NEXUS_ITEM_PREP_STATUSES.indexOf((prep.items.find(i => i.key === key) || {}).status || '未着手');
+    const next = NEXUS_ITEM_PREP_STATUSES[(idx + 1) % NEXUS_ITEM_PREP_STATUSES.length];
+    updatePrep({
+      items: prep.items.map(i => i.key === key ? { ...i, status: next, completedAt: next === '完了' ? todayStr() : i.completedAt } : i)
+    });
+  };
+  const caseTypeRow = /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("label", { className: "form-label" }, "証券ケース・資料準備"),
+    /*#__PURE__*/React.createElement("select", { className: "form-select", value: prep.caseType, onChange: e => updatePrep({ caseType: e.target.value }) },
+      NEXUS_SECURITIES_CASE_TYPES.map(k => /*#__PURE__*/React.createElement("option", { key: k, value: k }, NEXUS_SECURITIES_CASE_TYPE_LABELS[k]))
+    )
+  );
+  const itemRows = prep.items.map(item => /*#__PURE__*/React.createElement("button", {
+    key: item.key, type: "button", onClick: () => cycleItemStatus(item.key),
+    className: "btn btn-sm",
+    style: { marginRight: 6, marginTop: 6, background: item.status === '完了' ? 'var(--accent-light)' : '#fff' }
+  }, `${item.label}：${item.status}`));
+  const deliveryStatusRow = /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("label", { className: "form-label" }, "お客様へのお渡し状況"),
+    /*#__PURE__*/React.createElement("select", { className: "form-select", value: delivery.status, onChange: e => updateDelivery({ status: e.target.value }) },
+      NEXUS_DELIVERY_STATUSES.map(st => /*#__PURE__*/React.createElement("option", { key: st, value: st }, st))
+    )
+  );
+  const deliveryDateRow = /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
+    /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", placeholder: "手渡し予定/済み日", value: delivery.handDeliveryDate || '', onChange: e => updateDelivery({ handDeliveryDate: e.target.value }) }),
+    /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", placeholder: "発送日", value: delivery.shippedAt || '', onChange: e => updateDelivery({ shippedAt: e.target.value }) }),
+    /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", placeholder: "配達確認日", value: delivery.deliveryConfirmedAt || '', onChange: e => updateDelivery({ deliveryConfirmedAt: e.target.value }) })
+  );
+  return /*#__PURE__*/React.createElement(NexusCollapsibleSection, { title: "証券ケース・お客様へのお渡し" },
+    caseTypeRow, itemRows, deliveryStatusRow, deliveryDateRow
+  );
 }
 
 // ── 年齢自動計算（生年月日→今日時点の満年齢）────────────────
