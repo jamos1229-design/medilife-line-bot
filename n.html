@@ -912,6 +912,112 @@ function nexusFindDuplicateAssetCandidates(customer, customers, scopeKey, tolera
   }
   return pairs;
 }
+// ── P5：財産目録の自動作成（design doc 3-3「財産目録（将来機能、方向性のみ）」のMVP実装） ──
+// 名義人ごとに全資産種別を横断的に集計し、名義未確認・持分不明をそのまま明示して一覧化する
+// （名義だけで相続財産への該当性を確定しない。不明な名義・持分を推測で補完することは一切
+// しない。既存のNEXUS_DOC_ASSET_CATEGORY_LABELSを再利用し、P3で追加したsecuritiesAccounts
+// 分のみ補う）。
+function nexusAssetKindLabel(kind) {
+  if (kind === 'securitiesAccounts') return '証券口座';
+  return NEXUS_DOC_ASSET_CATEGORY_LABELS[kind] || kind;
+}
+function nexusBuildAssetInventoryRows(customer, customers, scopeKey) {
+  const household = nexusResolveHousehold(customer, customers);
+  const portfolios = nexusPortfoliosForScope(customer, customers, scopeKey, household);
+  const rows = [];
+  portfolios.forEach(ownerCustomer => {
+    const portfolio = (ownerCustomer.lp && ownerCustomer.lp.portfolio) || {};
+    NEXUS_PORTFOLIO_ASSET_KINDS.forEach(kind => {
+      (portfolio[kind] || []).forEach(item => {
+        const value = nexusAssetKindItemValue(item, kind);
+        const owners = nexusOwnersOf(item);
+        const name = (item.name || item.productName || item.brokerage || '').trim() || '(名称未設定)';
+        const percentTotal = nexusOwnersPercentageTotal(owners);
+        owners.forEach(o => {
+          const isUnset = !o.ownerRef || o.ownerRef.kind === 'unset';
+          rows.push({
+            recordCustomerId: ownerCustomer.id,
+            recordCustomerName: nexusDisplayName(ownerCustomer),
+            kind, kindLabel: nexusAssetKindLabel(kind),
+            itemId: item.id, name,
+            ownerLabel: isUnset ? '名義未確認' : nexusResolveOwnerRefLabel(o.ownerRef, ownerCustomer, customers),
+            isUnset, isUnclearShare: false,
+            percentage: Number(o.percentage) || 0,
+            amount: value * ((Number(o.percentage) || 0) / 100),
+            inheritanceTaxValue: kind === 'realEstate' && item.inheritanceTaxValue !== '' && item.inheritanceTaxValue !== undefined ? parseFloat(item.inheritanceTaxValue) : null
+          });
+        });
+        // 持分の割り当て合計が100%に届かない残り分は、「持分不明」として同じ名称の別行で明示する
+        // （名義未確認＝owners自体が無い、持分不明＝owners はあるが割り当てが埋まっていない、の2種を区別）。
+        if (!owners.every(o => !o.ownerRef || o.ownerRef.kind === 'unset') && percentTotal < 100) {
+          rows.push({
+            recordCustomerId: ownerCustomer.id,
+            recordCustomerName: nexusDisplayName(ownerCustomer),
+            kind, kindLabel: nexusAssetKindLabel(kind),
+            itemId: item.id, name,
+            ownerLabel: `持分不明（残り${100 - percentTotal}%）`,
+            isUnset: false, isUnclearShare: true,
+            percentage: 100 - percentTotal,
+            amount: value * ((100 - percentTotal) / 100),
+            inheritanceTaxValue: null
+          });
+        }
+      });
+    });
+  });
+  return rows;
+}
+// 名義人ごとにグルーピングし、名義人別の小計を付ける（財産目録の基本形＝「誰が何を持っているか」）。
+function nexusGroupAssetInventoryByOwner(rows) {
+  const groups = [];
+  const indexByLabel = {};
+  rows.forEach(row => {
+    if (!(row.ownerLabel in indexByLabel)) {
+      indexByLabel[row.ownerLabel] = groups.length;
+      groups.push({ ownerLabel: row.ownerLabel, rows: [], subtotal: 0 });
+    }
+    const g = groups[indexByLabel[row.ownerLabel]];
+    g.rows.push(row);
+    g.subtotal += row.amount;
+  });
+  return groups;
+}
+// 負債（ローン）一覧：既存のcustomer.lp.loansにはownerRefが無いため、名義人への個別紐付けは
+// 行わず、対象範囲（スコープ）の物理ポートフォリオ単位での単純合計のみ扱う（推測による
+// 名義の補完は一切しない）。
+function nexusBuildLiabilityRows(customer, customers, scopeKey) {
+  const household = nexusResolveHousehold(customer, customers);
+  const portfolios = nexusPortfoliosForScope(customer, customers, scopeKey, household);
+  const rows = [];
+  portfolios.forEach(ownerCustomer => {
+    ((ownerCustomer.lp && ownerCustomer.lp.loans) || []).forEach(loan => {
+      rows.push({
+        recordCustomerId: ownerCustomer.id,
+        recordCustomerName: nexusDisplayName(ownerCustomer),
+        category: loan.category || '', name: loan.name || '(名称未設定)',
+        balance: Math.max(0, parseFloat(loan.balance) || 0)
+      });
+    });
+  });
+  return rows;
+}
+// 財産目録全体（資産・負債・純資産・名義人別グルーピング）を1回で生成する。
+function nexusGenerateAssetInventory(customer, customers, scopeKey) {
+  const assetRows = nexusBuildAssetInventoryRows(customer, customers, scopeKey);
+  const liabilityRows = nexusBuildLiabilityRows(customer, customers, scopeKey);
+  const assetTotal = assetRows.reduce((sum, r) => sum + r.amount, 0);
+  const liabilityTotal = liabilityRows.reduce((sum, r) => sum + r.balance, 0);
+  return {
+    scopeKey,
+    generatedAt: new Date().toISOString(),
+    assetRows,
+    byOwner: nexusGroupAssetInventoryByOwner(assetRows),
+    liabilityRows,
+    assetTotal,
+    liabilityTotal,
+    netWorth: assetTotal - liabilityTotal
+  };
+}
 // P2b：名義未確認・持分不明・第三者名義の別枠表示＋新旧合計の検算表示。
 // 「普段の画面は本人/夫婦合算のまま変更しない」方針のため、既存画面の末尾に、必要な
 // ときだけ開く追加パネルとして表示する（design doc STEP5「配偶者版・家族全体版は
@@ -962,6 +1068,78 @@ function NexusOwnerAttributedPanel({ customer, customers }) {
         dupPairs.map((p, i) => /*#__PURE__*/React.createElement("div", {
           key: i, className: "card", style: { padding: 8, marginBottom: 6, fontSize: 12 }
         }, `${p.a.customerName}「${p.a.name}」（${nexusFormatJpy(p.a.value)}） ⇔ ${p.b.customerName}「${p.b.name}」（${nexusFormatJpy(p.b.value)}）`))
+    )
+  );
+}
+// ── P5：財産目録（自動作成）画面。名義人別に資産を並べ、負債・純資産まで1画面に表示する。
+// 既存画面を変更しない「必要なときだけ開く追加パネル」方針はP2のNexusOwnerAttributedPanelと
+// 同じ（design doc STEP5の確定方針）。印刷はブラウザの標準印刷機能を利用する。
+function NexusAssetInventoryPanel({ customer, customers }) {
+  const [open, setOpen] = useState(false);
+  const [scope, setScope] = useState('self');
+  if (!open) {
+    return /*#__PURE__*/React.createElement("button", {
+      type: "button", className: "btn btn-outline", style: { fontSize: 12 },
+      onClick: () => setOpen(true)
+    }, "▼ 財産目録を自動作成（新機能）");
+  }
+  const inventory = nexusGenerateAssetInventory(customer, customers, scope);
+  return /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("div", {
+      style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }
+    },
+      /*#__PURE__*/React.createElement("span", { style: { fontWeight: 700, fontSize: 13 } }, "財産目録（新機能）"),
+      /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 6 } },
+        /*#__PURE__*/React.createElement("button", { type: "button", className: "btn btn-sm", onClick: () => window.print() }, "🖨 印刷"),
+        /*#__PURE__*/React.createElement("button", { type: "button", className: "btn btn-sm", onClick: () => setOpen(false) }, "▲ 閉じる")
+      )
+    ),
+    /*#__PURE__*/React.createElement("div", { className: "toggle-group", style: { marginBottom: 8 } },
+      Object.keys(NEXUS_OWNER_SCOPE_LABELS).map(k => /*#__PURE__*/React.createElement("button", {
+        key: k, type: "button", className: `toggle-btn ${scope === k ? 'sel' : ''}`, onClick: () => setScope(k)
+      }, NEXUS_OWNER_SCOPE_LABELS[k]))
+    ),
+    /*#__PURE__*/React.createElement("div", { style: { fontSize: 11, color: 'var(--text-sub)', marginBottom: 8 } },
+      `作成日時：${new Date(inventory.generatedAt).toLocaleString('ja-JP')}`
+    ),
+    inventory.byOwner.length === 0 && /*#__PURE__*/React.createElement("div", {
+      style: { fontSize: 12, color: 'var(--text-sub)' }
+    }, "対象資産がありません。"),
+    inventory.byOwner.map((g, gi) => /*#__PURE__*/React.createElement("div", {
+      key: gi, style: { marginBottom: 10, border: '1px solid var(--border)', borderRadius: 8, padding: 8 }
+    },
+      /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, fontSize: 12.5, marginBottom: 4 } }, g.ownerLabel),
+      g.rows.map((r, ri) => /*#__PURE__*/React.createElement("div", {
+        key: ri, style: { display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '2px 0', color: (r.isUnset || r.isUnclearShare) ? 'var(--warning)' : 'inherit' }
+      },
+        /*#__PURE__*/React.createElement("span", null, `[${r.kindLabel}] ${r.name}（${r.recordCustomerName}）`, r.percentage < 100 ? `（持分${r.percentage}%）` : ''),
+        /*#__PURE__*/React.createElement("span", null,
+          nexusFormatJpy(r.amount),
+          r.inheritanceTaxValue !== null ? ` （相続税評価額：${nexusFormatJpy(r.inheritanceTaxValue)}）` : ''
+        )
+      )),
+      /*#__PURE__*/React.createElement("div", { style: { textAlign: 'right', fontWeight: 700, fontSize: 12.5, marginTop: 4, borderTop: '1px dashed var(--border)', paddingTop: 4 } },
+        "小計：", nexusFormatJpy(g.subtotal)
+      )
+    )),
+    /*#__PURE__*/React.createElement("div", { style: { fontSize: 13, fontWeight: 700, marginTop: 8 } },
+      "資産合計：", nexusFormatJpy(inventory.assetTotal)
+    ),
+    inventory.liabilityRows.length > 0 && /*#__PURE__*/React.createElement("div", { style: { marginTop: 10 } },
+      /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, fontSize: 12.5, marginBottom: 4 } }, "負債（ローン等）"),
+      /*#__PURE__*/React.createElement("div", { style: { fontSize: 11, color: 'var(--text-sub)', marginBottom: 4 } }, "※ 負債は名義人別に紐付ける情報が無いため、対象範囲全体の単純合計のみ表示します（推測による名義の補完は行いません）。"),
+      inventory.liabilityRows.map((r, ri) => /*#__PURE__*/React.createElement("div", {
+        key: ri, style: { display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '2px 0' }
+      },
+        /*#__PURE__*/React.createElement("span", null, `[${r.category}] ${r.name}（${r.recordCustomerName}）`),
+        /*#__PURE__*/React.createElement("span", null, nexusFormatJpy(r.balance))
+      )),
+      /*#__PURE__*/React.createElement("div", { style: { textAlign: 'right', fontWeight: 700, fontSize: 12.5, marginTop: 4 } },
+        "負債合計：", nexusFormatJpy(inventory.liabilityTotal)
+      )
+    ),
+    /*#__PURE__*/React.createElement("div", { style: { fontSize: 14, fontWeight: 700, marginTop: 10, textAlign: 'right', borderTop: '2px solid var(--border)', paddingTop: 6 } },
+      "純資産：", nexusFormatJpy(inventory.netWorth)
     )
   );
 }
@@ -43074,6 +43252,11 @@ function NexusPlanningSection({
     ops: securitiesAccountOps,
     holdingOps: securitiesHoldingOps,
     candidates: householdCandidates
+  })), customer && /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement(NexusAssetInventoryPanel, {
+    customer: customer,
+    customers: customers
   })));
 }
 
