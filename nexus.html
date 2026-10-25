@@ -19021,12 +19021,31 @@ function nexusExtractPrefecture(address) {
   const a = address || '';
   return NEXUS_PREFECTURES.find(p => a.startsWith(p)) || null;
 }
+// P4修正：「市区町村郡」で始まる地名（市川市・市原市・町田市・郡山市・郡上市・村上市等）は、
+// 地名そのものの先頭文字が接尾辞（市区町村郡）と同じため、最短一致でそのまま切ると
+// 地名の先頭だけで切れてしまう（例：市川市→市）。接尾辞の出現位置が先頭（0文字目）の
+// 場合は地名の一部とみなし、その次の出現位置を探し直す。
+function nexusFindCitySuffixEnd(text) {
+  let searchFrom = 0;
+  while (true) {
+    const idx = text.slice(searchFrom).search(/[市区町村郡]/);
+    if (idx === -1) return -1;
+    const absoluteIdx = searchFrom + idx;
+    if (absoluteIdx === 0) {
+      searchFrom = absoluteIdx + 1;
+      continue;
+    }
+    return absoluteIdx;
+  }
+}
 function nexusExtractCity(address) {
-  const a = address || '';
+  // 空白の正規化（前後の空白除去・全角/半角スペースの連続を1つに統一）を行ってから
+  // 都道府県・市区町村を抽出する（表記ゆれで同じ市区町村が別キーにならないようにする）。
+  const a = (address || '').trim().replace(/[\s　]+/g, '');
   const pref = nexusExtractPrefecture(a);
   const rest = pref ? a.slice(pref.length) : a;
-  const m = rest.match(/^.*?[市区町村郡]/);
-  return m ? m[0] : null;
+  const end = nexusFindCitySuffixEnd(rest);
+  return end === -1 ? null : rest.slice(0, end + 1);
 }
 function nexusHouseholdCategoryForAnalysis(customer, allCustomers) {
   return classifyHousehold(buildHouseholdInput(customer, allCustomers));
@@ -25199,20 +25218,28 @@ const nexusGroupOf = c => c.customerType === '法人' ? c.industry || '法人' :
 const nexusCompanyOf = c => c.customerType === '法人' ? c.corporateName || c.name || '' : c.workplace || '';
 const nexusDisplayName = c => c.customerType === '法人' ? c.corporateName || c.name : c.name;
 const nexusChannelOf = c => c.contactChannel || '';
-const nexusAreaKey = address => {
-  if (!address) return null;
-  const m = address.match(/^.*?[市区町村郡]/);
-  return m ? m[0] : address.slice(0, 6);
+// P4修正：地域の分類キーは、都道府県省略の有無や「市区町村郡で始まる地名」の誤抽出が
+// 既に解消済みのnexusExtractCityに統一する（旧nexusAreaKeyは廃止）。
+const NEXUS_CLUSTER_UNSET_LABELS = {
+  area: '地域未設定',
+  company: '会社未設定',
+  channel: '接点未設定',
+  group: '職業未設定'
 };
 function nexusCluster(customers, field) {
   const map = {};
+  const unsetLabel = NEXUS_CLUSTER_UNSET_LABELS[field] || '未設定';
   customers.forEach(c => {
-    const raw = field === 'area' ? nexusAreaKey(c.address) : field === 'company' ? nexusCompanyOf(c) : field === 'channel' ? nexusChannelOf(c) : nexusGroupOf(c);
-    if (!raw) return;
-    if (!map[raw]) map[raw] = [];
-    map[raw].push(c);
+    const raw = field === 'area' ? nexusExtractCity(c.address) : field === 'company' ? nexusCompanyOf(c) : field === 'channel' ? nexusChannelOf(c) : nexusGroupOf(c);
+    // P4修正：分類キーが得られない顧客も、取り落とさず「◯◯未設定」グループへ集約する
+    // （従来は`if (!raw) return;`で一覧から完全に除外されていた）。
+    const key = raw || unsetLabel;
+    if (!map[key]) map[key] = [];
+    map[key].push(c);
   });
-  return Object.entries(map).filter(([, m]) => m.length >= 2).sort((a, b) => b[1].length - a[1].length);
+  // P4修正：1人だけのグループも表示する（従来は`.filter(([, m]) => m.length >= 2)`で
+  // 一覧から除外されていた）。
+  return Object.entries(map).sort((a, b) => b[1].length - a[1].length);
 }
 function nexusMatchesQuery(c, query) {
   if (!query) return true;
