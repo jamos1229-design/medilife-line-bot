@@ -21782,6 +21782,392 @@ function TaskForm({
 }
 
 // ── JSON Import（全データ対応）────────────────────────────────
+// 全データバックアップ形式（⓪）の内容を実際に各stateへ反映する処理。通常の復元と、
+// 復元が途中で失敗した場合の「退避データへの自動ロールバック」の両方から呼ぶため、
+// 共通化している。tagDotRequestsAsRestoredをfalseにすると、神メモ第2段階の
+// 「restoredInvalid」付与を行わない（ロールバック時は、退避データ＝直前まで本当に
+// 使っていた現在のデータであり、古いバックアップからの復元扱いにすべきではないため）。
+// P0a追加（復元後検証）：各setXを呼んだ際に「実際に渡した値」をappliedに記録して返す。
+// nexusDotRequestsのように適用時に内容を変換する項目があるため、呼び出し側が復元後の
+// 検証で使う「期待値」は、ここで実際にsetXへ渡した値と必ず一致させる（変換前のdataの値を
+// 別途再現しようとすると、変換ロジックが二重管理になり食い違う恐れがあるため）。
+function nexusApplyFullBackupData(data, handlers, options) {
+  const tagRestored = !options || options.tagDotRequestsAsRestored !== false;
+  const applied = {};
+  if (data.customers) { handlers.setCustomers(data.customers); applied.customers = data.customers; }
+  if (data.memos && handlers.setMemos) { handlers.setMemos(data.memos); applied.memos = data.memos; }
+  if (data.kpiSettings && handlers.setKpiSettings) { handlers.setKpiSettings(data.kpiSettings); applied.kpiSettings = data.kpiSettings; }
+  if (data.tasks && handlers.setTasks) { handlers.setTasks(data.tasks); applied.tasks = data.tasks; }
+  if (data.activityLogs && handlers.setActivityLogs) { handlers.setActivityLogs(data.activityLogs); applied.activityLogs = data.activityLogs; }
+  if (data.opportunities && handlers.setOpportunities) { handlers.setOpportunities(data.opportunities); applied.opportunities = data.opportunities; }
+  if (data.nexusFanCampaigns && handlers.setNexusFanCampaigns) { handlers.setNexusFanCampaigns(data.nexusFanCampaigns); applied.nexusFanCampaigns = data.nexusFanCampaigns; }
+  if (data.nexusFanFollows && handlers.setNexusFanFollows) { handlers.setNexusFanFollows(data.nexusFanFollows); applied.nexusFanFollows = data.nexusFanFollows; }
+  if (data.clients && handlers.setClients) { handlers.setClients(data.clients); applied.clients = data.clients; }
+  if (data.vision && handlers.setVision) { handlers.setVision(data.vision); applied.vision = data.vision; }
+  if (data.suspects && handlers.setSuspects) { handlers.setSuspects(data.suspects); applied.suspects = data.suspects; }
+  if (data.logs && handlers.setLogs) { handlers.setLogs(data.logs); applied.logs = data.logs; }
+  if (data.sales && handlers.setSales) { handlers.setSales(data.sales); applied.sales = data.sales; }
+  if (data.nexusServices && handlers.setNexusServices) { handlers.setNexusServices(data.nexusServices); applied.nexusServices = data.nexusServices; }
+  if (data.nexusServiceLinks && handlers.setNexusServiceLinks) { handlers.setNexusServiceLinks(data.nexusServiceLinks); applied.nexusServiceLinks = data.nexusServiceLinks; }
+  if (data.nexusMission && handlers.setNexusMission) { handlers.setNexusMission(data.nexusMission); applied.nexusMission = data.nexusMission; }
+  if (data.nexusSavedSearches && handlers.setNexusSavedSearches) { handlers.setNexusSavedSearches(data.nexusSavedSearches); applied.nexusSavedSearches = data.nexusSavedSearches; }
+  if (data.nexusDotRequests && handlers.setNexusDotRequests) {
+    const restoredRequests = tagRestored ? data.nexusDotRequests.map(r => r.status === 'applied' ? r : { ...r, restoredInvalid: true }) : data.nexusDotRequests;
+    handlers.setNexusDotRequests(restoredRequests);
+    applied.nexusDotRequests = restoredRequests;
+  }
+  if (data.nexusAiIdCounter !== undefined && handlers.setNexusAiIdCounter) { handlers.setNexusAiIdCounter(data.nexusAiIdCounter); applied.nexusAiIdCounter = data.nexusAiIdCounter; }
+  if (data.nexusAiIdMigrationDone !== undefined && handlers.setNexusAiIdMigrationDone) { handlers.setNexusAiIdMigrationDone(data.nexusAiIdMigrationDone); applied.nexusAiIdMigrationDone = data.nexusAiIdMigrationDone; }
+  if (data.nexusAiContractIdCounter !== undefined && handlers.setNexusAiContractIdCounter) { handlers.setNexusAiContractIdCounter(data.nexusAiContractIdCounter); applied.nexusAiContractIdCounter = data.nexusAiContractIdCounter; }
+  if (data.nexusAiContractIdMigrationDone !== undefined && handlers.setNexusAiContractIdMigrationDone) { handlers.setNexusAiContractIdMigrationDone(data.nexusAiContractIdMigrationDone); applied.nexusAiContractIdMigrationDone = data.nexusAiContractIdMigrationDone; }
+  if (data.nexusDotRefMap) {
+    try {
+      localStorage.setItem('ml_dot_ref_map_v1', JSON.stringify(data.nexusDotRefMap));
+      applied.nexusDotRefMap = data.nexusDotRefMap;
+    } catch (e) {}
+  }
+  return applied;
+}
+// P0a追加安全対策：形式⓪（全データバックアップ）の構造を、復元の確認ダイアログより前に検証する。
+// 「JSONとして読み込めた」だけでは、customers等が欠落・型違いのまま「復元成功」と表示してしまう
+// 問題が見つかったため、復元に不可欠なcustomersは必須（配列）とし、それ以外の項目は旧バックアップ
+// との互換性を保つため「存在する場合のみ型を確認する」（存在しないこと自体は許容する）。
+function nexusValidateFullBackupStructure(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return { ok: false, reason: 'not_object' };
+  }
+  if (!Array.isArray(data.customers)) {
+    return { ok: false, reason: 'customers_missing_or_invalid' };
+  }
+  const arrayFields = ['tasks', 'memos', 'activityLogs', 'opportunities', 'nexusFanCampaigns',
+    'nexusFanFollows', 'clients', 'suspects', 'logs', 'nexusServices', 'nexusServiceLinks',
+    'nexusSavedSearches', 'nexusDotRequests'];
+  for (const f of arrayFields) {
+    if (data[f] !== undefined && data[f] !== null && !Array.isArray(data[f])) {
+      return { ok: false, reason: 'field_type_invalid', field: f };
+    }
+  }
+  const objectFields = ['vision', 'kpiSettings', 'sales', 'nexusMission'];
+  for (const f of objectFields) {
+    if (data[f] !== undefined && data[f] !== null && (typeof data[f] !== 'object' || Array.isArray(data[f]))) {
+      return { ok: false, reason: 'field_type_invalid', field: f };
+    }
+  }
+  return { ok: true };
+}
+// P0a追加安全対策：形式①（旧app.html形式）の構造検証。この形式には「必須の1項目」という
+// ものが無い（tasks／logs／clientsのいずれかがあれば形式①と判定される）ため、customersのような
+// 単一必須項目は設けず、実際に存在する項目の型だけを確認する。
+function nexusValidateLegacyFormat1Structure(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return { ok: false, reason: 'not_object' };
+  }
+  const arrayFields = ['tasks', 'clients', 'suspects', 'logs'];
+  for (const f of arrayFields) {
+    if (data[f] !== undefined && data[f] !== null && !Array.isArray(data[f])) {
+      return { ok: false, reason: 'field_type_invalid', field: f };
+    }
+  }
+  const objectFields = ['vision', 'sales'];
+  for (const f of objectFields) {
+    if (data[f] !== undefined && data[f] !== null && (typeof data[f] !== 'object' || Array.isArray(data[f]))) {
+      return { ok: false, reason: 'field_type_invalid', field: f };
+    }
+  }
+  return { ok: true };
+}
+// P0a追加安全対策：直前の自動退避データが既にある状態で次の復元を行うと、その退避データは
+// 上書きされて消える（自動退避は1世代のみ保存する設計のため）。上書きされる直前に、確認ダイアログの
+// 文面でその旨を利用者に警告する。退避データが無い場合（1回目の復元等）は空文字を返し、
+// 既存の確認文言は変化しない。
+// P0a-DB変更：ダブルバッファリング導入後は、この復元操作によって「今アクティブで
+// ない方」のスロット（＝直前より1つ前の退避データ）だけが上書きされ、直前の有効な
+// 退避データ自体は上書きされない。旧形式の単一キーは今後一切上書きしないため
+// （旧バックアップとの互換性維持）、新形式の世代が無い場合はその旨を案内する。
+function nexusBuildRetreatOverwriteWarning() {
+  const resolved = nexusGetActiveGeneration();
+  if (resolved.status === 'active') {
+    const retreatedAt = resolved.generation.retreatedAt;
+    let dateLabel = null;
+    if (retreatedAt) {
+      try { dateLabel = new Date(retreatedAt).toLocaleString('ja-JP'); } catch (e) {}
+    }
+    return dateLabel
+      ? `⚠️ 現在保存されている自動退避データのうち、最も古いもの（${dateLabel}より前のもの）は、この復元によって上書きされます。直前の退避データ自体は上書きされません。\n\n`
+      : `⚠️ 現在保存されている自動退避データのうち、最も古いものは、この復元によって上書きされます。直前の退避データ自体は上書きされません。\n\n`;
+  }
+  if (resolved.status === 'legacy') {
+    const retreatedAt = resolved.generation.retreatedAt;
+    let dateLabel = null;
+    if (retreatedAt) {
+      try { dateLabel = new Date(retreatedAt).toLocaleString('ja-JP'); } catch (e) {}
+    }
+    return dateLabel
+      ? `⚠️ 現在保存されている自動退避データ（旧形式、${dateLabel}時点のもの）は、この復元によって上書きされません（そのまま保持されます）。この復元では、新しい形式の自動退避データが別に作成されます。\n\n`
+      : `⚠️ 現在保存されている自動退避データ（旧形式）は、この復元によって上書きされません（そのまま保持されます）。この復元では、新しい形式の自動退避データが別に作成されます。\n\n`;
+  }
+  // status === 'needs_selection' の場合は、この警告ではなく復元候補の選択ダイアログ
+  // （nexusRetreatBeforeRestoreWithSelection）で案内するため、ここでは空文字を返す。
+  return '';
+}
+// P0a追加（復元後検証）：各項目のキー名と、実際に保存されるlocalStorageキー名の対応表。
+// useLSフック自体はlocalStorage書き込みの失敗を内部でcatchして無視する設計のため、
+// setXの呼び出しが例外を投げなくても、実際には保存に失敗している場合がある。このため、
+// 復元処理に限って、適用した値と実際の保存内容を読み直して突き合わせる。
+const NEXUS_FULL_BACKUP_LS_KEY_MAP = {
+  customers: 'customers_v1', memos: 'nexus_memos_v1', kpiSettings: 'nexus_kpi_v1', tasks: 'ml_tasks_v1',
+  activityLogs: 'nexus_activity_logs_v1', opportunities: 'nexus_opportunities_v1',
+  nexusFanCampaigns: 'nexus_fan_campaigns_v1', nexusFanFollows: 'nexus_fan_follow_records_v1',
+  clients: 'ml_clients_v1', vision: 'ml_vision_v1', suspects: 'ml_suspects_v1', logs: 'ml_logs_v1',
+  sales: 'ml_sales_v1', nexusServices: 'nexus_services_v1', nexusServiceLinks: 'nexus_service_links_v1',
+  nexusMission: 'nexus_mission_v1', nexusSavedSearches: 'nexus_saved_searches_v1',
+  nexusDotRequests: 'ml_dot_requests_v1', nexusAiIdCounter: 'nexus_ai_id_counter_v1',
+  nexusAiIdMigrationDone: 'nexus_ai_id_migration_done_v1', nexusAiContractIdCounter: 'nexus_ai_contract_id_counter_v1',
+  nexusAiContractIdMigrationDone: 'nexus_ai_contract_id_migration_done_v1', nexusDotRefMap: 'ml_dot_ref_map_v1'
+};
+const NEXUS_LEGACY_FORMAT1_LS_KEY_MAP = {
+  tasks: 'ml_tasks_v1', clients: 'ml_clients_v1', suspects: 'ml_suspects_v1', logs: 'ml_logs_v1',
+  vision: 'ml_vision_v1', sales: 'ml_sales_v1'
+};
+// appliedの各項目について、対応するlocalStorageキーを読み直し、実際にsetXへ渡した値と
+// 一致するかを確認する。不一致の項目（保存に失敗した項目）を返す。空配列なら全項目一致。
+function nexusVerifyAppliedFieldsPersisted(applied, lsKeyMap) {
+  const mismatches = [];
+  Object.keys(applied).forEach(fieldKey => {
+    const lsKey = lsKeyMap[fieldKey];
+    if (!lsKey) return;
+    let actualRaw;
+    try {
+      actualRaw = localStorage.getItem(lsKey);
+    } catch (e) {
+      mismatches.push({ field: fieldKey, reason: 'read_failed' });
+      return;
+    }
+    let expectedRaw;
+    try {
+      expectedRaw = JSON.stringify(applied[fieldKey]);
+    } catch (e) {
+      mismatches.push({ field: fieldKey, reason: 'expected_stringify_failed' });
+      return;
+    }
+    if (actualRaw !== expectedRaw) {
+      mismatches.push({ field: fieldKey, reason: 'value_mismatch' });
+    }
+  });
+  return mismatches;
+}
+// P0a追加（復元表示の正確化）：形式⓪・①それぞれで、復元前の比較表示・復元後の結果表示の
+// 両方に使う項目一覧。kind:'array'の項目は件数で、kind:'object'の項目は「更新されるか」で
+// 変化を示す。この一覧を増減表示・結果メッセージの両方で共通利用することで、
+// 「表示した内容」と「実際に復元した内容」が食い違わないようにする。
+const NEXUS_FULL_BACKUP_FIELD_DEFS = [
+  { key: 'customers', label: '顧客', kind: 'array' },
+  { key: 'memos', label: 'メモ', kind: 'array' },
+  { key: 'kpiSettings', label: 'KPI設定', kind: 'object' },
+  { key: 'tasks', label: 'タスク', kind: 'array' },
+  { key: 'activityLogs', label: '活動履歴', kind: 'array' },
+  { key: 'opportunities', label: '案件', kind: 'array' },
+  { key: 'nexusFanCampaigns', label: 'ファン化施策', kind: 'array' },
+  { key: 'nexusFanFollows', label: 'フォロー記録', kind: 'array' },
+  { key: 'clients', label: 'クライアント', kind: 'array' },
+  { key: 'vision', label: 'ビジョン', kind: 'object' },
+  { key: 'suspects', label: 'サスペクト(家族等)', kind: 'array' },
+  { key: 'logs', label: 'ログ', kind: 'array' },
+  { key: 'sales', label: '売上', kind: 'object' },
+  { key: 'nexusServices', label: 'サービス', kind: 'array' },
+  { key: 'nexusServiceLinks', label: 'サービス連携', kind: 'array' },
+  { key: 'nexusMission', label: 'ミッション', kind: 'object' },
+  { key: 'nexusSavedSearches', label: '保存検索', kind: 'array' },
+  { key: 'nexusDotRequests', label: 'Dot連携依頼', kind: 'array' }
+];
+const NEXUS_LEGACY_FORMAT1_FIELD_DEFS = [
+  { key: 'tasks', label: 'タスク', kind: 'array' },
+  { key: 'clients', label: 'クライアント', kind: 'array' },
+  { key: 'suspects', label: 'サスペクト(家族等)', kind: 'array' },
+  { key: 'logs', label: 'ログ', kind: 'array' },
+  { key: 'vision', label: 'ビジョン', kind: 'object' },
+  { key: 'sales', label: '売上', kind: 'object' }
+];
+// バックアップデータと現在のデータを項目ごとに比較する。「バックアップに項目自体が無い」
+// （絶対に変更しない）と「項目はあるが0件」（既存データを空で上書きする）を明確に区別する
+// ため、存在チェックは undefined/null のみを「無い」とみなす（空配列[]は「ある」扱い）。
+function nexusBuildRestoreComparison(data, fieldDefs) {
+  const current = nexusReadBackupSnapshotFromStorage();
+  const present = [];
+  const absent = [];
+  fieldDefs.forEach(def => {
+    const raw = data[def.key];
+    const isPresent = raw !== undefined && raw !== null;
+    if (!isPresent) {
+      absent.push(def);
+      return;
+    }
+    if (def.kind === 'array') {
+      const currentArr = current[def.key];
+      const currentCount = Array.isArray(currentArr) ? currentArr.length : 0;
+      const newCount = Array.isArray(raw) ? raw.length : 0;
+      present.push({ ...def, currentCount, newCount, decrease: newCount < currentCount });
+    } else {
+      present.push({ ...def, currentCount: null, newCount: null, decrease: false });
+    }
+  });
+  return { present, absent, totalFields: fieldDefs.length };
+}
+// 復元前の確認ダイアログに表示する、項目ごとの変化の説明文。対象項目・現在件数・復元後件数・
+// 上書きされる項目・変更されない項目・件数が減少する項目を、復元を実行する前に示す。
+function nexusFormatRestoreComparisonText(comparison) {
+  const lines = [];
+  if (comparison.present.length > 0) {
+    lines.push('【復元によって変更される項目】');
+    comparison.present.forEach(p => {
+      if (p.kind === 'array') {
+        let mark = '';
+        if (p.decrease) mark = ' ⚠️件数が減少します';
+        else if (p.newCount === p.currentCount) mark = '（件数の変化なし）';
+        lines.push(`　${p.label}：${p.currentCount}件 → ${p.newCount}件${mark}`);
+      } else {
+        lines.push(`　${p.label}：内容が更新されます`);
+      }
+    });
+  }
+  if (comparison.absent.length > 0) {
+    lines.push('【バックアップに含まれないため変更されない項目】');
+    lines.push('　' + comparison.absent.map(a => a.label).join('、'));
+  }
+  const decreasing = comparison.present.filter(p => p.kind === 'array' && p.decrease);
+  if (decreasing.length > 0) {
+    lines.push('');
+    lines.push('⚠️ 以下の項目はデータが減少します。本当に復元しますか？');
+    decreasing.forEach(p => lines.push(`　${p.label}：${p.currentCount}件 → ${p.newCount}件`));
+  }
+  return lines.join('\n') + '\n\n';
+}
+// 復元完了後に表示する結果メッセージ。確認ダイアログの比較と同じcomparisonから組み立てるため、
+// 「表示した復元範囲」と「実際に復元した範囲」が必ず一致する。欠落していた項目を「復元成功」
+// には数えず、全項目が揃っていたか（完全復元）／一部のみだったか（部分復元）を明示する。
+function nexusFormatRestoreResultMessage(comparison, completeHeader, partialHeader) {
+  const appliedCount = comparison.present.length;
+  const totalCount = comparison.totalFields;
+  const isComplete = appliedCount === totalCount;
+  const header = `${isComplete ? completeHeader : partialHeader}（${appliedCount}/${totalCount}項目）`;
+  const parts = comparison.present.map(p => p.kind === 'array' ? `${p.label}${p.newCount}件` : `${p.label}更新`);
+  return header + (parts.length ? '\n' + parts.join(' / ') : '');
+}
+// P0a追加（復元後検証・安全なロールバック）：退避データ(nexusRetreatBeforeRestoreで既に保存・
+// 検証済み)を使って、現在のデータを元の状態に戻す。戻した内容も実際にlocalStorageへ保存
+// されたかを読み直して確認し、どちらの結果になったかに応じたメッセージだけを表示する
+// （中途半端な状態のまま「成功」と表示しない）。snapが読めない等、復旧自体が成立しない
+// 場合も、通常の成功メッセージは出さず、追加操作の中止を促す。
+function nexusRollbackAndReport(handlers) {
+  // 追加条件7：復元失敗後のロールバックも失敗した場合は、「データは変更されていません」
+  // とは言わず、顧客データの一部が変更された可能性を警告する。
+  const giveUpMessagePartial = '復元中にエラーが発生し、自動的な復旧にも失敗しました。顧客データの一部が変更された可能性があります。これ以上の操作は行わず、直前の自動退避データ、またはお手元のバックアップファイルから手動で復元してください。';
+
+  // ダブルバッファリング：ロールバック対象の世代（スナップショット・生状態のペア）を
+  // 1件に確定できた後に、実際の適用・書き戻し・検証を行う（手順1〜3は従来通り）。
+  function applyAndVerify(snap, rawStates) {
+    // 手順1：退避データ(__medilifeBackup形式)で各setXを呼び、画面(Reactのstate)を
+    // 復元前の内容に戻す。
+    try {
+      nexusApplyFullBackupData(snap, handlers, { tagDotRequestsAsRestored: false });
+    } catch (e) {
+      alert(giveUpMessagePartial);
+      return;
+    }
+    // P0a追加：Reactのstate更新(useLSのsetXが実際にlocalStorageへ書き込む処理)はReact 18の
+    // 自動バッチングにより、setXを呼んだ直後ではなく次のタスクで実行される。setTimeout(...,0)で
+    // 1つ後のタスクに回すことで、手順1の書き込みがすべて終わってから手順2に進む
+    // （先にlocalStorageを直接修正すると、後から実行される手順1の遅延書き込みに上書きされ、
+    // 削除したはずのキーが復活してしまう）。
+    setTimeout(() => {
+      // 手順2：退避時に記録した「対象キーごとの生の存在状態・保存値」をそのまま書き戻す。
+      // 元々存在しなかったキーは削除し、存在したキーは元の文字列へ戻す。これにより、
+      // useLSの初期値とのずれ（KPI設定・売上・ミッション・サービスカタログ等）や、
+      // 元々存在しなかったキーが新規作成される問題を、手順1の結果に関わらず最終的に修正する。
+      if (!rawStates) {
+        alert(giveUpMessagePartial);
+        return;
+      }
+      const restoreMismatches = nexusRestoreRawKeyStates(rawStates);
+      if (restoreMismatches.length > 0) {
+        alert(giveUpMessagePartial);
+        return;
+      }
+      // 手順3：復旧後のlocalStorageを読み直し、退避時点の記録とキーの存在状態・値が
+      // 完全に一致するかを確認する。一致しない場合は、復旧成功とは表示しない。
+      const finalMismatches = nexusVerifyRawKeyStates(rawStates);
+      if (finalMismatches.length > 0) {
+        alert(giveUpMessagePartial);
+      } else {
+        alert('復元中にエラーが発生したため、復元前の状態に戻しました。データは変更されていません。\n\n画面の表示を確実に最新の状態にするため、このページを再読み込みすることをお勧めします。');
+      }
+    }, 0);
+  }
+
+  // どの世代にロールバックするかを解決する。アクティブな世代（新形式）があればそれを使い、
+  // 新形式の世代が無ければ旧形式（単一キー）を読み取り専用で使う（互換性維持）。
+  // マーカーが無効で候補が残っている場合は、日時だけで自動選択せず、利用者に選んでもらう
+  // （追加条件1・2。ここは復元失敗後のロールバック局面のため、顧客データの一部が既に
+  // 変更されている可能性がある旨の文言で提示する＝追加条件7）。
+  const resolved = nexusGetActiveGeneration();
+  if (resolved.status === 'active') {
+    applyAndVerify(resolved.generation.snapshot, resolved.generation.rawStates);
+    return;
+  }
+  if (resolved.status === 'legacy') {
+    applyAndVerify(resolved.generation.snapshot, resolved.generation.rawStates);
+    return;
+  }
+  if (resolved.status === 'needs_selection') {
+    const choice = nexusPresentCandidatesAndGetChoice(resolved.candidates, 'post');
+    if (!choice) {
+      alert(giveUpMessagePartial);
+      return;
+    }
+    if (!nexusAdoptCandidateAsActive(choice)) {
+      alert(giveUpMessagePartial);
+      return;
+    }
+    applyAndVerify(choice.snapshot, choice.rawStates);
+    return;
+  }
+  // status === 'none'：新形式・旧形式のどちらにも使える退避データが見つからない。
+  // この時点ではすでに復元の適用（手順1）に失敗した後のロールバック局面のため、
+  // 顧客データが変更されていない保証はできない（追加条件7）。
+  alert(giveUpMessagePartial);
+}
+// P0a追加（復元後検証）：適用した内容(applied)が実際にlocalStorageへ保存されたかを、
+// 同じ理由で1タスク遅らせてから確認する。保存できていた場合のみ、comparisonに基づく
+// 結果メッセージ（表示した復元範囲と必ず一致する）を表示する。1項目でも保存できていなければ、
+// 成功とは表示せず、nexusRollbackAndReportで退避データからの復旧を試みる。
+function nexusVerifyApplyThenReport(applied, lsKeyMap, handlers, comparisonForMessage, completeHeader, partialHeader) {
+  setTimeout(() => {
+    const mismatches = nexusVerifyAppliedFieldsPersisted(applied, lsKeyMap);
+    if (mismatches.length === 0) {
+      alert(nexusFormatRestoreResultMessage(comparisonForMessage, completeHeader, partialHeader));
+    } else {
+      nexusRollbackAndReport(handlers);
+    }
+  }, 0);
+}
+// P0a-DB追加：nexusRetreatBeforeRestoreがneeds_selection（マーカー破損・消失時の
+// 自己整合な候補）を返した場合に、利用者へ候補を提示して選んでもらい、選ばれた候補を
+// マーカーとして確定した上でnexusRetreatBeforeRestoreを再試行する。この時点ではまだ
+// 既存の顧客データには一切触れていない（phase:'pre'で提示する＝追加条件1・5）。
+function nexusRetreatBeforeRestoreWithSelection() {
+  let retreat = nexusRetreatBeforeRestore();
+  while (!retreat.ok && retreat.reason === 'needs_selection') {
+    const choice = nexusPresentCandidatesAndGetChoice(retreat.candidates, 'pre');
+    if (!choice) {
+      return { ok: false, reason: 'needs_selection_declined' };
+    }
+    if (!nexusAdoptCandidateAsActive(choice)) {
+      return { ok: false, reason: 'needs_selection_adopt_failed' };
+    }
+    retreat = nexusRetreatBeforeRestore();
+  }
+  return retreat;
+}
 function importJSON(file, handlers) {
   // handlers = { setCustomers, setTasks, setClients, setVision, setSuspects, setSales, setLogs,
   //              setMemos, setKpiSettings, setNexusServices, setNexusServiceLinks, setNexusMission,
@@ -21795,78 +22181,108 @@ function importJSON(file, handlers) {
       //    { __medilifeBackup: true, customers, memos, kpiSettings, tasks, clients, vision,
       //      suspects, logs, sales, nexusServices, nexusServiceLinks, nexusMission }
       if (data.__medilifeBackup) {
-        if (!confirm('この端末の現在のデータをすべて、バックアップの内容で置き換えます。よろしいですか？')) return;
-        if (data.customers) handlers.setCustomers(data.customers);
-        if (data.memos && handlers.setMemos) handlers.setMemos(data.memos);
-        if (data.kpiSettings && handlers.setKpiSettings) handlers.setKpiSettings(data.kpiSettings);
-        if (data.tasks && handlers.setTasks) handlers.setTasks(data.tasks);
-        if (data.activityLogs && handlers.setActivityLogs) handlers.setActivityLogs(data.activityLogs);
-        if (data.opportunities && handlers.setOpportunities) handlers.setOpportunities(data.opportunities);
-        if (data.nexusFanCampaigns && handlers.setNexusFanCampaigns) handlers.setNexusFanCampaigns(data.nexusFanCampaigns);
-        if (data.nexusFanFollows && handlers.setNexusFanFollows) handlers.setNexusFanFollows(data.nexusFanFollows);
-        if (data.clients && handlers.setClients) handlers.setClients(data.clients);
-        if (data.vision && handlers.setVision) handlers.setVision(data.vision);
-        if (data.suspects && handlers.setSuspects) handlers.setSuspects(data.suspects);
-        if (data.logs && handlers.setLogs) handlers.setLogs(data.logs);
-        if (data.sales && handlers.setSales) handlers.setSales(data.sales);
-        if (data.nexusServices && handlers.setNexusServices) handlers.setNexusServices(data.nexusServices);
-        if (data.nexusServiceLinks && handlers.setNexusServiceLinks) handlers.setNexusServiceLinks(data.nexusServiceLinks);
-        if (data.nexusMission && handlers.setNexusMission) handlers.setNexusMission(data.nexusMission);
-        if (data.nexusSavedSearches && handlers.setNexusSavedSearches) handlers.setNexusSavedSearches(data.nexusSavedSearches);
-        // 神メモ第2段階：依頼・応答の記録。復元してもここでは何も自動適用しない
-        // （未適用の依頼は、復元後に改めてこの画面を開いて確認・採用する）。
-        // 元の要件：復元後の未適用依頼は古いものとして扱い、そのまま採用させず、必ず
-        // 再出力を求める（採用済みの履歴はそのまま保持し、再適用はしない）。復元した
-        // 「未適用」（awaiting_response／response_received／held）の依頼にだけ
-        // restoredInvalidを立てる。nexusDotFindActiveRequestとnexusDotConsultDecideの
-        // 両方でこのフラグを見るため、画面側（UIの表示分岐）だけに頼らず、採用処理自体も拒否する。
-        if (data.nexusDotRequests && handlers.setNexusDotRequests) {
-          const restoredRequests = data.nexusDotRequests.map(r => r.status === 'applied' ? r : { ...r, restoredInvalid: true });
-          handlers.setNexusDotRequests(restoredRequests);
+        // P0a追加：確認ダイアログより前にデータ構造を検証する。壊れている場合は、確認も
+        // 退避も行わずその場で中止する（既存データ・新データのどちらにも触れない）。
+        const structCheck0 = nexusValidateFullBackupStructure(data);
+        if (!structCheck0.ok) {
+          alert('バックアップデータの形式が正しくないため、復元を中止しました。既存データは変更されていません。');
+          return;
         }
-        if (data.nexusAiIdCounter !== undefined && handlers.setNexusAiIdCounter) handlers.setNexusAiIdCounter(data.nexusAiIdCounter);
-        if (data.nexusAiIdMigrationDone !== undefined && handlers.setNexusAiIdMigrationDone) handlers.setNexusAiIdMigrationDone(data.nexusAiIdMigrationDone);
-        if (data.nexusAiContractIdCounter !== undefined && handlers.setNexusAiContractIdCounter) handlers.setNexusAiContractIdCounter(data.nexusAiContractIdCounter);
-        if (data.nexusAiContractIdMigrationDone !== undefined && handlers.setNexusAiContractIdMigrationDone) handlers.setNexusAiContractIdMigrationDone(data.nexusAiContractIdMigrationDone);
-        // Dot連携（第1段階）の外向け参照ID対応表。古いバックアップ（この項目を持たない）
-        // の復元時は何もしない（復元後に再度Dot用JSONを確認した際、新しい参照IDが
-        // 発行されるだけで、既存の記憶・タスク本体やその関連付けは失われない）。
-        if (data.nexusDotRefMap) {
-          try {
-            localStorage.setItem('ml_dot_ref_map_v1', JSON.stringify(data.nexusDotRefMap));
-          } catch (e) {}
+        // P0a追加：確認ダイアログに、対象項目・現在件数・復元後件数・上書き/未変更の区別・
+        // 件数減少の警告を表示する（復元を実行する前に利用者が判断できるようにする）。
+        const comparison0 = nexusBuildRestoreComparison(data, NEXUS_FULL_BACKUP_FIELD_DEFS);
+        if (!confirm(nexusBuildRetreatOverwriteWarning() + nexusFormatRestoreComparisonText(comparison0) + 'この端末の現在のデータをすべて、バックアップの内容で置き換えます。よろしいですか？')) return;
+        // P0a：復元の直前に、現在の状態をまるごと自動退避する。退避の保存・検証の
+        // どちらかに失敗した場合は、まだ何も書き換えていないこの時点で復元を中止する。
+        const retreat = nexusRetreatBeforeRestoreWithSelection();
+        if (!retreat.ok) {
+          if (retreat.reason === 'needs_selection_declined' || retreat.reason === 'needs_selection_adopt_failed') {
+            alert('退避データの選択が完了しなかったため、復元を中止しました。既存データは変更されていません。');
+          } else {
+            alert('復元前の退避に失敗したため、復元を中止しました。既存データは変更されていません。');
+          }
+          return;
         }
-        alert('✅ 全データを復元しました');
+        try {
+          // 神メモ第2段階：依頼・応答の記録。復元してもここでは何も自動適用しない
+          // （未適用の依頼は、復元後に改めてこの画面を開いて確認・採用する）。
+          // 元の要件：復元後の未適用依頼は古いものとして扱い、そのまま採用させず、必ず
+          // 再出力を求める（採用済みの履歴はそのまま保持し、再適用はしない）。復元した
+          // 「未適用」（awaiting_response／response_received／held）の依頼にだけ
+          // restoredInvalidを立てる。nexusDotFindActiveRequestとnexusDotConsultDecideの
+          // 両方でこのフラグを見るため、画面側（UIの表示分岐）だけに頼らず、採用処理自体も拒否する。
+          const applied0 = nexusApplyFullBackupData(data, handlers);
+          // P0a追加（復元後検証）：setXが例外を投げなくても、useLSフック内部でlocalStorageへの
+          // 書き込み自体が握りつぶされて失敗している場合があるため、実際の保存内容を読み直して
+          // 確認する（1タスク遅らせてから確認する理由はnexusVerifyApplyThenReport内のコメント参照）。
+          // 1項目でも保存できていなければ、復元成功とは表示せず、退避データからの復旧を試みる。
+          nexusVerifyApplyThenReport(applied0, NEXUS_FULL_BACKUP_LS_KEY_MAP, handlers, comparison0, '✅ 全データを復元しました', '✅ 一部のデータを復元しました');
+        } catch (restoreErr) {
+          // P0a：setX呼び出し自体が同期的に例外を投げた場合（通常は稀）も、同じ復旧処理を行う。
+          nexusRollbackAndReport(handlers);
+        }
         return;
       }
 
       // ① app.html バックアップ形式
       //    { tasks, clients, suspects, vision, sales, logs, exportedAt, version }
       if (data.tasks || data.logs || data.clients && !data.customers) {
-        const msgs = [];
-        if (data.tasks && handlers.setTasks) {
-          handlers.setTasks(data.tasks);
-          msgs.push(`タスク${data.tasks.length}件`);
+        // P0a：この形式は従来、確認ダイアログ無しで即座に置き換えていた。既存データ保護の
+        // ため、⓪と同じ確認ダイアログ・自動退避・失敗時ロールバックを追加する。
+        // P0a追加：確認ダイアログより前にデータ構造を検証する（型違いの項目がある場合は中止）。
+        const structCheck1 = nexusValidateLegacyFormat1Structure(data);
+        if (!structCheck1.ok) {
+          alert('バックアップデータの形式が正しくないため、復元を中止しました。既存データは変更されていません。');
+          return;
         }
-        if (data.clients && handlers.setClients) {
-          handlers.setClients(data.clients);
-          msgs.push(`クライアント${data.clients.length}件`);
+        // P0a追加：確認ダイアログに対象項目・現在件数・復元後件数・変更/未変更の区別・
+        // 件数減少の警告を表示する。
+        const comparison1 = nexusBuildRestoreComparison(data, NEXUS_LEGACY_FORMAT1_FIELD_DEFS);
+        if (!confirm(nexusBuildRetreatOverwriteWarning() + nexusFormatRestoreComparisonText(comparison1) + 'この端末の現在のタスク・クライアント・サスペクト等のデータを、バックアップの内容で置き換えます。よろしいですか？')) return;
+        const retreat = nexusRetreatBeforeRestoreWithSelection();
+        if (!retreat.ok) {
+          if (retreat.reason === 'needs_selection_declined' || retreat.reason === 'needs_selection_adopt_failed') {
+            alert('退避データの選択が完了しなかったため、復元を中止しました。既存データは変更されていません。');
+          } else {
+            alert('復元前の退避に失敗したため、復元を中止しました。既存データは変更されていません。');
+          }
+          return;
         }
-        if (data.suspects && handlers.setSuspects) {
-          handlers.setSuspects(data.suspects);
-          msgs.push(`サスペクト${data.suspects.length}件`);
+        try {
+          const applied1 = {};
+          if (data.tasks && handlers.setTasks) {
+            handlers.setTasks(data.tasks);
+            applied1.tasks = data.tasks;
+          }
+          if (data.clients && handlers.setClients) {
+            handlers.setClients(data.clients);
+            applied1.clients = data.clients;
+          }
+          if (data.suspects && handlers.setSuspects) {
+            handlers.setSuspects(data.suspects);
+            applied1.suspects = data.suspects;
+          }
+          if (data.vision && handlers.setVision) {
+            handlers.setVision(data.vision);
+            applied1.vision = data.vision;
+          }
+          if (data.sales && handlers.setSales) {
+            handlers.setSales(data.sales);
+            applied1.sales = data.sales;
+          }
+          if (data.logs && handlers.setLogs) {
+            handlers.setLogs(data.logs);
+            applied1.logs = data.logs;
+          }
+          // P0a追加（復元後検証）：形式⓪と同様、実際に保存されたかを1タスク遅らせてから
+          // 確認する（理由はnexusVerifyApplyThenReport内のコメント参照）。退避データは常に
+          // 全項目分の完全なスナップショットのため、ロールバック自体は形式⓪と共通の
+          // nexusRollbackAndReportを使う（形式①が元々触れていた6項目に限らず、退避時点の
+          // 全項目を正しく戻す）。
+          nexusVerifyApplyThenReport(applied1, NEXUS_LEGACY_FORMAT1_LS_KEY_MAP, handlers, comparison1, '✅ バックアップ復元完了', '✅ バックアップの一部を復元しました');
+        } catch (restoreErr) {
+          nexusRollbackAndReport(handlers);
         }
-        if (data.vision && handlers.setVision) {
-          handlers.setVision(data.vision);
-        }
-        if (data.sales && handlers.setSales) {
-          handlers.setSales(data.sales);
-        }
-        if (data.logs && handlers.setLogs) {
-          handlers.setLogs(data.logs);
-          msgs.push(`ログ${data.logs.length}件`);
-        }
-        alert(`✅ バックアップ復元完了\n${msgs.join(' / ')}`);
         return;
       }
 
@@ -21897,6 +22313,48 @@ function importJSON(file, handlers) {
     }
   };
   reader.readAsText(file, 'UTF-8');
+}
+// P0a：画面の「自動退避データを確認する」から、直前の自動退避データをそのまま
+// importJSON（形式⓪の経路）へ渡して復元する。既存のFile読み込み処理をそのまま再利用する
+// ため、退避データの文字列からその場でFileオブジェクトを作る（新しい読み込み経路を別に作らない）。
+function nexusMakeAutoBackupFile(snapshotOrRawJson) {
+  const raw = typeof snapshotOrRawJson === 'string' ? snapshotOrRawJson : JSON.stringify(snapshotOrRawJson);
+  const blob = new Blob([raw], { type: 'application/json' });
+  return new File([blob], 'nexus_auto_backup_before_restore.json', { type: 'application/json' });
+}
+function nexusRestoreFromAutoBackup(handlers) {
+  const resolved = nexusGetActiveGeneration();
+  if (resolved.status === 'active') {
+    importJSON(nexusMakeAutoBackupFile(resolved.generation.snapshot), handlers);
+    return;
+  }
+  if (resolved.status === 'needs_selection') {
+    // まだ既存データ・退避データのどちらにも触れていない局面のため、phase:'pre'で提示する
+    // （追加条件1・2：日時だけで自動選択せず、検証済みの候補だけを提示する）。
+    const choice = nexusPresentCandidatesAndGetChoice(resolved.candidates, 'pre');
+    if (!choice) return; // 何も選ばれなければ、何もせず終了する（既存データは無変更）。
+    if (!nexusAdoptCandidateAsActive(choice)) {
+      alert('退避データの選択内容を確定できなかったため、復元を中止しました。既存データは変更されていません。');
+      return;
+    }
+    importJSON(nexusMakeAutoBackupFile(choice.snapshot), handlers);
+    return;
+  }
+  // status 'legacy'／'none'：新形式の世代がまだ無いため、旧形式の単一キーをそのまま読み、
+  // 既存のimportJSON（形式⓪の経路）にそのまま渡す。旧形式データが壊れている場合の
+  // 判定・メッセージ表示は、従来と同じくimportJSON内の検証にそのまま委ねる（旧形式の
+  // キー自体はここでも一切書き換えない＝旧バックアップとの互換性維持）。
+  let raw;
+  try {
+    raw = localStorage.getItem(NEXUS_AUTO_BACKUP_BEFORE_RESTORE_KEY);
+  } catch (e) {
+    raw = null;
+  }
+  if (!raw) {
+    alert('自動退避データが見つかりません。');
+    return;
+  }
+  importJSON(nexusMakeAutoBackupFile(raw), handlers);
 }
 function importCSV(file, setCustomers) {
   const reader = new FileReader();
@@ -24080,6 +24538,399 @@ function importShodanCSV(file, setMemos) {
   };
   reader.readAsText(file, 'UTF-8');
 }
+// ── P0a：バックアップ・復元の安全強化 ──────────────────────────────
+// 「復元前の自動退避」「最終バックアップの記録」の両方から使う、現在のlocalStorageの
+// 内容を既存の全データバックアップ形式（__medilifeBackup）と同じ構造でそのまま読み取る
+// 共通処理。Reactのstate経由ではなく常にlocalStorageを直接読むため、呼び出し側
+// （importJSON等）の引数を増やさずに使える。exportJSON本体の構造・挙動は変更しない。
+const NEXUS_AUTO_BACKUP_BEFORE_RESTORE_KEY = 'nexus_auto_backup_before_restore_v1';
+const NEXUS_LAST_BACKUP_META_KEY = 'nexus_last_backup_meta_v1';
+// P0a追加：退避データ(__medilifeBackup形式)とは別に、対象キーの生の存在状態を保存する
+// ためのキー。既存の退避データの形式・内容は変更しない（互換性維持）。
+const NEXUS_AUTO_BACKUP_RAW_KEYSTATE_KEY = 'nexus_auto_backup_raw_keystate_v1';
+// P0a追加：App内のuseLSの初期値と、退避データを作る際のフォールバック値がずれていた
+// （kpiSettings/sales/nexusMission/nexusServicesが未設定の場合、ここでは具体的な初期値では
+// なくnullや[]を使っていたため、ロールバック時にアプリ本来の初期値に戻らない・無関係な
+// 項目まで書き換わる、という問題があった）。App内のuseLSもこの定数を参照するよう変更し、
+// 二重管理によるずれを防ぐ。
+const NEXUS_DEFAULT_KPI_SETTINGS = { avgCommission: 200000, closeRate: 50, proposalRate: 70, apptRate: 60 };
+const NEXUS_DEFAULT_SALES = { target: 0, current: 0, label: '今月' };
+const NEXUS_DEFAULT_MISSION = { why: '', how: '', dailyAction: '' };
+// P0a-DB追加（ダブルバッファリング）：退避データをA・B2つの物理スロットで管理する。
+// 新しい退避は必ず「今アクティブでない方」のスロットに書き込み、アクティブなスロットの
+// 物理キーには一切触れない。これにより退避の途中（スナップショット書き込み・生状態
+// 書き込み・マーカー確定のいずれか）で失敗しても、それまで有効だった世代（アクティブ
+// スロット）は無傷のまま残る。どちらのスロットが現在有効かは、コミットマーカー
+// （下記NEXUS_RETREAT_COMMIT_MARKER_KEY）を唯一の正とする。
+// 旧形式（単一キー、NEXUS_AUTO_BACKUP_BEFORE_RESTORE_KEY等）は、この仕組みの導入後も
+// 削除・上書きを一切行わない。新しい世代が一度も確定していない端末では、このold形式を
+// 読み取り専用のフォールバックとして使う（旧バックアップとの互換性維持）。
+const NEXUS_RETREAT_SLOT_KEYS = {
+  A: { snapshot: 'nexus_retreat_slot_a_snapshot_v1', rawstate: 'nexus_retreat_slot_a_rawstate_v1' },
+  B: { snapshot: 'nexus_retreat_slot_b_snapshot_v1', rawstate: 'nexus_retreat_slot_b_rawstate_v1' }
+};
+const NEXUS_RETREAT_COMMIT_MARKER_KEY = 'nexus_retreat_commit_marker_v1';
+function nexusGenerateRetreatGenerationId() {
+  return Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+}
+function nexusOppositeSlot(slot) { return slot === 'A' ? 'B' : 'A'; }
+// コミットマーカーを読む。存在しない・JSON解析失敗・activeSlotがA/B以外・generationId
+// が無い、のいずれかに該当する場合は「無効」としてnullを返す（追加条件1：コミット
+// マーカーが無効な場合、日時だけで復元候補を自動選択しない）。
+function nexusReadCommitMarker() {
+  let raw;
+  try {
+    raw = localStorage.getItem(NEXUS_RETREAT_COMMIT_MARKER_KEY);
+  } catch (e) {
+    return null;
+  }
+  if (!raw) return null;
+  try {
+    const marker = JSON.parse(raw);
+    if (!marker || (marker.activeSlot !== 'A' && marker.activeSlot !== 'B') || !marker.generationId) {
+      return null;
+    }
+    return marker;
+  } catch (e) {
+    return null;
+  }
+}
+// 指定スロットが「自己整合」かどうかを検証する（追加条件2：復元候補を表示する前に、
+// 世代ID・データ構造・保存内容の整合性を検証する）。
+// ①スナップショットと生状態の両方が存在し、JSON解析できる。
+// ②両者のretreatGenerationIdが一致する（世代IDの整合性）。
+// ③スナップショットが既存のnexusValidateFullBackupStructureに合格する（データ構造）。
+// ④生状態に記録されているcustomers_v1の実際の内容を解析し、件数がスナップショットの
+// customers件数と一致する（スナップショットと生状態が本当に同じ内容を指しているかの
+// 整合性＝保存内容の整合性。世代IDが一致していても内容がずれている可能性に備える）。
+function nexusIsSlotSelfConsistent(slot) {
+  const keys = NEXUS_RETREAT_SLOT_KEYS[slot];
+  let snapshotRaw, rawstateRaw;
+  try { snapshotRaw = localStorage.getItem(keys.snapshot); } catch (e) { return { ok: false, slot, reason: 'read_failed' }; }
+  try { rawstateRaw = localStorage.getItem(keys.rawstate); } catch (e) { return { ok: false, slot, reason: 'read_failed' }; }
+  if (!snapshotRaw || !rawstateRaw) return { ok: false, slot, reason: 'missing' };
+  let snapshot, rawstateWrapper;
+  try { snapshot = JSON.parse(snapshotRaw); } catch (e) { return { ok: false, slot, reason: 'parse_failed' }; }
+  try { rawstateWrapper = JSON.parse(rawstateRaw); } catch (e) { return { ok: false, slot, reason: 'parse_failed' }; }
+  if (!snapshot || !rawstateWrapper || !snapshot.retreatGenerationId ||
+      snapshot.retreatGenerationId !== rawstateWrapper.retreatGenerationId) {
+    return { ok: false, slot, reason: 'generation_mismatch' };
+  }
+  const structCheck = nexusValidateFullBackupStructure(snapshot);
+  if (!structCheck.ok) return { ok: false, slot, reason: 'structure_invalid' };
+  const rawStates = rawstateWrapper.states;
+  if (!rawStates || typeof rawStates !== 'object') return { ok: false, slot, reason: 'content_invalid' };
+  let rawCustomers;
+  try {
+    const rawCustomersStr = rawStates['customers_v1'];
+    rawCustomers = rawCustomersStr ? JSON.parse(rawCustomersStr) : [];
+  } catch (e) {
+    return { ok: false, slot, reason: 'content_invalid' };
+  }
+  const snapCustomerCount = Array.isArray(snapshot.customers) ? snapshot.customers.length : -1;
+  if (!Array.isArray(rawCustomers) || rawCustomers.length !== snapCustomerCount) {
+    return { ok: false, slot, reason: 'content_mismatch' };
+  }
+  return {
+    ok: true,
+    slot,
+    generationId: snapshot.retreatGenerationId,
+    snapshot,
+    rawStates,
+    retreatedAt: snapshot.retreatedAt || null,
+    customerCount: snapCustomerCount
+  };
+}
+function nexusFindSelfConsistentCandidates() {
+  return ['A', 'B'].map(nexusIsSlotSelfConsistent).filter(r => r.ok);
+}
+// 旧形式（単一キー）の自動退避データを読み取り専用で評価する。互換性維持のため、
+// 新システム導入後もこの旧キーへの書き込みは一切行わない（削除・上書き禁止）。
+function nexusReadLegacyAutoBackup() {
+  let snapRaw, rawRaw;
+  try { snapRaw = localStorage.getItem(NEXUS_AUTO_BACKUP_BEFORE_RESTORE_KEY); } catch (e) { snapRaw = null; }
+  try { rawRaw = localStorage.getItem(NEXUS_AUTO_BACKUP_RAW_KEYSTATE_KEY); } catch (e) { rawRaw = null; }
+  if (!snapRaw) return { ok: false };
+  let snapshot;
+  try { snapshot = JSON.parse(snapRaw); } catch (e) { return { ok: false }; }
+  const structCheck = nexusValidateFullBackupStructure(snapshot);
+  if (!structCheck.ok) return { ok: false };
+  let rawStates = null;
+  if (rawRaw) {
+    try { rawStates = JSON.parse(rawRaw); } catch (e) { rawStates = null; }
+  }
+  return {
+    ok: true,
+    snapshot,
+    rawStates,
+    retreatedAt: snapshot.retreatedAt || snapshot.exportedAt || null,
+    customerCount: Array.isArray(snapshot.customers) ? snapshot.customers.length : 0
+  };
+}
+// 現在「有効」な退避世代を解決する（復元・表示・ロールバックの全箇所から共通で使う）。
+// この関数自体はconfirm/alertを一切呼ばない（表示用途でも副作用無く呼べるようにする）。
+// 戻り値：
+//   { status:'active', slot, generation }  … コミットマーカーが有効で、指す先も自己整合
+//   { status:'legacy', generation }        … 新システムの世代が無く、旧形式が読める
+//   { status:'needs_selection', candidates } … マーカーが無効で、自己整合な候補が1件以上
+//   { status:'none' }                      … 使える退避データが一切無い
+function nexusGetActiveGeneration() {
+  const marker = nexusReadCommitMarker();
+  if (marker) {
+    const check = nexusIsSlotSelfConsistent(marker.activeSlot);
+    if (check.ok && check.generationId === marker.generationId) {
+      return { status: 'active', slot: marker.activeSlot, generation: check };
+    }
+  }
+  const candidates = nexusFindSelfConsistentCandidates();
+  if (candidates.length > 0) {
+    return { status: 'needs_selection', candidates };
+  }
+  const legacy = nexusReadLegacyAutoBackup();
+  if (legacy.ok) return { status: 'legacy', generation: legacy };
+  return { status: 'none' };
+}
+// マーカーが無効で復元候補が1件以上ある場合に、利用者へ候補を提示して選んでもらう
+// （追加条件1：日時だけで自動選択しない。候補が1件でも必ず確認する）。
+// phase:'pre'＝新しい退避の直前（まだ何も変更していない）／'post'＝復元失敗後の
+// ロールバック時（顧客データの一部が既に変更されている可能性がある）で文言を変える。
+function nexusPresentCandidatesAndGetChoice(candidates, phase) {
+  const intro = phase === 'post'
+    ? '復元中にエラーが発生し、復旧しようとしましたが、バックアップの管理情報（コミット' +
+      'マーカー）が壊れているか見つからないため、どの退避データに戻すかを自動的に決める' +
+      'ことができません。顧客データの一部が既に変更されている可能性があります。\n\n'
+    : 'バックアップの管理情報（コミットマーカー）が壊れているか見つからないため、どの退避' +
+      'データを使うかを自動的に決めることができません。まだ何も変更していません。\n\n';
+  for (let i = 0; i < candidates.length; i++) {
+    const c = candidates[i];
+    const dateLabel = c.retreatedAt ? new Date(c.retreatedAt).toLocaleString('ja-JP') : '不明';
+    const label = `[スロット${c.slot}]\n退避日時：${dateLabel}\n顧客件数：${c.customerCount}件\n世代ID：${c.generationId}`;
+    const prompt = intro + label + '\n\nこの退避データを使いますか？\n' +
+      '「キャンセル」を選ぶと、他に候補があれば次の候補を確認します。すべてキャンセルすると、この操作全体を中止します。';
+    if (confirm(prompt)) return c;
+  }
+  return null;
+}
+// 選ばれた候補をコミットマーカーとして確定する（マーカー再構築）。これ自体が
+// 失敗した場合は、呼び出し側が「選択後の確定にも失敗した」ことを利用者に伝える。
+function nexusAdoptCandidateAsActive(candidate) {
+  try {
+    const marker = { activeSlot: candidate.slot, generationId: candidate.generationId, committedAt: new Date().toISOString() };
+    const json = JSON.stringify(marker);
+    localStorage.setItem(NEXUS_RETREAT_COMMIT_MARKER_KEY, json);
+    return localStorage.getItem(NEXUS_RETREAT_COMMIT_MARKER_KEY) === json;
+  } catch (e) {
+    return false;
+  }
+}
+function nexusReadBackupSnapshotFromStorage(extra) {
+  const readJSON = (key, fallback) => {
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw === null) return fallback;
+      return JSON.parse(raw);
+    } catch (e) {
+      return fallback;
+    }
+  };
+  return {
+    __medilifeBackup: true,
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    nexusDotRefMap: readJSON('ml_dot_ref_map_v1', null),
+    customers: readJSON('customers_v1', []),
+    memos: readJSON('nexus_memos_v1', []),
+    kpiSettings: readJSON('nexus_kpi_v1', NEXUS_DEFAULT_KPI_SETTINGS),
+    tasks: readJSON('ml_tasks_v1', []),
+    activityLogs: readJSON('nexus_activity_logs_v1', []),
+    opportunities: readJSON('nexus_opportunities_v1', []),
+    nexusFanCampaigns: readJSON('nexus_fan_campaigns_v1', []),
+    nexusFanFollows: readJSON('nexus_fan_follow_records_v1', []),
+    clients: readJSON('ml_clients_v1', []),
+    vision: readJSON('ml_vision_v1', {}),
+    suspects: readJSON('ml_suspects_v1', []),
+    logs: readJSON('ml_logs_v1', []),
+    sales: readJSON('ml_sales_v1', NEXUS_DEFAULT_SALES),
+    nexusServices: readJSON('nexus_services_v1', NEXUS_SEED_SERVICES),
+    nexusServiceLinks: readJSON('nexus_service_links_v1', []),
+    nexusMission: readJSON('nexus_mission_v1', NEXUS_DEFAULT_MISSION),
+    nexusSavedSearches: readJSON('nexus_saved_searches_v1', []),
+    nexusDotRequests: readJSON('ml_dot_requests_v1', []),
+    nexusAiIdCounter: readJSON('nexus_ai_id_counter_v1', null),
+    nexusAiIdMigrationDone: readJSON('nexus_ai_id_migration_done_v1', null),
+    nexusAiContractIdCounter: readJSON('nexus_ai_contract_id_counter_v1', null),
+    nexusAiContractIdMigrationDone: readJSON('nexus_ai_contract_id_migration_done_v1', null),
+    ...(extra || {})
+  };
+}
+// P0a追加（ロールバックの完全性）：対象キーごとに「存在していたか」「保存されていた生の
+// 文字列」をそのまま記録する。nexusReadBackupSnapshotFromStorageはJSON.parse済み・
+// デフォルト値代入済みのため、「元々キー自体が存在しなかった」という情報が失われる。
+// ロールバックで元の状態を正確に再現するには、この生の記録が別途必要。
+function nexusCaptureRawKeyStates(lsKeyMap) {
+  const states = {};
+  Object.values(lsKeyMap).forEach(lsKey => {
+    let raw;
+    try {
+      raw = localStorage.getItem(lsKey);
+    } catch (e) {
+      raw = null;
+    }
+    states[lsKey] = raw; // null＝元々キーが存在しなかった。文字列＝その値で存在していた。
+  });
+  return states;
+}
+// 記録した生の状態をそのまま書き戻す：存在していたキーは元の文字列へ、存在しなかった
+// キーは削除する。1件でも書き込み（削除）に失敗した場合は、その項目を返す。
+function nexusRestoreRawKeyStates(states) {
+  const mismatches = [];
+  Object.keys(states).forEach(lsKey => {
+    const expected = states[lsKey];
+    try {
+      if (expected === null) {
+        localStorage.removeItem(lsKey);
+      } else {
+        localStorage.setItem(lsKey, expected);
+      }
+    } catch (e) {
+      mismatches.push({ key: lsKey, reason: 'write_failed' });
+    }
+  });
+  return mismatches;
+}
+// 実際のlocalStorageを読み直し、記録した生の状態（存在の有無・値）と完全に一致するかを
+// 確認する。一致しない項目を返す（空配列なら全項目一致）。
+function nexusVerifyRawKeyStates(states) {
+  const mismatches = [];
+  Object.keys(states).forEach(lsKey => {
+    let actual;
+    try {
+      actual = localStorage.getItem(lsKey);
+    } catch (e) {
+      actual = undefined;
+    }
+    if (actual !== states[lsKey]) {
+      mismatches.push({ key: lsKey, reason: 'value_mismatch' });
+    }
+  });
+  return mismatches;
+}
+// 退避データの検証：①書き込んだ文字列をそのまま読み戻して一致するか（保存できたか）、
+// ②読み戻した内容をJSON.parseできて、customers件数が退避前の件数と一致するか（読み込めるか）、
+// の2段階。どちらかが失敗した場合は呼び出し側で復元処理そのものを中止する。
+function nexusVerifyBackupSnapshotWritten(key, expectedJson, expectedCustomerCount) {
+  let readBack;
+  try {
+    readBack = localStorage.getItem(key);
+  } catch (e) {
+    return { ok: false, reason: 'readback_failed' };
+  }
+  if (readBack !== expectedJson) return { ok: false, reason: 'readback_mismatch' };
+  let parsed;
+  try {
+    parsed = JSON.parse(readBack);
+  } catch (e) {
+    return { ok: false, reason: 'parse_failed' };
+  }
+  if (!Array.isArray(parsed.customers) || parsed.customers.length !== expectedCustomerCount) {
+    return { ok: false, reason: 'structure_mismatch' };
+  }
+  return { ok: true };
+}
+// 復元（既存データの置き換え）の直前に、現在の状態をまるごと退避する（ダブルバッファ
+// リング版）。常に「今アクティブでない方」のスロットへ書き込み、アクティブなスロットの
+// 物理キーには一切触れない。これにより、この関数が途中のどの段階で失敗しても、それまで
+// 有効だった世代は無傷のまま残る。
+// 書き込み・検証のいずれかが失敗した場合は、呼び出し側（importJSON）が復元そのものを
+// 中止する。マーカーが無効で自己整合な候補が残っている場合は、何も書き込まずに
+// needs_selectionを返し、利用者の選択を待つ（追加条件1・5：日時だけで自動選択しない／
+// 既存データの退避が正常に完了していなければ復元を開始しない）。
+function nexusRetreatBeforeRestore() {
+  const resolved = nexusGetActiveGeneration();
+  if (resolved.status === 'needs_selection') {
+    return { ok: false, reason: 'needs_selection', candidates: resolved.candidates };
+  }
+  const targetSlot = resolved.status === 'active' ? nexusOppositeSlot(resolved.slot) : 'A';
+  const keys = NEXUS_RETREAT_SLOT_KEYS[targetSlot];
+
+  let currentCustomers;
+  try {
+    currentCustomers = JSON.parse(localStorage.getItem('customers_v1') || '[]');
+  } catch (e) {
+    currentCustomers = [];
+  }
+  if (!Array.isArray(currentCustomers)) currentCustomers = [];
+
+  const generationId = nexusGenerateRetreatGenerationId();
+  const snapshot = nexusReadBackupSnapshotFromStorage({
+    reason: 'before_restore',
+    retreatedAt: new Date().toISOString(),
+    retreatGenerationId: generationId
+  });
+  let json;
+  try {
+    json = JSON.stringify(snapshot);
+    localStorage.setItem(keys.snapshot, json);
+  } catch (e) {
+    return { ok: false, reason: 'write_failed' };
+  }
+  const verifyResult = nexusVerifyBackupSnapshotWritten(keys.snapshot, json, currentCustomers.length);
+  if (!verifyResult.ok) return verifyResult;
+
+  // 対象スロットのrawstateには、退避データの読み戻し検証に使う生の状態に加え、
+  // スナップショットと同じ世代IDを同梱する（この2つが同じ世代を指しているかの確認に使う）。
+  const rawStates = nexusCaptureRawKeyStates(NEXUS_FULL_BACKUP_LS_KEY_MAP);
+  const rawWrapper = { retreatGenerationId: generationId, states: rawStates };
+  let rawJson;
+  try {
+    rawJson = JSON.stringify(rawWrapper);
+    localStorage.setItem(keys.rawstate, rawJson);
+  } catch (e) {
+    return { ok: false, reason: 'raw_keystate_write_failed' };
+  }
+  let rawReadback;
+  try {
+    rawReadback = localStorage.getItem(keys.rawstate);
+  } catch (e) {
+    return { ok: false, reason: 'raw_keystate_readback_failed' };
+  }
+  if (rawReadback !== rawJson) {
+    return { ok: false, reason: 'raw_keystate_readback_mismatch' };
+  }
+
+  // コミットマーカーを新しい世代に更新する（この書き込みが成功して初めて、この世代が
+  // 「有効」になる）。
+  const marker = { activeSlot: targetSlot, generationId, committedAt: new Date().toISOString() };
+  let markerJson;
+  try {
+    markerJson = JSON.stringify(marker);
+    localStorage.setItem(NEXUS_RETREAT_COMMIT_MARKER_KEY, markerJson);
+  } catch (e) {
+    return { ok: false, reason: 'marker_write_failed' };
+  }
+  let markerReadback;
+  try {
+    markerReadback = localStorage.getItem(NEXUS_RETREAT_COMMIT_MARKER_KEY);
+  } catch (e) {
+    return { ok: false, reason: 'marker_readback_failed' };
+  }
+  if (markerReadback !== markerJson) {
+    return { ok: false, reason: 'marker_readback_mismatch' };
+  }
+
+  // 複数タブ同時操作の検出（P0bが無いため予防はできないが、後から検出して安全側に
+  // 倒すことはできる）：確定直後にもう一度読み直し、自分が書いたはずの世代がそのまま
+  // 残っているかを確認する。他タブが割り込んで上書きしていた場合は、ここで検出する。
+  // （P0b未実装の既知の制約：真の排他制御ではなく「検出して失敗させる」のみ。）
+  const selfCheck = nexusIsSlotSelfConsistent(targetSlot);
+  const markerSelfCheck = nexusReadCommitMarker();
+  if (!selfCheck.ok || selfCheck.generationId !== generationId ||
+      !markerSelfCheck || markerSelfCheck.generationId !== generationId) {
+    return { ok: false, reason: 'collision_detected' };
+  }
+
+  return { ok: true, slot: targetSlot, generationId };
+}
 function exportJSON(state) {
   // Dot連携（第1段階）の外向け参照ID対応表。useLSの反応state経由ではなく、常に
   // localStorageの現在値を直接読む（この対応表自体は非リアクティブな単純ストアのため）。
@@ -24125,6 +24976,16 @@ function exportJSON(state) {
   a.download = `medilife_nexus_全データバックアップ_${todayStr()}.json`;
   a.click();
   URL.revokeObjectURL(url);
+  // 最終バックアップの記録（日時・対象顧客数・形式）。ダウンロード自体が実際に保存された
+  // かどうかはブラウザからは分からないため、「バックアップ処理を実行した時点」の記録として
+  // 保存する（既存のバックアップ内容・ダウンロード処理自体は変更しない）。
+  try {
+    localStorage.setItem(NEXUS_LAST_BACKUP_META_KEY, JSON.stringify({
+      exportedAt: new Date().toISOString(),
+      customerCount: (state.customers || []).length,
+      version: 1
+    }));
+  } catch (e) {}
 }
 function exportCSV(customers) {
   const headers = ['氏名', '年齢', '生年月日', '電話番号', 'メールアドレス', '郵便番号', '住所', '職業', '勤務先', 'LINE登録', 'ステータス', '接触方法', '最終接触日', '次回アポイント', '契約数', '証券番号一覧', '払込方法一覧', '通貨一覧', '面談メモ'];
@@ -47718,12 +48579,7 @@ function App() {
   const [customers, setCustomers] = useLS('customers_v1', []);
   // 商談メモ（新規）
   const [memos, setMemos] = useLS('nexus_memos_v1', []);
-  const [kpiSettings, setKpiSettings] = useLS('nexus_kpi_v1', {
-    avgCommission: 200000,
-    closeRate: 50,
-    proposalRate: 70,
-    apptRate: 60
-  });
+  const [kpiSettings, setKpiSettings] = useLS('nexus_kpi_v1', NEXUS_DEFAULT_KPI_SETTINGS);
   // タスク・クライアント・その他（app.htmlと同じキーで引継ぎ）
   const [tasks, setTasks] = useLS('ml_tasks_v1', []);
   // 営業活動履歴（新規）：クイック活動登録の記録。KPIは常にここから再集計する。
@@ -47748,20 +48604,12 @@ function App() {
   const [vision, setVision] = useLS('ml_vision_v1', {});
   const [suspects, setSuspects] = useLS('ml_suspects_v1', []);
   const [logs, setLogs] = useLS('ml_logs_v1', []);
-  const [sales, setSales] = useLS('ml_sales_v1', {
-    target: 0,
-    current: 0,
-    label: '今月'
-  });
+  const [sales, setSales] = useLS('ml_sales_v1', NEXUS_DEFAULT_SALES);
   // 人脈ネクサス：サービスカタログ・顧客×サービスの既契約/提案候補フラグ
   // （人脈そのものは customers を直接ID参照するため、別ストアには持たない）
   const [nexusServices, setNexusServices] = useLS('nexus_services_v1', NEXUS_SEED_SERVICES);
   const [nexusServiceLinks, setNexusServiceLinks] = useLS('nexus_service_links_v1', []);
-  const [nexusMission, setNexusMission] = useLS('nexus_mission_v1', {
-    why: '',
-    how: '',
-    dailyAction: ''
-  });
+  const [nexusMission, setNexusMission] = useLS('nexus_mission_v1', NEXUS_DEFAULT_MISSION);
   const [nexusSavedSearches, setNexusSavedSearches] = useLS('nexus_saved_searches_v1', []);
   // AI分析用ID（固定・永続）の採番カウンター。330スタートなのは、過去にエクスポートした
   // CSVがC0001〜C0330だったため（本セッションで確認：保存された対応表は存在せず、過去の番号との
@@ -47822,6 +48670,9 @@ function App() {
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [editingCustomer, setEditingCustomer] = useState(null);
   const [showCustomerForm, setShowCustomerForm] = useState(false);
+  // P0a：バックアップ・復元の状態表示（最終バックアップ日時・自動退避の有無）を、
+  // exportJSON・自動退避のようなReact state外の操作の後にも再描画させるためのトリガー。
+  const [backupMetaTick, setBackupMetaTick] = useState(0);
   const [selectedMemo, setSelectedMemo] = useState(null);
   const [editingMemo, setEditingMemo] = useState(null);
   const [showMemoForm, setShowMemoForm] = useState(false);
@@ -48629,6 +49480,61 @@ function App() {
     label: '記憶'
   }];
   const anyOverlay = selectedCustomer || showCustomerForm || selectedMemo || showMemoForm || selectedMemory || showMemoryForm || aiPackMemoryIds || insightFormRelatedIds;
+  // P0a：バックアップ・復元のハンドラ一式（📥復元の読み込みと、「自動退避から復元」の
+  // どちらからも同じ内容を使うため、1か所にまとめる）。
+  const nexusImportHandlers = {
+    setCustomers,
+    setTasks,
+    setActivityLogs,
+    setOpportunities,
+    setNexusFanCampaigns,
+    setNexusFanFollows,
+    setClients,
+    setVision,
+    setSuspects,
+    setSales,
+    setLogs,
+    setMemos,
+    setKpiSettings,
+    setNexusServices,
+    setNexusServiceLinks,
+    setNexusMission,
+    setNexusSavedSearches,
+    setNexusDotRequests,
+    setNexusAiIdCounter,
+    setNexusAiIdMigrationDone,
+    setNexusAiContractIdCounter,
+    setNexusAiContractIdMigrationDone
+  };
+  // バックアップ・復元操作のたびに画面表示を更新するための再描画トリガー
+  // （exportJSON・自動退避データの読み書きはReactのstateを経由しないため）。
+  const nexusLastBackupMeta = (() => {
+    try {
+      const raw = localStorage.getItem(NEXUS_LAST_BACKUP_META_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      return null;
+    }
+  })();
+  // P0a-DB変更：ダブルバッファリング導入後は、旧形式の単一キーを直接読むのではなく、
+  // 現在有効な世代（新形式のアクティブスロット、または新形式がまだ無い場合は旧形式）を
+  // nexusGetActiveGenerationで解決してから表示する。マーカーが無効で候補が残っている
+  // 場合（needs_selection）は、日時・件数を決め打ちで表示せず、選択が必要である旨だけを示す
+  // （追加条件1：日時だけで自動選択しない）。
+  const nexusAutoBackupMeta = (() => {
+    const resolved = nexusGetActiveGeneration();
+    if (resolved.status === 'active' || resolved.status === 'legacy') {
+      return {
+        kind: 'ready',
+        retreatedAt: resolved.generation.retreatedAt,
+        customerCount: resolved.generation.customerCount
+      };
+    }
+    if (resolved.status === 'needs_selection') {
+      return { kind: 'needs_selection', candidateCount: resolved.candidates.length };
+    }
+    return null;
+  })();
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "header"
   }, /*#__PURE__*/React.createElement("div", {
@@ -48699,58 +49605,39 @@ function App() {
     },
     onChange: e => {
       if (e.target.files[0]) {
-        importJSON(e.target.files[0], {
-          setCustomers,
-          setTasks,
-          setActivityLogs,
-          setOpportunities,
-          setNexusFanCampaigns,
-          setNexusFanFollows,
-          setClients,
-          setVision,
-          setSuspects,
-          setSales,
-          setLogs,
-          setMemos,
-          setKpiSettings,
-          setNexusServices,
-          setNexusServiceLinks,
-          setNexusMission,
-          setNexusSavedSearches,
-          setNexusDotRequests,
-          setNexusAiIdCounter,
-          setNexusAiIdMigrationDone,
-          setNexusAiContractIdCounter,
-          setNexusAiContractIdMigrationDone
-        });
+        importJSON(e.target.files[0], nexusImportHandlers);
+        setBackupMetaTick(t => t + 1);
         e.target.value = '';
       }
     }
   })), /*#__PURE__*/React.createElement("button", {
-    onClick: () => exportJSON({
-      customers,
-      memos,
-      kpiSettings,
-      tasks,
-      activityLogs,
-      opportunities,
-      nexusFanCampaigns,
-      nexusFanFollows,
-      clients,
-      vision,
-      suspects,
-      logs,
-      sales,
-      nexusServices,
-      nexusServiceLinks,
-      nexusMission,
-      nexusSavedSearches,
-      nexusDotRequests,
-      nexusAiIdCounter,
-      nexusAiIdMigrationDone,
-      nexusAiContractIdCounter,
-      nexusAiContractIdMigrationDone
-    }),
+    onClick: () => {
+      exportJSON({
+        customers,
+        memos,
+        kpiSettings,
+        tasks,
+        activityLogs,
+        opportunities,
+        nexusFanCampaigns,
+        nexusFanFollows,
+        clients,
+        vision,
+        suspects,
+        logs,
+        sales,
+        nexusServices,
+        nexusServiceLinks,
+        nexusMission,
+        nexusSavedSearches,
+        nexusDotRequests,
+        nexusAiIdCounter,
+        nexusAiIdMigrationDone,
+        nexusAiContractIdCounter,
+        nexusAiContractIdMigrationDone
+      });
+      setBackupMetaTick(t => t + 1);
+    },
     style: {
       fontSize: 11,
       padding: '5px 10px',
@@ -48762,7 +49649,71 @@ function App() {
       fontWeight: 600,
       whiteSpace: 'nowrap'
     }
-  }, "💾書出")))), /*#__PURE__*/React.createElement("div", {
+  }, "💾書出"))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: '0 16px 10px',
+      fontSize: 10.5,
+      color: 'var(--text-sub)',
+      lineHeight: 1.6
+    }
+  }, /*#__PURE__*/React.createElement("div", null, nexusLastBackupMeta ? `最終バックアップ：${new Date(nexusLastBackupMeta.exportedAt).toLocaleString('ja-JP')}／${nexusLastBackupMeta.customerCount}名／形式version${nexusLastBackupMeta.version}` : '最終バックアップ：まだありません'), nexusAutoBackupMeta && nexusAutoBackupMeta.kind === 'ready' && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      flexWrap: 'wrap',
+      marginTop: 2
+    }
+  }, /*#__PURE__*/React.createElement("span", null, `直前の自動退避：${new Date(nexusAutoBackupMeta.retreatedAt).toLocaleString('ja-JP')}／${nexusAutoBackupMeta.customerCount}名`), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      if (confirm('直前の自動退避データで復元します。よろしいですか？')) {
+        nexusRestoreFromAutoBackup(nexusImportHandlers);
+        setBackupMetaTick(t => t + 1);
+      }
+    },
+    style: {
+      fontSize: 10,
+      padding: '2px 8px',
+      borderRadius: 6,
+      border: '1px solid var(--border)',
+      background: '#fff',
+      color: 'var(--text-sub)',
+      cursor: 'pointer'
+    }
+  }, "この内容で復元")), nexusAutoBackupMeta && nexusAutoBackupMeta.kind === 'needs_selection' && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      flexWrap: 'wrap',
+      marginTop: 2,
+      color: '#B45309'
+    }
+  }, /*#__PURE__*/React.createElement("span", null, `⚠️ 自動退避データの管理情報（コミットマーカー）が確認できません。検証済みの候補（${nexusAutoBackupMeta.candidateCount}件）から選んで復元してください。`), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      nexusRestoreFromAutoBackup(nexusImportHandlers);
+      setBackupMetaTick(t => t + 1);
+    },
+    style: {
+      fontSize: 10,
+      padding: '2px 8px',
+      borderRadius: 6,
+      border: '1px solid var(--border)',
+      background: '#fff',
+      color: 'var(--text-sub)',
+      cursor: 'pointer'
+    }
+  }, "候補を確認して復元")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 4,
+      color: '#B45309'
+    }
+  }, "⚠️ バックアップファイルには氏名・住所・契約内容などの個人情報がそのまま含まれます。保存・共有には十分ご注意ください。"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 2,
+      color: 'var(--text-sub)'
+    }
+  }, "※ 複数のタブ・画面を同時に開いて復元操作を行うことには対応していません（検出した場合は安全側に停止しますが、事前に防ぐことはできません）。復元操作は1つのタブでのみ行ってください。"))), /*#__PURE__*/React.createElement("div", {
     className: "content"
   }, tab === 'dashboard' && /*#__PURE__*/React.createElement(DashboardTab, {
     customers: customers,
