@@ -668,6 +668,179 @@ function NexusAssetOwnerSelect({
     value: o
   }, "名義：", o)));
 }
+// ── P1a：名義人管理の土台（ownerRef / owners[]） ──────────────────
+// 既存のowner（文字列）フィールドは削除・変更せず残す（後方互換）。新しいownerRefは
+// 追加フィールドとして併存させ、既存データの自動変換は行わない（design doc 3-1・STEP5-5）。
+// kindは4分類（self/suspect/linkedCustomer/external）に確定（master plan 第5部#1）。
+function nexusDefaultOwnerRef() {
+  return { kind: 'unset', suspectId: '', linkedCustomerId: '', externalName: '', label: '' };
+}
+// 資産項目のownerRef（単一）からowners[]（複数名義・持分配列）への読み取り専用の正規化。
+// item.ownersが既にあればそのまま使う。無い場合は、既存のownerRef/ownershipPercentage
+// （不動産のみ）から「1名・100%」の配列を都度組み立てるだけで、item自体には書き込まない
+// （保存するのは常にitem.owners配列そのもの。読み取りのたびにここで正規化するだけ）。
+function nexusOwnersOf(item) {
+  if (Array.isArray(item.owners) && item.owners.length > 0) return item.owners;
+  return [{
+    ownerRef: item.ownerRef || nexusDefaultOwnerRef(),
+    percentage: item.ownershipPercentage !== undefined && item.ownershipPercentage !== '' ? Number(item.ownershipPercentage) : 100
+  }];
+}
+function nexusOwnersPercentageTotal(owners) {
+  return (owners || []).reduce((sum, o) => sum + (Number(o.percentage) || 0), 0);
+}
+// 名義人になれる候補（本人・家族情報・既に登録済みの家族）を1か所で組み立てる
+// （design doc 3-1：既存のsuspects・linkedCustomerIdの仕組みを最大限再利用する）。
+function nexusResolveHouseholdCandidates(customer, customers) {
+  if (!customer) return [];
+  const candidates = [{
+    key: 'self:',
+    label: `${nexusDisplayName(customer)}（本人）`,
+    ownerRef: { kind: 'self', suspectId: '', linkedCustomerId: '', externalName: '', label: nexusDisplayName(customer) }
+  }];
+  (customer.suspects || []).forEach(sp => {
+    const linked = sp.linkedCustomerId ? (customers || []).find(c => c.id === sp.linkedCustomerId) : null;
+    if (linked) {
+      candidates.push({
+        key: `linkedCustomer:${linked.id}`,
+        label: `${nexusDisplayName(linked)}（${sp.relation || '家族'}・登録済み顧客）`,
+        ownerRef: { kind: 'linkedCustomer', suspectId: sp.id, linkedCustomerId: linked.id, externalName: '', label: nexusDisplayName(linked) }
+      });
+    } else {
+      const label = sp.name || sp.relation || '家族';
+      candidates.push({
+        key: `suspect:${sp.id}`,
+        label: `${label}（${sp.relation || '家族'}）`,
+        ownerRef: { kind: 'suspect', suspectId: sp.id, linkedCustomerId: '', externalName: '', label }
+      });
+    }
+  });
+  return candidates;
+}
+function nexusOwnerRefKey(ownerRef) {
+  if (!ownerRef || ownerRef.kind === 'unset') return 'unset:';
+  if (ownerRef.kind === 'self') return 'self:';
+  if (ownerRef.kind === 'suspect') return `suspect:${ownerRef.suspectId}`;
+  if (ownerRef.kind === 'linkedCustomer') return `linkedCustomer:${ownerRef.linkedCustomerId}`;
+  if (ownerRef.kind === 'external') return 'external:';
+  return 'unset:';
+}
+// ownerRefから表示名を解決する（suspect/顧客の名前変更に追従するよう、保存されたlabelに
+// 頼らず常に元データ(customer.suspects／customers)から再取得する。宛先が削除されている
+// 場合はその旨を表示する＝STEP5-8の想定リスクへの対応）。
+function nexusResolveOwnerRefLabel(ownerRef, customer, customers) {
+  if (!ownerRef || ownerRef.kind === 'unset') return '未設定';
+  if (ownerRef.kind === 'self') return customer ? `${nexusDisplayName(customer)}（本人）` : '本人';
+  if (ownerRef.kind === 'suspect') {
+    const sp = customer ? (customer.suspects || []).find(s => s.id === ownerRef.suspectId) : null;
+    return sp ? `${sp.name || sp.relation || '家族'}（${sp.relation || '家族'}）` : '（削除済みの家族情報）';
+  }
+  if (ownerRef.kind === 'linkedCustomer') {
+    const linked = (customers || []).find(c => c.id === ownerRef.linkedCustomerId);
+    return linked ? nexusDisplayName(linked) : '（削除済みの顧客）';
+  }
+  if (ownerRef.kind === 'external') return ownerRef.externalName || 'その他（未入力）';
+  return '未設定';
+}
+// P1b：家族全体の解決ロジック。本人を起点に、家族情報(suspects)と、既に別の顧客として
+// 登録されている家族(linkedCustomerId)を統合し、重複なく1人ずつの「世帯メンバー」一覧を
+// 返す（P2のレポート集計で本人/配偶者/夫婦合算/家族全体を数える際の共通基盤。design doc
+// 3-1「名義人別資産集計」、master plan P1b）。
+function nexusResolveHousehold(customer, customers) {
+  if (!customer) return [];
+  const members = [{
+    id: `self:${customer.id}`,
+    personKind: 'self',
+    relation: '本人',
+    name: nexusDisplayName(customer),
+    customerId: customer.id,
+    suspectId: null,
+    source: customer
+  }];
+  (customer.suspects || []).forEach(sp => {
+    const linked = sp.linkedCustomerId ? (customers || []).find(c => c.id === sp.linkedCustomerId) : null;
+    members.push({
+      id: linked ? `linkedCustomer:${linked.id}` : `suspect:${sp.id}`,
+      personKind: linked ? 'linkedCustomer' : 'suspect',
+      relation: sp.relation || 'その他',
+      name: linked ? nexusDisplayName(linked) : (sp.name || sp.relation || '家族'),
+      customerId: linked ? linked.id : null,
+      suspectId: sp.id,
+      source: linked || sp
+    });
+  });
+  return members;
+}
+// 指定したownerRefが、世帯メンバー一覧の中の1人と「同じ人物」を指しているかを判定する
+// （kindが違っていても実体が一致すれば同一人物とみなす。例：配偶者が別の顧客として
+// 登録されている場合、suspect経由／linkedCustomer経由のownerRefのどちらでも、
+// 世帯メンバー側のlinkedCustomerエントリと一致しうる）。
+function nexusOwnerRefMatchesMember(ownerRef, member) {
+  if (!ownerRef || !member) return false;
+  if (ownerRef.kind === 'self' && member.personKind === 'self') return true;
+  if (ownerRef.kind === 'suspect' && member.suspectId && ownerRef.suspectId === member.suspectId) return true;
+  if (ownerRef.kind === 'linkedCustomer' && member.customerId && ownerRef.linkedCustomerId === member.customerId) return true;
+  return false;
+}
+// 名義人1名分の選択UI（本人／家族／登録済みの家族／その他から選ぶ）。
+function NexusOwnerRefSelect({ ownerRef, onChange, candidates }) {
+  const current = ownerRef || nexusDefaultOwnerRef();
+  const selectedKey = nexusOwnerRefKey(current);
+  const selectEl = /*#__PURE__*/React.createElement("select", {
+    className: "form-select",
+    style: { fontSize: 12, padding: '4px 6px', width: 'auto' },
+    value: selectedKey,
+    onChange: e => {
+      const val = e.target.value;
+      if (val === 'unset:') { onChange(nexusDefaultOwnerRef()); return; }
+      if (val === 'external:') { onChange({ kind: 'external', suspectId: '', linkedCustomerId: '', externalName: current.kind === 'external' ? current.externalName : '', label: '' }); return; }
+      const found = (candidates || []).find(c => c.key === val);
+      if (found) onChange(found.ownerRef);
+    }
+  }, /*#__PURE__*/React.createElement("option", { value: "unset:" }, "名義人：未設定"),
+    (candidates || []).map(c => /*#__PURE__*/React.createElement("option", { key: c.key, value: c.key }, `名義人：${c.label}`)),
+    /*#__PURE__*/React.createElement("option", { value: "external:" }, "名義人：その他（自由入力）")
+  );
+  const externalInput = current.kind === 'external' ? /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    style: { fontSize: 12, padding: '4px 6px', width: 100 },
+    placeholder: "名前を入力",
+    value: current.externalName || '',
+    onChange: e => onChange({ ...current, externalName: e.target.value })
+  }) : null;
+  return /*#__PURE__*/React.createElement(React.Fragment, null, selectEl, externalInput);
+}
+// 複数名義・共有持分の編集UI（design doc 3-1：owner単一値→owners配列への一般化）。
+// 持分合計が100%にならない場合は警告のみ表示し、保存はブロックしない
+// （master plan 第5部・STEP5-6の確定方針どおり）。
+function NexusOwnersEditor({ owners, onChange, candidates }) {
+  const list = owners && owners.length > 0 ? owners : [{ ownerRef: nexusDefaultOwnerRef(), percentage: 100 }];
+  const total = nexusOwnersPercentageTotal(list);
+  const updateRow = (idx, patch) => onChange(list.map((o, i) => i === idx ? { ...o, ...patch } : o));
+  const addRow = () => onChange([...list, { ownerRef: nexusDefaultOwnerRef(), percentage: '' }]);
+  const removeRow = idx => onChange(list.filter((_, i) => i !== idx));
+  const rows = list.map((o, idx) => /*#__PURE__*/React.createElement("div", {
+    key: idx,
+    style: { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: idx === 0 ? 0 : 4 }
+  }, /*#__PURE__*/React.createElement(NexusOwnerRefSelect, {
+    ownerRef: o.ownerRef, onChange: v => updateRow(idx, { ownerRef: v }), candidates: candidates
+  }), /*#__PURE__*/React.createElement("input", {
+    type: "number", min: "0", max: "100", className: "form-input", style: { width: 60, fontSize: 12 },
+    placeholder: "持分%", value: o.percentage === null || o.percentage === undefined ? '' : o.percentage,
+    onChange: e => updateRow(idx, { percentage: e.target.value === '' ? '' : Number(e.target.value) })
+  }), list.length > 1 && /*#__PURE__*/React.createElement("button", {
+    type: "button", onClick: () => removeRow(idx),
+    style: { background: 'none', border: 'none', color: 'var(--danger)', fontSize: 14, cursor: 'pointer' }
+  }, "×")));
+  const addButton = /*#__PURE__*/React.createElement("button", {
+    type: "button", onClick: addRow,
+    style: { fontSize: 11, marginTop: 4, background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer' }
+  }, "＋共有者を追加");
+  const warning = list.length > 1 && total !== 100 ? /*#__PURE__*/React.createElement("div", {
+    style: { fontSize: 11, color: 'var(--warning)', marginTop: 2 }
+  }, `⚠️ 持分合計が100%になっていません（現在：${total}%）`) : null;
+  return /*#__PURE__*/React.createElement("div", null, rows, addButton, warning);
+}
 // 投資信託の口座区分（税制上の扱いが異なるため、資産全体の集計とは別に銘柄ごとに把握する）
 const NEXUS_FUND_ACCOUNT_TYPES = ['特定口座', '一般口座', 'NISA（成長投資枠）', 'NISA（つみたて投資枠）', '旧NISA（一般）', '旧NISA（つみたてNISA）', 'iDeCo', 'その他'];
 function NexusFundAccountTypeSelect({
@@ -697,7 +870,8 @@ function NexusSimpleAssetList({
   namePlaceholder,
   valuePlaceholder,
   showQuantity,
-  quantityPlaceholder
+  quantityPlaceholder,
+  householdCandidates
 }) {
   const items = list || [];
   return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
@@ -773,6 +947,10 @@ function NexusSimpleAssetList({
     onChange: v => ops.update(item.id, {
       owner: v
     })
+  }), /*#__PURE__*/React.createElement(NexusOwnersEditor, {
+    owners: nexusOwnersOf(item),
+    candidates: householdCandidates,
+    onChange: v => ops.update(item.id, { owners: v })
   }), /*#__PURE__*/React.createElement("button", {
     type: "button",
     onClick: () => ops.remove(item.id),
@@ -816,6 +994,10 @@ function NexusSimpleAssetList({
     onChange: v => ops.update(item.id, {
       owner: v
     })
+  }), /*#__PURE__*/React.createElement(NexusOwnersEditor, {
+    owners: nexusOwnersOf(item),
+    candidates: householdCandidates,
+    onChange: v => ops.update(item.id, { owners: v })
   }), /*#__PURE__*/React.createElement("button", {
     type: "button",
     onClick: () => ops.remove(item.id),
@@ -846,7 +1028,8 @@ function NexusRealEstateEntryCard({
   item,
   onUpdate,
   onRemove,
-  loans
+  loans,
+  householdCandidates
 }) {
   // カード自体の折りたたみ：名前が未入力（＝追加直後）の場合だけ最初から編集画面を開き、
   // 既に名前が入っている（＝登録済み）ものは要約表示から始める。物件を複数件（3件・5件…）
@@ -1010,6 +1193,16 @@ function NexusRealEstateEntryCard({
     value: item.owner,
     onChange: v => onUpdate(item.id, { owner: v })
   }));
+  // P1a追加：既存の「持分%」「名義（文字列）」は変更せず残し、新しいownerRef／owners[]
+  // による名義人管理を追加の行として併設する（design doc 3-1：不動産のownershipPercentage
+  // パターンを他の資産種別にも一般化する一環）。
+  const ownersEditorRow = React.createElement("div", {
+    style: { marginTop: 8 }
+  }, React.createElement(NexusOwnersEditor, {
+    owners: nexusOwnersOf(item),
+    candidates: householdCandidates,
+    onChange: v => onUpdate(item.id, { owners: v })
+  }));
   // ローンあり／なしに加えて、既存の「ローン明細」（customer.lp.loans）に登録済みのローンがある
   // 場合は「ローン明細から選択」／「手入力する」を明確な2つのボタンで選ばせる。選択した場合は
   // 不動産側にローン残高を重複入力させず、既存ローンデータの残高をそのまま参照する（二重計上防止）。
@@ -1157,14 +1350,15 @@ function NexusRealEstateEntryCard({
     key: item.id,
     className: "real-estate-entry-card",
     style: cardOuterStyle
-  }, header, locationRow, usageRow, isForeign ? foreignRow : domesticRow, ownerRow, loanToggle, summaryBox, incomeToggleBtn, incomeBlock, detailToggleBtn, detailBlock, collapseBtn);
+  }, header, locationRow, usageRow, isForeign ? foreignRow : domesticRow, ownerRow, ownersEditorRow, loanToggle, summaryBox, incomeToggleBtn, incomeBlock, detailToggleBtn, detailBlock, collapseBtn);
 }
 function NexusRealEstateList({
   list,
   loans,
   onAdd,
   onUpdate,
-  onRemove
+  onRemove,
+  householdCandidates
 }) {
   const items = list || [];
   return React.createElement(React.Fragment, null, React.createElement("div", {
@@ -1176,7 +1370,8 @@ function NexusRealEstateList({
     item: item,
     onUpdate: onUpdate,
     onRemove: onRemove,
-    loans: loans
+    loans: loans,
+    householdCandidates: householdCandidates
   })), React.createElement("button", {
     type: "button",
     className: "btn btn-outline",
@@ -37042,6 +37237,10 @@ function NexusPlanningSection({
   const [docScopeFor, setDocScopeFor] = useState(null); // null | 'print' | 'excel'
   const [docSelection, setDocSelection] = useState(null);
   const customer = customers.find(c => c.id === selectedId) || null;
+  // P1a追加：名義人選択に使う候補一覧を1か所で組み立てる（本人・家族情報・登録済みの
+  // 家族）。customer未選択時は空配列（NexusOwnerRefSelectは空でも「未設定」「その他」は
+  // 常に選べるため、画面としては問題なく動作する）。
+  const householdCandidates = nexusResolveHouseholdCandidates(customer, customers);
   const updateCustomer = patch => {
     setCustomers(customers.map(c => c.id === selectedId ? {
       ...c,
@@ -40227,7 +40426,8 @@ function NexusPlanningSection({
     list: portfolio.deposits,
     ops: depositOps,
     namePlaceholder: "例：〇〇銀行 普通",
-    valuePlaceholder: "例：3000000"
+    valuePlaceholder: "例：3000000",
+    householdCandidates: householdCandidates
   }), /*#__PURE__*/React.createElement("div", {
     style: {
       fontWeight: 700,
@@ -40346,6 +40546,10 @@ function NexusPlanningSection({
       onChange: v => updateStock(st.id, {
         owner: v
       })
+    }), /*#__PURE__*/React.createElement(NexusOwnersEditor, {
+      owners: nexusOwnersOf(st),
+      candidates: householdCandidates,
+      onChange: v => updateStock(st.id, { owners: v })
     })), ev.value > 0 && /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 12
@@ -40515,6 +40719,10 @@ function NexusPlanningSection({
       onChange: v => updateFund(fd.id, {
         owner: v
       })
+    }), /*#__PURE__*/React.createElement(NexusOwnersEditor, {
+      owners: nexusOwnersOf(fd),
+      candidates: householdCandidates,
+      onChange: v => updateFund(fd.id, { owners: v })
     })), /*#__PURE__*/React.createElement("div", {
       style: {
         display: 'flex',
@@ -40768,6 +40976,10 @@ function NexusPlanningSection({
       onChange: v => updateCorporateDc(dc.id, {
         owner: v
       })
+    }), /*#__PURE__*/React.createElement(NexusOwnersEditor, {
+      owners: nexusOwnersOf(dc),
+      candidates: householdCandidates,
+      onChange: v => updateCorporateDc(dc.id, { owners: v })
     })), dcPrincipal > 0 && dcCurrentValue > 0 && /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 12,
@@ -40950,6 +41162,10 @@ function NexusPlanningSection({
       onChange: v => updateIdeco(dc.id, {
         owner: v
       })
+    }), /*#__PURE__*/React.createElement(NexusOwnersEditor, {
+      owners: nexusOwnersOf(dc),
+      candidates: householdCandidates,
+      onChange: v => updateIdeco(dc.id, { owners: v })
     })), dcPrincipal > 0 && dcCurrentValue > 0 && /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 12,
@@ -41115,6 +41331,10 @@ function NexusPlanningSection({
       onChange: v => updateMutualPension(dc.id, {
         owner: v
       })
+    }), /*#__PURE__*/React.createElement(NexusOwnersEditor, {
+      owners: nexusOwnersOf(dc),
+      candidates: householdCandidates,
+      onChange: v => updateMutualPension(dc.id, { owners: v })
     })), dcPrincipal > 0 && dcCurrentValue > 0 && /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 12,
@@ -41165,13 +41385,15 @@ function NexusPlanningSection({
     list: portfolio.bonds,
     ops: bondOps,
     namePlaceholder: "例：個人向け国債",
-    valuePlaceholder: "例：1000000"
+    valuePlaceholder: "例：1000000",
+    householdCandidates: householdCandidates
   }), /*#__PURE__*/React.createElement(NexusSimpleAssetList, {
     title: "FX",
     list: portfolio.fx,
     ops: fxOps,
     namePlaceholder: "例：〇〇証券 米ドル",
-    valuePlaceholder: "例：500000"
+    valuePlaceholder: "例：500000",
+    householdCandidates: householdCandidates
   }), /*#__PURE__*/React.createElement(NexusSimpleAssetList, {
     title: "仮想通貨",
     list: portfolio.crypto,
@@ -41179,11 +41401,13 @@ function NexusPlanningSection({
     namePlaceholder: "例：ビットコイン",
     valuePlaceholder: "例：500000",
     showQuantity: true,
-    quantityPlaceholder: "保有数"
+    quantityPlaceholder: "保有数",
+    householdCandidates: householdCandidates
   })), /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement(NexusRealEstateList, {
     list: portfolio.realEstate,
+    householdCandidates: householdCandidates,
     loans: loans,
     onAdd: addRealEstate,
     onUpdate: updateRealEstate,
@@ -41308,7 +41532,8 @@ function NexusPlanningSection({
     list: portfolio.others,
     ops: othersOps,
     namePlaceholder: "例：貴金属",
-    valuePlaceholder: "例：500000"
+    valuePlaceholder: "例：500000",
+    householdCandidates: householdCandidates
   }), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 10.5,
