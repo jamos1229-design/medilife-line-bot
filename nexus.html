@@ -2267,9 +2267,9 @@ const csStyle = st => ({
 // ── P6a：新契約・手数料入金・証券お渡し管理（データ設計・計算ロジック） ──────
 // 商品種類（固定選択）。既存のtype（自由入力）は削除・変更せず、並行運用する新しい
 // 選択式フィールド（productCategory）用の選択肢（design doc 3-1・8章-5参照）。
-const NEXUS_PRODUCT_CATEGORIES = ['終身保険', '定期保険', '医療保険', 'がん保険', '個人年金保険', '養老保険', '学資保険', '就業不能保険', '介護保険', 'その他'];
+const NEXUS_PRODUCT_CATEGORIES = ['終身保険', '定期保険', '収入保障保険', '養老保険', '医療保険', 'がん保険', '三大疾病保険', '就業不能保険', '介護保険', '個人年金保険', '学資保険', 'その他'];
 // 商品特性（複数選択）。既存のpurposes[]と同じトグルボタンUIで扱う。
-const NEXUS_PRODUCT_CHARACTERISTICS = ['変額', '外貨建', '円建', '積立型', '無配当', '有配当', 'その他'];
+const NEXUS_PRODUCT_CHARACTERISTICS = ['円建', '外貨建', '変額', '定額', '積立型', '無配当', '有配当', 'その他'];
 const NEXUS_SECURITIES_PREP_ITEM_DEFS = [{
   key: 'designSheet',
   label: '設計書'
@@ -2291,7 +2291,7 @@ const NEXUS_SECURITIES_CASE_TYPE_LABELS = {
 };
 const NEXUS_SECURITIES_CASE_TYPES = Object.keys(NEXUS_SECURITIES_CASE_TYPE_LABELS);
 const NEXUS_DELIVERY_STATUSES = ['未対応', '手渡し予定', '手渡し済み', '郵送予定', '郵送済み', '配達確認済み'];
-const NEXUS_ITEM_PREP_STATUSES = ['未着手', '準備中', '完了'];
+const NEXUS_ITEM_PREP_STATUSES = ['未着手', '準備中', '準備完了'];
 // 端数処理（消費税額・税込金額の計算にのみ使う。原額(enteredAmount)自体には使わない）。
 function nexusRoundAmount(value, method) {
   if (value === null || value === undefined || isNaN(value)) return null;
@@ -2340,11 +2340,23 @@ function nexusDefaultCommission() {
     estimate: nexusBuildCommissionAmountEntry(null, 'excl', 10, 'round'),
     confirmed: nexusBuildCommissionAmountEntry(null, 'excl', 10, 'round', { confirmedAt: '' }),
     expectedPaymentMonth: '',
+    // 最終指示書追加：「当初入金予定年月」は一度設定されたら変更しない（未入金繰越時に
+    // expectedPaymentMonthだけを翌月以降へ進めても、最初に見積もった予定月が分かるように残す）。
+    originalExpectedPaymentMonth: '',
     paymentHistory: []
   };
 }
 function nexusCommissionOf(contract) {
   return contract.commission || nexusDefaultCommission();
+}
+// 入金予定年月を更新する。当初入金予定年月(originalExpectedPaymentMonth)は、まだ一度も
+// 設定されていない場合のみ、今回の値で初めて確定させる（以後は上書きしない）。
+function nexusSetExpectedPaymentMonth(commission, value) {
+  return {
+    ...commission,
+    expectedPaymentMonth: value,
+    originalExpectedPaymentMonth: commission.originalExpectedPaymentMonth || value
+  };
 }
 // 未入金残高の算出に使う基準額＝確定額（あれば）、無ければ見込額（design doc 3-3の7）。
 function nexusCommissionBaseExclTax(commission) {
@@ -2420,6 +2432,27 @@ function nexusUpdateCommissionSplitPercentage(split, index, percentage) {
 }
 function nexusCommissionSplitTotalPercentage(split) {
   return (split.parties || []).reduce((sum, p) => sum + (Number(p.percentage) || 0), 0);
+}
+// 分割前手数料（分割計算の基準額）＝確定額があれば確定額、無ければ見込額
+// （nexusCommissionBaseExclTaxと同じ優先順位）。税抜・税込(basis)を指定して計算する。
+function nexusCommissionSplitBaseAmount(contract, basis) {
+  const commission = nexusCommissionOf(contract);
+  const baseExclTax = nexusCommissionBaseExclTax(commission);
+  if (baseExclTax === null || baseExclTax === undefined) return null;
+  const taxSource = commission.confirmed && commission.confirmed.amountExclTax !== null && commission.confirmed.amountExclTax !== undefined ? commission.confirmed : commission.estimate;
+  const display = nexusCalcTaxDisplay(baseExclTax, taxSource.taxRatePercent, taxSource.roundingMethod);
+  return basis === 'incl' ? display.amountInclTax : display.amountExclTax;
+}
+// 分割後の各当事者の手数料額（表示専用。計算結果は保存しない＝分割前手数料(enteredAmount)を
+// 書き換えない。design doc 3-4の「分割前手数料・分割後の自分/相手の手数料」の表示に対応）。
+function nexusComputeSplitAmounts(contract, basis) {
+  const split = nexusCommissionSplitOf(contract);
+  const baseAmount = nexusCommissionSplitBaseAmount(contract, basis);
+  const parties = (split.parties || []).map(p => ({
+    ...p,
+    amount: baseAmount === null || baseAmount === undefined ? null : Math.round(baseAmount * ((Number(p.percentage) || 0) / 100))
+  }));
+  return { baseAmount, parties };
 }
 function nexusDefaultSecuritiesPrep() {
   return {
@@ -4142,21 +4175,31 @@ function ContractCommissionBlock({ contract, onChange }) {
     )
   );
   const expectedMonthRow = /*#__PURE__*/React.createElement("div", null,
-    /*#__PURE__*/React.createElement("label", { className: "form-label" }, "入金予定年月"),
-    /*#__PURE__*/React.createElement("input", { className: "form-input", type: "month", value: commission.expectedPaymentMonth || '', onChange: e => updateCommission({ expectedPaymentMonth: e.target.value }) })
+    /*#__PURE__*/React.createElement("label", { className: "form-label" }, "入金予定年月（現在）"),
+    /*#__PURE__*/React.createElement("input", { className: "form-input", type: "month", value: commission.expectedPaymentMonth || '', onChange: e => onChange({ ...contract, commission: nexusSetExpectedPaymentMonth(commission, e.target.value) }) }),
+    commission.originalExpectedPaymentMonth && /*#__PURE__*/React.createElement("div", { style: { fontSize: 11, color: 'var(--text-sub)', marginTop: 4 } },
+      `当初の入金予定年月：${commission.originalExpectedPaymentMonth}`,
+      commission.originalExpectedPaymentMonth !== commission.expectedPaymentMonth ? '（未入金のため繰越中）' : '')
   );
   const balanceRow = /*#__PURE__*/React.createElement("div", { style: { fontSize: 12.5, fontWeight: 600 } },
     `⑦未入金残高：${outstandingBalance === null ? '未確認' : outstandingBalance}　／　入金状況：${paymentStatus}`
   );
   const paymentRows = (commission.paymentHistory || []).map(p => {
     const display = nexusCalcTaxDisplay(p.amountExclTax, p.taxRatePercent, p.roundingMethod);
+    // 入金時点の適用割合：入金を記録した瞬間の分割割合をそのまま保持する（splitSnapshot）。
+    // 後から分割割合を変更しても、過去に記録済みの入金の表示はさかのぼって変わらない。
+    const snapshot = Array.isArray(p.splitSnapshot) ? p.splitSnapshot : null;
+    const snapshotText = snapshot && snapshot.length > 1
+      ? snapshot.map(sp => `${sp.partyRef.kind === 'self' ? '自分' : (sp.partyRef.name || '相手')}：${sp.percentage}%`).join(' / ')
+      : null;
     return /*#__PURE__*/React.createElement("div", { key: p.id, className: "card", style: { padding: 8, marginBottom: 6 } },
       /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 6 } },
         /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", value: p.paidAt || '', onChange: e => updatePaymentField(p.id, 'paidAt', e.target.value) }),
         /*#__PURE__*/React.createElement("input", { className: "form-input", type: "number", placeholder: "⑥入金額", value: p.enteredAmount === null ? '' : p.enteredAmount, onChange: e => updatePaymentAmount(p.id, e.target.value) }),
         /*#__PURE__*/React.createElement("button", { className: "btn btn-sm", type: "button", onClick: () => removePayment(p.id) }, "削除")
       ),
-      /*#__PURE__*/React.createElement("div", { style: { fontSize: 11, color: 'var(--text-sub)', marginTop: 4 } }, `税抜：${display.amountExclTax ?? '-'} ／ 税込：${display.amountInclTax ?? '-'}`)
+      /*#__PURE__*/React.createElement("div", { style: { fontSize: 11, color: 'var(--text-sub)', marginTop: 4 } }, `税抜：${display.amountExclTax ?? '-'} ／ 税込：${display.amountInclTax ?? '-'}`),
+      snapshotText && /*#__PURE__*/React.createElement("div", { style: { fontSize: 11, color: 'var(--text-sub)', marginTop: 2 } }, `入金時点の適用割合：${snapshotText}`)
     );
   });
   const paymentSection = /*#__PURE__*/React.createElement("div", null,
@@ -4179,7 +4222,16 @@ function ContractCommissionBlock({ contract, onChange }) {
     /*#__PURE__*/React.createElement("span", { style: { alignSelf: 'center' } }, "%")
   ));
   const splitWarning = split.mode !== 'none' && splitTotal !== 100 ? /*#__PURE__*/React.createElement("div", { style: { fontSize: 11.5, color: 'var(--danger)', marginTop: 4 } }, `⚠️ 合計が100%になっていません（現在：${splitTotal}%）`) : null;
-  const splitSection = /*#__PURE__*/React.createElement("div", null, splitModeRow, partyRows, splitWarning);
+  // 分割前手数料・分割後の各当事者の手数料額（表示のみ。確定額・見積額そのもの(enteredAmount)は
+  // 書き換えない）。税抜/税込は確定額・見積額の入力時の基準をそのまま使う（別途toggleは設けない）。
+  const splitAmounts = split.mode !== 'none' ? nexusComputeSplitAmounts(contract, 'excl') : null;
+  const splitAmountsRow = splitAmounts && /*#__PURE__*/React.createElement("div", { style: { fontSize: 12, marginTop: 6, lineHeight: 1.7 } },
+    /*#__PURE__*/React.createElement("div", null, `分割前手数料（税抜）：${splitAmounts.baseAmount === null ? '未確認' : splitAmounts.baseAmount.toLocaleString() + '円'}`),
+    splitAmounts.parties.map((p, i) => /*#__PURE__*/React.createElement("div", { key: i },
+      `分割後の${p.partyRef.kind === 'self' ? '自分' : (p.partyRef.name || '相手')}の手数料：${p.amount === null ? '未確認' : p.amount.toLocaleString() + '円'}（${p.percentage}%）`
+    ))
+  );
+  const splitSection = /*#__PURE__*/React.createElement("div", null, splitModeRow, partyRows, splitWarning, splitAmountsRow);
 
   return /*#__PURE__*/React.createElement(NexusCollapsibleSection, { title: "手数料・入金管理" },
     estimateRow, confirmedRow, expectedMonthRow, balanceRow, paymentSection, splitSection
@@ -4195,7 +4247,7 @@ function ContractSecuritiesDeliveryBlock({ contract, onChange }) {
     const idx = NEXUS_ITEM_PREP_STATUSES.indexOf((prep.items.find(i => i.key === key) || {}).status || '未着手');
     const next = NEXUS_ITEM_PREP_STATUSES[(idx + 1) % NEXUS_ITEM_PREP_STATUSES.length];
     updatePrep({
-      items: prep.items.map(i => i.key === key ? { ...i, status: next, completedAt: next === '完了' ? todayStr() : i.completedAt } : i)
+      items: prep.items.map(i => i.key === key ? { ...i, status: next, completedAt: next === '準備完了' ? todayStr() : i.completedAt } : i)
     });
   };
   const caseTypeRow = /*#__PURE__*/React.createElement("div", null,
@@ -4207,7 +4259,7 @@ function ContractSecuritiesDeliveryBlock({ contract, onChange }) {
   const itemRows = prep.items.map(item => /*#__PURE__*/React.createElement("button", {
     key: item.key, type: "button", onClick: () => cycleItemStatus(item.key),
     className: "btn btn-sm",
-    style: { marginRight: 6, marginTop: 6, background: item.status === '完了' ? 'var(--accent-light)' : '#fff' }
+    style: { marginRight: 6, marginTop: 6, background: item.status === '準備完了' ? 'var(--accent-light)' : '#fff' }
   }, `${item.label}：${item.status}`));
   const deliveryStatusRow = /*#__PURE__*/React.createElement("div", null,
     /*#__PURE__*/React.createElement("label", { className: "form-label" }, "お客様へのお渡し状況"),
@@ -4240,35 +4292,101 @@ function nexusContractStatusFlags(contract) {
   const delivery = nexusDeliveryOf(ct);
   const docItems = prep.items.filter(i => i.key !== 'case');
   const caseItem = prep.items.find(i => i.key === 'case');
-  const allPrepDone = prep.items.every(i => i.status === '完了');
+  const allPrepDone = prep.items.every(i => i.status === '準備完了');
   const deliveryDone = delivery.status === '手渡し済み' || delivery.status === '配達確認済み';
+  const isAwaitingCase = !caseItem || caseItem.status !== '準備完了';
+  const isAwaitingDocs = docItems.length > 0 && docItems.some(i => i.status !== '準備完了');
   return {
     isNewThisMonth: !!contractMonth && contractMonth === thisMonth,
     isAwaitingIssue: !!(ct.applicationDate && !ct.policyIssuedDate),
     isAwaitingPayment: paymentStatus === '未入金' && (!expectedMonth || expectedMonth >= thisMonth),
     isOverdueCarryover: paymentStatus === '未入金' && !!expectedMonth && expectedMonth < thisMonth,
     isPartiallyPaid: paymentStatus === '一部入金',
-    isAwaitingCase: !caseItem || caseItem.status !== '完了',
-    isAwaitingDocs: docItems.length > 0 && docItems.some(i => i.status !== '完了'),
+    isAwaitingCase,
+    isAwaitingDocs,
+    // 指示書の8タブ構成「資料準備待ち」は証券ケース・各資料のどちらか一方でも未完了なら該当する
+    // （証券ケース単独の絞り込みは、既存のisAwaitingCaseタブとして別途残す）。
+    isAwaitingAnyPrep: isAwaitingCase || isAwaitingDocs,
     isAwaitingDelivery: !deliveryDone,
     isComplete: paymentStatus === '全額入金済み' && allPrepDone && deliveryDone
   };
 }
+// 本番公開後の最終指示書（8タブ構成）に合わせて並び・表記を統一。既存の、より細かい
+// 絞り込み（一部入金・証券ケースのみ）は役割が明確な追加タブとして末尾に残す（削除しない）。
 const NEXUS_CONTRACT_STATUS_TABS = [
-  { key: 'all', label: 'すべて', test: () => true },
   { key: 'newThisMonth', label: '今月の新契約', test: f => f.isNewThisMonth },
   { key: 'awaitingIssue', label: '成立待ち', test: f => f.isAwaitingIssue },
-  { key: 'awaitingPayment', label: '手数料入金待ち', test: f => f.isAwaitingPayment },
-  { key: 'overdueCarryover', label: '前月からの未入金繰越', test: f => f.isOverdueCarryover },
-  { key: 'partiallyPaid', label: '一部入金', test: f => f.isPartiallyPaid },
-  { key: 'awaitingCase', label: '証券ケース準備待ち', test: f => f.isAwaitingCase },
-  { key: 'awaitingDocs', label: '資料準備待ち', test: f => f.isAwaitingDocs },
-  { key: 'awaitingDelivery', label: '手渡し・郵送待ち', test: f => f.isAwaitingDelivery },
-  { key: 'complete', label: '完了済み', test: f => f.isComplete }
+  { key: 'awaitingPayment', label: '手数料未入金', test: f => f.isAwaitingPayment },
+  { key: 'overdueCarryover', label: '前月以前からの未入金', test: f => f.isOverdueCarryover },
+  { key: 'awaitingAnyPrep', label: '資料準備待ち', test: f => f.isAwaitingAnyPrep },
+  { key: 'awaitingDelivery', label: 'お渡し待ち', test: f => f.isAwaitingDelivery },
+  { key: 'complete', label: '完了済み', test: f => f.isComplete },
+  { key: 'all', label: 'すべての契約', test: () => true },
+  { key: 'partiallyPaid', label: '一部入金のみ', test: f => f.isPartiallyPaid },
+  { key: 'awaitingCase', label: '証券ケースのみ未完了', test: f => f.isAwaitingCase }
 ];
 // P6a-3追加：新契約・手数料・お渡し管理 一覧画面（design doc 4-2）。
+// 一覧の列定義（紙の新契約一覧表の26項目に対応。design doc・最終指示書3-2）。
+// 各セルはそのまま文字列化して表示するだけの読み取り専用（編集は顧客詳細側の既存
+// ContractBlock/ContractCommissionBlock/ContractSecuritiesDeliveryBlockで行う。
+// 保存先を増やさないため、この一覧画面はnexusFlattenAllContracts(customers)が返す
+// customers[].contracts[]をそのまま読むだけで、独自のデータストアは一切持たない）。
+function nexusContractListRowValues(row, amountBasis) {
+  const ct = row.contract;
+  const commission = nexusCommissionOf(ct);
+  const prep = nexusSecuritiesPrepOf(ct);
+  const delivery = nexusDeliveryOf(ct);
+  const split = nexusCommissionSplitOf(ct);
+  const estimateDisplay = nexusCalcTaxDisplay(commission.estimate.amountExclTax, commission.estimate.taxRatePercent, commission.estimate.roundingMethod);
+  const confirmedDisplay = nexusCalcTaxDisplay(commission.confirmed.amountExclTax, commission.confirmed.taxRatePercent, commission.confirmed.roundingMethod);
+  const estimateText = amountBasis === 'incl' ? estimateDisplay.amountInclTax : estimateDisplay.amountExclTax;
+  const confirmedText = amountBasis === 'incl' ? confirmedDisplay.amountInclTax : confirmedDisplay.amountExclTax;
+  const outstandingBalance = nexusCalcOutstandingBalance(ct);
+  const paymentHistory = commission.paymentHistory || [];
+  // 入金額・実際の入金年月日：複数回入金に対応するため、1行には「合計額」と「最新の入金日」を表示する
+  // （各回の詳細は顧客詳細の入金履歴で確認する。原額(enteredAmount)自体は一切書き換えない）。
+  const paidTotal = paymentHistory.reduce((sum, p) => {
+    const d = nexusCalcTaxDisplay(p.amountExclTax, p.taxRatePercent, p.roundingMethod);
+    const v = amountBasis === 'incl' ? d.amountInclTax : d.amountExclTax;
+    return sum + (v || 0);
+  }, 0);
+  const latestPaidAt = paymentHistory.map(p => p.paidAt).filter(Boolean).sort().slice(-1)[0] || '';
+  const prepSummary = `${prep.items.filter(i => i.status === '準備完了').length}/${prep.items.length}完了`;
+  const splitAmounts = split.mode !== 'none' ? nexusComputeSplitAmounts(ct, amountBasis) : null;
+  const splitRatioText = split.mode === 'none' ? '分割なし（100%）' : (split.parties || []).map(p => `${p.partyRef.kind === 'self' ? '自分' : (p.partyRef.name || '相手')}${p.percentage}%`).join('／');
+  const splitAmountText = splitAmounts ? splitAmounts.parties.map(p => `${p.partyRef.kind === 'self' ? '自分' : (p.partyRef.name || '相手')}:${p.amount === null ? '未確認' : p.amount.toLocaleString() + '円'}`).join('／') : '-';
+  return [
+    { key: 'contractDate', label: '契約日', value: ct.contractDate || '' },
+    { key: 'policyholder', label: '契約者', value: nexusDisplayName(row.customer) },
+    { key: 'policyholder', label: '契約者', value: nexusDisplayName(row.customer) },
+    { key: 'insuredName', label: '被保険者', value: ct.insuredName || nexusDisplayName(row.customer) },
+    { key: 'company', label: '保険会社', value: ct.company || '' },
+    { key: 'productName', label: '商品名', value: ct.productName || '' },
+    { key: 'productCategory', label: '商品種類', value: ct.productCategory || '' },
+    { key: 'productCharacteristics', label: '商品特性', value: (ct.productCharacteristics || []).join('・') },
+    { key: 'policyNum', label: '証券番号', value: ct.policyNum || '' },
+    { key: 'applicationNum', label: '申込番号', value: ct.applicationNum || '' },
+    { key: 'premium', label: '保険料', value: nexusContractPremiumText(ct) || '' },
+    { key: 'paymentCycle', label: '払込方法', value: ct.paymentCycle || '' },
+    { key: 'acAmount', label: 'AC', value: ct.acAmount === null || ct.acAmount === undefined ? '' : `${ct.acAmount}万円` },
+    { key: 'policyIssuedDate', label: '成立日', value: ct.policyIssuedDate || '' },
+    { key: 'caseType', label: '証券ケース', value: NEXUS_SECURITIES_CASE_TYPE_LABELS[prep.caseType] || '' },
+    { key: 'prepStatus', label: '資料準備状況', value: prepSummary },
+    { key: 'deliveryStatus', label: 'お渡し状況', value: delivery.status },
+    { key: 'estimateAmount', label: '手数料見込額', value: estimateText === null || estimateText === undefined ? '' : estimateText.toLocaleString() + '円' },
+    { key: 'confirmedAmount', label: '代理店確定手数料', value: confirmedText === null || confirmedText === undefined ? '' : confirmedText.toLocaleString() + '円' },
+    { key: 'expectedPaymentMonth', label: '入金予定年月', value: commission.expectedPaymentMonth || '' },
+    { key: 'latestPaidAt', label: '実際の入金年月日', value: latestPaidAt },
+    { key: 'paidTotal', label: '入金額', value: paidTotal ? paidTotal.toLocaleString() + '円' : '' },
+    { key: 'outstandingBalance', label: '未入金残高', value: outstandingBalance === null || outstandingBalance === undefined ? '未確認' : Math.round(outstandingBalance).toLocaleString() + '円' },
+    { key: 'splitRatio', label: '分割割合', value: splitRatioText },
+    { key: 'splitAmount', label: '分割後手数料', value: splitAmountText },
+    { key: 'remarks', label: '備考', value: ct.remarks || '' }
+  ];
+}
 function NexusContractManagementScreen({ customers, onOpenCustomer }) {
-  const [activeTab, setActiveTab] = useState('all');
+  // 初期表示は「今月の新契約」を中心とした業務管理画面とする（最終指示書3-1）。
+  const [activeTab, setActiveTab] = useState('newThisMonth');
   const [search, setSearch] = useState('');
   const [sortKey, setSortKey] = useState('contractDateDesc');
   const [amountBasis, setAmountBasis] = useState('excl');
@@ -4290,16 +4408,20 @@ function NexusContractManagementScreen({ customers, onOpenCustomer }) {
     return (b.contract.contractDate || '').localeCompare(a.contract.contractDate || '');
   });
 
-  const tabsRow = /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 6, marginBottom: 10 } },
+  const headerRow = /*#__PURE__*/React.createElement("div", { style: { padding: '12px 16px 0', fontWeight: 700, fontSize: 16 } }, "📋 新契約管理");
+  const subHeaderRow = /*#__PURE__*/React.createElement("div", { style: { padding: '0 16px 10px', fontSize: 11.5, color: 'var(--text-sub)' } },
+    "新規申込みから成立・手数料入金・資料準備・お客様へのお渡しまでを1画面で管理します。"
+  );
+  const tabsRow = /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 6, marginBottom: 10, padding: '0 16px' } },
     counted.map(t => /*#__PURE__*/React.createElement("button", {
       key: t.key, type: "button", className: `toggle-btn ${activeTab === t.key ? 'sel' : ''}`, style: { flex: 'none' }, onClick: () => setActiveTab(t.key)
     }, `${t.label}（${t.count}）`))
   );
-  const searchRow = /*#__PURE__*/React.createElement("div", { className: "search-wrap" },
+  const searchRow = /*#__PURE__*/React.createElement("div", { className: "search-wrap", style: { margin: '0 16px' } },
     /*#__PURE__*/React.createElement("span", null, "🔍"),
     /*#__PURE__*/React.createElement("input", { className: "search-input", placeholder: "保険会社・商品名・証券番号・顧客名で検索", value: search, onChange: e => setSearch(e.target.value) })
   );
-  const sortRow = /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 6, marginBottom: 10 } },
+  const sortRow = /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 6, margin: '10px 16px' } },
     /*#__PURE__*/React.createElement("select", { className: "form-select", value: sortKey, onChange: e => setSortKey(e.target.value) },
       /*#__PURE__*/React.createElement("option", { value: "contractDateDesc" }, "契約日が新しい順"),
       /*#__PURE__*/React.createElement("option", { value: "expectedPaymentAsc" }, "入金予定が早い順")
@@ -4309,32 +4431,28 @@ function NexusContractManagementScreen({ customers, onOpenCustomer }) {
       /*#__PURE__*/React.createElement("option", { value: "incl" }, "税込で表示")
     )
   );
-  const cards = sorted.map(row => {
-    const ct = row.contract;
-    const commission = nexusCommissionOf(ct);
-    const baseExclTax = nexusCommissionBaseExclTax(commission);
-    const taxSource = commission.confirmed && commission.confirmed.enteredAmount !== null && commission.confirmed.enteredAmount !== undefined ? commission.confirmed : commission.estimate;
-    const display = nexusCalcTaxDisplay(baseExclTax, taxSource.taxRatePercent, taxSource.roundingMethod);
-    const amountText = amountBasis === 'incl' ? display.amountInclTax : display.amountExclTax;
-    const prep = nexusSecuritiesPrepOf(ct);
-    const delivery = nexusDeliveryOf(ct);
-    const prepSummary = `${prep.items.filter(i => i.status === '完了').length}/${prep.items.length}完了`;
-    return /*#__PURE__*/React.createElement("div", {
-      key: ct.id, className: "card", style: { marginBottom: 8, padding: 12, cursor: 'pointer' }, onClick: () => onOpenCustomer(row.customer)
-    },
-      /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, fontSize: 14 } }, nexusDisplayName(row.customer)),
-      /*#__PURE__*/React.createElement("div", { style: { fontSize: 12.5, color: 'var(--text-sub)' } }, `${ct.company || '保険会社未入力'}／${ct.productName || '商品名未入力'}／証券番号：${ct.policyNum || '未入力'}`),
-      /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 10, marginTop: 6, flexWrap: 'wrap', fontSize: 12 } },
-        /*#__PURE__*/React.createElement("span", null, `手数料（${amountBasis === 'incl' ? '税込' : '税抜'}）：${amountText === null || amountText === undefined ? '未入力' : amountText}`),
-        /*#__PURE__*/React.createElement("span", null, `入金予定：${commission.expectedPaymentMonth || '未設定'}`),
-        /*#__PURE__*/React.createElement("span", null, `入金状況：${nexusCalcPaymentStatus(ct)}`),
-        /*#__PURE__*/React.createElement("span", null, `資料：${prepSummary}`),
-        /*#__PURE__*/React.createElement("span", null, `お渡し：${delivery.status}`)
-      )
-    );
-  });
+  const columnLabels = ['No.', '契約者', '契約日', '被保険者', '保険会社', '商品名', '商品種類', '商品特性', '証券番号', '申込番号', '保険料', '払込方法', 'AC', '成立日', '証券ケース', '資料準備状況', 'お渡し状況', '手数料見込額', '代理店確定手数料', '入金予定年月', '実際の入金年月日', '入金額', '未入金残高', '分割割合', '分割後手数料', '備考'];
+  // iPhoneでも紙の一覧表と同じ26項目を確認できるよう、横スクロール可能な表形式で一覧表示する
+  // （タップすると顧客詳細の契約編集へ遷移し、そちらで編集する＝一覧と編集画面を併用）。
+  const table = /*#__PURE__*/React.createElement("div", { style: { overflowX: 'auto', margin: '0 16px 16px', border: '1px solid var(--border)', borderRadius: 8 } },
+    /*#__PURE__*/React.createElement("table", { style: { borderCollapse: 'collapse', fontSize: 11.5, whiteSpace: 'nowrap', minWidth: 1400 } },
+      /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null,
+        columnLabels.map(h => /*#__PURE__*/React.createElement("th", { key: h, style: { position: 'sticky', top: 0, background: 'var(--bg)', borderBottom: '1px solid var(--border)', padding: '6px 8px', textAlign: 'left' } }, h))
+      )),
+      /*#__PURE__*/React.createElement("tbody", null, sorted.map((row, idx) => {
+        const cells = nexusContractListRowValues(row, amountBasis);
+        return /*#__PURE__*/React.createElement("tr", {
+          key: row.contract.id, style: { cursor: 'pointer', borderBottom: '1px solid var(--border)' }, onClick: () => onOpenCustomer(row.customer)
+        },
+          /*#__PURE__*/React.createElement("td", { style: { padding: '6px 8px' } }, idx + 1),
+          /*#__PURE__*/React.createElement("td", { style: { padding: '6px 8px' } }, cells.find(c => c.key === 'policyholder').value),
+          cells.filter(c => c.key !== 'policyholder').map(c => /*#__PURE__*/React.createElement("td", { key: c.key, style: { padding: '6px 8px' } }, c.value || (c.key === 'outstandingBalance' ? '' : '－')))
+        );
+      }))
+    )
+  );
   const emptyState = sorted.length === 0 ? /*#__PURE__*/React.createElement("div", { className: "empty", style: { padding: '30px 16px' } }, "該当する契約がありません") : null;
-  return /*#__PURE__*/React.createElement("div", null, tabsRow, searchRow, sortRow, emptyState, cards);
+  return /*#__PURE__*/React.createElement("div", null, headerRow, subHeaderRow, tabsRow, searchRow, sortRow, emptyState, table);
 }
 
 // ── P6b：職域別営業分析（design doc 4章のMVP実装） ──────────────────────────
