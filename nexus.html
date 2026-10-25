@@ -4337,6 +4337,168 @@ function NexusContractManagementScreen({ customers, onOpenCustomer }) {
   return /*#__PURE__*/React.createElement("div", null, tabsRow, searchRow, sortRow, emptyState, cards);
 }
 
+// ── P6b：職域別営業分析（design doc 4章のMVP実装） ──────────────────────────
+// 既存のoccupation（自由入力）フィールドは一切変更せず、新たにoccupationCategory
+// （看護師／警察官／自衛官／教員／その他個人／法人／未確認）を追加する。既存occupationの
+// 表記ゆれから自動判定できるものだけを候補として提示し、確認・承認を得てから一括反映する
+// （「既存データを一括変更する場合は変更候補を事前に提示し、承認を得ること」に対応。
+// 一度手動で設定された分類は自動では上書きしない）。
+const NEXUS_OCCUPATION_CATEGORIES = ['看護師', '警察官', '自衛官', '教員', 'その他個人', '法人', '未確認'];
+// 代表的な表記ゆれのみを対象にする（一致しないものは「その他個人」または「未確認」のまま
+// 残し、無理に分類しない＝指示書の「不明な情報を推測で補完しない」要件への対応）。
+const NEXUS_OCCUPATION_CATEGORY_KEYWORDS = {
+  '看護師': ['看護師', 'ナース', '看護士', '准看護師', '保健師'],
+  '警察官': ['警察官', '警察', '巡査'],
+  '自衛官': ['自衛官', '自衛隊'],
+  '教員': ['教員', '教師', '教諭']
+};
+function nexusSuggestOccupationCategory(customer) {
+  if (!customer) return '未確認';
+  if (customer.customerType === '法人') return '法人';
+  const text = (customer.occupation || '').trim();
+  if (!text) return '未確認';
+  const matched = Object.keys(NEXUS_OCCUPATION_CATEGORY_KEYWORDS).find(cat => NEXUS_OCCUPATION_CATEGORY_KEYWORDS[cat].some(kw => text.includes(kw)));
+  return matched || 'その他個人';
+}
+// 一括反映の候補一覧：まだoccupationCategoryが設定されていない顧客のみを対象にする
+// （既に設定済みの分類は自動で上書きしない）。
+function nexusBuildOccupationCategorySuggestions(customers) {
+  return (customers || []).filter(c => !c.occupationCategory).map(c => ({
+    customerId: c.id,
+    customerName: nexusDisplayName(c),
+    occupationText: c.occupation || '',
+    suggestedCategory: nexusSuggestOccupationCategory(c)
+  }));
+}
+// 承認された候補（approvedCustomerIds）だけを反映する。チェックを外した候補は変更しない。
+function nexusApplyOccupationCategorySuggestions(customers, approvedCustomerIds) {
+  const approvedSet = new Set(approvedCustomerIds || []);
+  return (customers || []).map(c => approvedSet.has(c.id) ? { ...c, occupationCategory: nexusSuggestOccupationCategory(c) } : c);
+}
+// 職域カテゴリ別の5指標（design doc 4-2）。
+//   ①顧客数／②紹介件数（紹介した側の職域で集計：design doc自身が「要確認」としていた
+//     論点だが、データの不整合・消失リスクが無い表示専用の集計であるため、「営業実績分析」
+//     という機能の趣旨に沿う自然な既定値として判断した。軽微な実装判断として報告する）
+//   ③成約率：design doc は案件（opportunities）に「見送り」状態を追加する設計だが、
+//     既存の商談・案件管理の状態遷移（他画面でも広く使われる共通ロジック）を変更するのは
+//     本機能（分析のみ・読み取り専用）に対してリスクが大きいため、既存のstatus（面談済／
+//     フォロー中）と契約有無だけを使った近似値にとどめ、画面上で「簡易版」と明示する。
+//   ④1世帯当たり手取り手数料：既存の確定手数料（税抜、P6a導入）の合計を顧客数で割った
+//     簡易値を使う（直接費・代理店控除は未導入のため「確定手数料ベース」と明示する）。
+//   ⑤1時間当たり収益：活動時間（meetingMinutes等）のデータが既存アプリに一切存在せず、
+//     新規入力は本機能の範囲を大きく超えるため、今回は実装しない（データ不足として明示。
+//     推測で数値を作らない）。
+function nexusComputeOccupationAnalytics(customers) {
+  const list = customers || [];
+  return NEXUS_OCCUPATION_CATEGORIES.map(cat => {
+    const inCategory = list.filter(c => (c.occupationCategory || '未確認') === cat);
+    const customerCount = inCategory.length;
+    const referralCount = list.filter(c => {
+      if (!c.referredBy) return false;
+      const referrer = list.find(r => r.id === c.referredBy);
+      return referrer && (referrer.occupationCategory || '未確認') === cat;
+    }).length;
+    const hasMetOrContracted = c => c.status === '面談済' || c.status === 'フォロー中' || (c.contracts || []).length > 0;
+    const engaged = inCategory.filter(hasMetOrContracted);
+    const contracted = inCategory.filter(c => (c.contracts || []).length > 0);
+    const closingRate = engaged.length > 0 ? contracted.length / engaged.length : null;
+    const commissionTotal = inCategory.reduce((sum, c) => sum + (c.contracts || []).reduce((s, ct) => s + (nexusCommissionBaseExclTax(nexusCommissionOf(ct)) || 0), 0), 0);
+    const commissionPerCustomer = customerCount > 0 ? commissionTotal / customerCount : null;
+    return {
+      category: cat, customerCount, referralCount,
+      engagedCount: engaged.length, contractedCount: contracted.length, closingRate,
+      commissionTotal, commissionPerCustomer,
+      revenuePerHour: null
+    };
+  });
+}
+// ── 一括分類候補の確認・承認画面（P0cのCSV取込確認画面と同じ「候補提示→チェック→
+// 承認」パターン。自動では一切反映しない）。
+function NexusOccupationClassificationReviewScreen({ suggestions, approvedIds, setApprovedIds, onApply, onCancel }) {
+  const allChecked = suggestions.length > 0 && suggestions.every(s => approvedIds.has(s.customerId));
+  const toggle = id => setApprovedIds(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const toggleAll = () => setApprovedIds(allChecked ? new Set() : new Set(suggestions.map(s => s.customerId)));
+  return /*#__PURE__*/React.createElement("div", { className: "card", style: { marginTop: 10 } },
+    /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, fontSize: 13, marginBottom: 6 } }, "職域カテゴリの分類候補（未分類の顧客のみ）"),
+    /*#__PURE__*/React.createElement("div", { style: { fontSize: 11, color: 'var(--text-sub)', marginBottom: 8 } }, "既存のoccupation（職業欄）から自動判定した候補です。チェックを入れたものだけ「反映」ボタンで確定します（反映前は保存されません）。"),
+    suggestions.length === 0 ? /*#__PURE__*/React.createElement("div", { style: { fontSize: 12, color: 'var(--text-sub)' } }, "未分類の顧客はありません。") : /*#__PURE__*/React.createElement(React.Fragment, null,
+      /*#__PURE__*/React.createElement("button", { type: "button", className: "btn btn-sm", onClick: toggleAll, style: { marginBottom: 6 } }, allChecked ? '全て外す' : '全て選択'),
+      suggestions.map(s => /*#__PURE__*/React.createElement("label", {
+        key: s.customerId, style: { display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, padding: '4px 0', borderBottom: '1px dashed var(--border)' }
+      },
+        /*#__PURE__*/React.createElement("input", { type: "checkbox", checked: approvedIds.has(s.customerId), onChange: () => toggle(s.customerId) }),
+        /*#__PURE__*/React.createElement("span", null, s.customerName, "（職業欄：", s.occupationText || '未入力', "） → ", /*#__PURE__*/React.createElement("b", null, s.suggestedCategory))
+      ))
+    ),
+    /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 8, marginTop: 10 } },
+      /*#__PURE__*/React.createElement("button", { type: "button", className: "btn btn-primary", disabled: approvedIds.size === 0, onClick: onApply }, `チェックした${approvedIds.size}件を反映`),
+      /*#__PURE__*/React.createElement("button", { type: "button", className: "btn btn-outline", onClick: onCancel }, "閉じる")
+    )
+  );
+}
+// ── 職域別営業分析 画面（新しい「職域分析」タブ）。読み取り専用の分析表示＋分類候補の
+// 確認反映＋CSB基準人数の手入力比較、の3部構成。
+function NexusOccupationAnalyticsScreen({ customers, setCustomers, csbCounts, setCsbCounts }) {
+  const [showReview, setShowReview] = useState(false);
+  const [approvedIds, setApprovedIds] = useState(() => new Set());
+  const suggestions = nexusBuildOccupationCategorySuggestions(customers);
+  const analytics = nexusComputeOccupationAnalytics(customers);
+  const applySuggestions = () => {
+    setCustomers(nexusApplyOccupationCategorySuggestions(customers, Array.from(approvedIds)));
+    setApprovedIds(new Set());
+    setShowReview(false);
+  };
+  const updateCsbCount = (cat, value) => setCsbCounts({
+    ...csbCounts,
+    [cat]: { count: value === '' ? '' : Number(value), updatedAt: new Date().toISOString() }
+  });
+  return /*#__PURE__*/React.createElement("div", { style: { padding: '12px 16px 80px' } },
+    /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 4 } }, "📊 職域別営業分析（新機能）"),
+    /*#__PURE__*/React.createElement("div", { style: { fontSize: 11, color: 'var(--text-sub)', marginBottom: 10 } }, "職業欄（occupation）は変更していません。職域カテゴリは、確認・承認したものだけ反映されます。"),
+    /*#__PURE__*/React.createElement("button", {
+      type: "button", className: "btn btn-outline", style: { fontSize: 12, marginBottom: 10 },
+      onClick: () => setShowReview(v => !v)
+    }, showReview ? '▲ 分類候補を閉じる' : `▼ 分類候補を確認する（未分類 ${suggestions.length}件）`),
+    showReview && /*#__PURE__*/React.createElement(NexusOccupationClassificationReviewScreen, {
+      suggestions, approvedIds, setApprovedIds, onApply: applySuggestions, onCancel: () => setShowReview(false)
+    }),
+    /*#__PURE__*/React.createElement("div", { style: { marginTop: 14 } },
+      analytics.map(row => /*#__PURE__*/React.createElement("div", {
+        key: row.category, className: "card", style: { marginBottom: 8, padding: 10 }
+      },
+        /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, fontSize: 13, marginBottom: 6 } }, row.category),
+        /*#__PURE__*/React.createElement("div", { style: { fontSize: 12, lineHeight: 1.7 } },
+          /*#__PURE__*/React.createElement("div", null, "①顧客数（NEXUS登録）：", row.customerCount, "人",
+            csbCounts[row.category] && csbCounts[row.category].count !== '' ?
+              ` ／ CSB基準：${csbCounts[row.category].count}人（NEXUS登録率：${csbCounts[row.category].count > 0 ? Math.round(row.customerCount / csbCounts[row.category].count * 100) : '-'}%）` :
+              ' ／ CSB基準：未確認'
+          ),
+          /*#__PURE__*/React.createElement("div", null, "②紹介件数（紹介した側の職域で集計）：", row.referralCount, "件"),
+          /*#__PURE__*/React.createElement("div", null, "③成約率（簡易版：面談済・フォロー中・契約ありを母数とする近似値）：",
+            row.closingRate === null ? 'データ不足' : `${Math.round(row.closingRate * 1000) / 10}%（${row.contractedCount}／${row.engagedCount}件）`
+          ),
+          /*#__PURE__*/React.createElement("div", null, "④1顧客（世帯）当たり確定手数料（税抜ベース）：",
+            row.commissionPerCustomer === null ? 'データ不足' : `${Math.round(row.commissionPerCustomer).toLocaleString('ja-JP')}円`
+          ),
+          /*#__PURE__*/React.createElement("div", { style: { color: 'var(--text-sub)' } }, "⑤1時間当たり収益：未実装（活動時間データが無いため今回は対象外）")
+        ),
+        /*#__PURE__*/React.createElement("div", { style: { marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 } },
+          /*#__PURE__*/React.createElement("span", { style: { fontSize: 11, color: 'var(--text-sub)' } }, "CSB基準人数（手入力・任意）："),
+          /*#__PURE__*/React.createElement("input", {
+            type: "number", className: "form-input", style: { width: 80 },
+            value: csbCounts[row.category] && csbCounts[row.category].count !== undefined ? csbCounts[row.category].count : '',
+            onChange: e => updateCsbCount(row.category, e.target.value)
+          })
+        )
+      ))
+    )
+  );
+}
+
 // ── 年齢自動計算（生年月日→今日時点の満年齢）────────────────
 const calcAge = birthdate => {
   if (!birthdate) return null;
@@ -50196,6 +50358,9 @@ function App() {
     } catch {}
   }, []);
   const [opportunities, setOpportunities] = useLS('nexus_opportunities_v1', []);
+  // P6b：CSB（NEXUS外部システム）基準の職域別人数は手入力でしか取得できないため、
+  // NEXUS側の登録件数と並べて比較表示するための手入力値のみを保存する（自動連携はしない）。
+  const [nexusCsbOccupationCounts, setNexusCsbOccupationCounts] = useLS('nexus_csb_occupation_counts_v1', {});
   // ファン化フォロー：役立つ記事・情報の送信〜反応を記録し、相談・問合せ以降は既存の
   // activityLogs/opportunitiesへ橋渡しする（二重登録しない）独立ストア
   const [nexusFanCampaigns, setNexusFanCampaigns] = useLS('nexus_fan_campaigns_v1', []);
@@ -51119,6 +51284,10 @@ function App() {
     icon: '📋',
     label: '契約'
   }, {
+    key: 'occupation',
+    icon: '📊',
+    label: '職域分析'
+  }, {
     key: 'memory',
     icon: '🧠',
     label: '記憶'
@@ -51488,6 +51657,11 @@ function App() {
       setTab('list');
       setSelectedCustomer(c);
     }
+  }), tab === 'occupation' && /*#__PURE__*/React.createElement(NexusOccupationAnalyticsScreen, {
+    customers: customers,
+    setCustomers: setCustomers,
+    csbCounts: nexusCsbOccupationCounts,
+    setCsbCounts: setNexusCsbOccupationCounts
   }), tab === 'memory' && /*#__PURE__*/React.createElement(MemoryTab, {
     memories: memoryStore.memories,
     loading: memoryStore.loading,
