@@ -49382,10 +49382,50 @@ function App() {
       alert('復元に失敗しました: ' + err.message);
     });
   };
-  const saveCustomer = c => setCustomers(prev => {
-    const idx = prev.findIndex(x => x.id === c.id);
-    return idx >= 0 ? prev.map((x, i) => i === idx ? c : x) : [...prev, c];
-  });
+  // P0b：複数タブ同時編集の競合検知。customers（Reactのprops/state）は、別タブでの
+  // 保存後にこの画面が再読込されていない場合、localStorageの最新状態より古いことがある
+  // （useLSはタブ間同期を行わないため）。古いcustomersをそのまま書き戻すと、他の顧客情報や
+  // 同一顧客への別タブでの最新変更を古いデータで上書きしてしまう。そのため保存の直前に必ず
+  // localStorageから最新のcustomers_v1を読み直し、そこへ今回の変更だけをマージする
+  // （ライフプラン保存:nexusLifePlanWriteCustomersVerifiedと同じ安全策）。
+  // 戻り値：{ok:true, customer} / {ok:false, reason:'deleted_elsewhere'|'conflict'|'write_failed', latest?}
+  const saveCustomer = c => {
+    const baselineUpdatedAt = editingCustomer ? editingCustomer.updatedAt : undefined;
+    const wasEditingExisting = !!editingCustomer;
+    let latestCustomers;
+    try {
+      const raw = localStorage.getItem('customers_v1');
+      latestCustomers = raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      latestCustomers = null;
+    }
+    if (!Array.isArray(latestCustomers)) latestCustomers = customers;
+    const idx = latestCustomers.findIndex(x => x.id === c.id);
+    if (wasEditingExisting && idx < 0) {
+      // 編集を開始した後、他の場所（別タブ等）でこの顧客が既に削除されている。
+      // 古いcustomersのまま新規作成してしまう事故を避けるため、保存を中断する。
+      return { ok: false, reason: 'deleted_elsewhere' };
+    }
+    if (wasEditingExisting && idx >= 0) {
+      const latestUpdatedAt = latestCustomers[idx].updatedAt;
+      // updatedAtを持たない既存形式のデータ（旧データ）は「未記録」として競合チェックの
+      // 対象外とする（古いデータを急に「競合あり」と誤判定しないため）。
+      if (latestUpdatedAt !== undefined && latestUpdatedAt !== null &&
+          baselineUpdatedAt !== undefined && baselineUpdatedAt !== null &&
+          latestUpdatedAt !== baselineUpdatedAt) {
+        // 編集を開始してから、別の場所でこの顧客が既に更新されている。
+        return { ok: false, reason: 'conflict', latest: latestCustomers[idx] };
+      }
+    }
+    const nextC = { ...c, updatedAt: new Date().toISOString() };
+    const nextCustomers = idx >= 0 ? latestCustomers.map((x, i) => i === idx ? nextC : x) : [...latestCustomers, nextC];
+    const writeResult = nexusLifePlanWriteCustomersVerified(nextCustomers);
+    if (!writeResult.ok) {
+      return { ok: false, reason: 'write_failed' };
+    }
+    setCustomers(nextCustomers);
+    return { ok: true, customer: nextC };
+  };
   const deleteCustomer = id => setCustomers(prev => prev.filter(c => c.id !== id));
   const openNewCustomer = () => {
     setEditingCustomer(null);
@@ -49929,12 +49969,26 @@ function App() {
     editing: editingCustomer,
     customers: customers,
     onSave: c => {
-      saveCustomer(c);
+      const result = saveCustomer(c);
+      if (!result.ok) {
+        // P0b：競合を検知した場合は保存を中断する（他タブでの変更を古いデータで
+        // 上書きしない）。CustomerForm側は既にonClose()を呼んでいるため、ここでは
+        // 中断の理由を案内するのみ。
+        if (result.reason === 'conflict') {
+          alert('この顧客の情報は、他の場所で更新されています。保存は行われませんでした。最新の内容を確認してから、もう一度編集してください。\n\n画面を再読み込みすると、最新の内容が表示されます。');
+        } else if (result.reason === 'deleted_elsewhere') {
+          alert('この顧客は、別の場所（別タブ等）で既に削除されているため、保存を中止しました。\n\n画面を再読み込みしてください。');
+        } else {
+          alert('保存に失敗しました。既存データは変更されていません。もう一度お試しください。');
+        }
+        return;
+      }
+      const saved = result.customer;
       if (pendingActivityCustomerName) {
-        setActivityLogs(prev => nexusLinkActivityLogsByName(prev, pendingActivityCustomerName, c.id, new Date().toISOString()));
+        setActivityLogs(prev => nexusLinkActivityLogsByName(prev, pendingActivityCustomerName, saved.id, new Date().toISOString()));
         setPendingActivityCustomerName(null);
       }
-      if (editingCustomer) setSelectedCustomer(c);
+      if (editingCustomer) setSelectedCustomer(saved);
     },
     onClose: () => {
       setShowCustomerForm(false);
