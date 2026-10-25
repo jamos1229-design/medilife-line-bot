@@ -22356,7 +22356,36 @@ function nexusRestoreFromAutoBackup(handlers) {
   }
   importJSON(nexusMakeAutoBackupFile(raw), handlers);
 }
-function importCSV(file, setCustomers) {
+// P0c追加（重複判定強化）：取込確定時の実際の登録処理。確認画面（NexusCsvImportReviewScreen）
+// の「インポートを実行」から呼ぶほか、重複候補が1件も無かった場合は確認画面を経由せず
+// importCSV自身がこの関数を直接呼ぶ（既存の操作感を変えないため）。
+function nexusCommitCsvImportRows(rows, setCustomers) {
+  const toRegister = rows.filter(r => r.resolution !== 'skip');
+  const skippedCount = rows.length - toRegister.length;
+  if (toRegister.length === 0) {
+    alert('登録する行がありません（すべて「登録しない」が選択されています）');
+    return;
+  }
+  setCustomers(prev => {
+    const displayName = c => c.customerType === '法人' ? c.corporateName || c.name : c.name;
+    const nameToId = {};
+    prev.forEach(c => {
+      const n = displayName(c);
+      if (n && !(n in nameToId)) nameToId[n] = c.id;
+    });
+    toRegister.forEach(c => {
+      if (!(c.name in nameToId)) nameToId[c.name] = c.id;
+    });
+    const resolved = toRegister.map(({ referrerName, duplicates, resolution, ...c }) => ({
+      ...c,
+      referredBy: referrerName ? nameToId[referrerName] || '' : ''
+    }));
+    const merged = [...prev, ...resolved];
+    alert(`インポート完了：${resolved.length}件追加` + (skippedCount > 0 ? `（確認の結果、既存の顧客として扱う${skippedCount}件は登録しません）` : ''));
+    return merged;
+  });
+}
+function importCSV(file, setCustomers, customers, onNeedsReview) {
   const reader = new FileReader();
   reader.onload = e => {
     try {
@@ -22443,30 +22472,22 @@ function importCSV(file, setCustomers) {
         alert('インポートできる行がありません');
         return;
       }
-      setCustomers(prev => {
-        const displayName = c => c.customerType === '法人' ? c.corporateName || c.name : c.name;
-        const existingNames = new Set(prev.map(displayName).filter(Boolean));
-        const fresh = imported.filter(c => !existingNames.has(c.name));
-        const skipped = imported.length - fresh.length;
-        const nameToId = {};
-        prev.forEach(c => {
-          const n = displayName(c);
-          if (n && !(n in nameToId)) nameToId[n] = c.id;
-        });
-        fresh.forEach(c => {
-          if (!(c.name in nameToId)) nameToId[c.name] = c.id;
-        });
-        const resolved = fresh.map(({
-          referrerName,
-          ...c
-        }) => ({
-          ...c,
-          referredBy: referrerName ? nameToId[referrerName] || '' : ''
-        }));
-        const merged = [...prev, ...resolved];
-        alert(`インポート完了：${resolved.length}件追加` + (skipped > 0 ? `（同姓同名の既存顧客 ${skipped}件はスキップ）` : ''));
-        return merged;
-      });
+      // P0c追加（重複判定強化）：氏名の完全一致だけで無条件スキップしていた従来の判定を、
+      // 既存のnexusFindDuplicateCandidatesと同じ基準（電話番号／氏名＋生年月日／氏名＋フリガナ）
+      // に変更する。重複候補が1件でもある行は、確認画面を経ずに自動で登録・スキップを
+      // 決定しない（追加条件：確認画面を経ずに自動で何かを決定する処理は行わない）。
+      const withDup = imported.map(c => ({
+        ...c,
+        duplicates: nexusFindDuplicateCandidates(c, customers || []),
+        resolution: 'new'
+      }));
+      if (withDup.some(c => c.duplicates.length > 0)) {
+        onNeedsReview(withDup);
+        return;
+      }
+      // 重複候補が1件も無い場合は、従来通り確認画面を経由せずそのまま登録する
+      // （通常操作の邪魔をしないため）。
+      nexusCommitCsvImportRows(withDup, setCustomers);
     } catch (err) {
       alert('CSVの読み込みに失敗しました: ' + err.message);
     }
@@ -30308,6 +30329,53 @@ function NexusCustomerImportHub({
   })));
 }
 
+// P0c追加：CSV取込で重複候補（電話番号／氏名＋生年月日／氏名＋フリガナの一致）が
+// 見つかった行を確認するための画面。既存のどの顧客と似ているかを示した上で、
+// 行ごとに「新規登録する」「既存の顧客として扱う（登録しない）」を選んでもらう。
+// 確認画面を経ずに自動で登録・スキップを決定する処理は行わない。
+function NexusCsvImportReviewScreen({ rows, setRows, onCommit, onCancel }) {
+  const updateRow = (id, resolution) => setRows(prev => prev.map(r => r.id === id ? { ...r, resolution } : r));
+  const dupCount = rows.filter(r => r.duplicates.length > 0).length;
+  const newCount = rows.filter(r => r.resolution !== 'skip').length;
+  const skipCount = rows.length - newCount;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "full-screen"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: { maxHeight: '90vh', overflowY: 'auto' }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "section-header"
+  }, /*#__PURE__*/React.createElement("span", null, "CSV取込の確認"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-sm",
+    onClick: onCancel
+  }, "×")), /*#__PURE__*/React.createElement("div", {
+    style: { fontSize: 12, color: 'var(--text-sub)', marginBottom: 10 }
+  }, `新規登録候補：${rows.length}件／このうち既存顧客と似ている確認待ちの候補：${dupCount}件`), rows.map(r => /*#__PURE__*/React.createElement("div", {
+    key: r.id,
+    className: "card",
+    style: { marginBottom: 8, padding: 10 }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: { fontWeight: 600 }
+  }, r.name, r.phone ? `（${r.phone}）` : ''), r.duplicates.length > 0 ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: { fontSize: 12, color: '#B45309', marginTop: 4 }
+  }, `⚠️ 既存の顧客と似ています：${r.duplicates.map(d => nexusDisplayName(d)).join('、')}`), /*#__PURE__*/React.createElement("select", {
+    className: "form-select",
+    style: { marginTop: 6 },
+    value: r.resolution,
+    onChange: e => updateRow(r.id, e.target.value)
+  }, /*#__PURE__*/React.createElement("option", { value: "new" }, "新規登録する"), /*#__PURE__*/React.createElement("option", { value: "skip" }, "既存の顧客として扱う（登録しない）"))) : /*#__PURE__*/React.createElement("div", {
+    style: { fontSize: 12, color: 'var(--text-sub)', marginTop: 4 }
+  }, "新規登録されます（重複候補なし）"))), /*#__PURE__*/React.createElement("div", {
+    style: { display: 'flex', gap: 8, marginTop: 10 }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-primary",
+    style: { flex: 1 },
+    onClick: onCommit
+  }, `インポートを実行（新規${newCount}件／登録しない${skipCount}件）`), /*#__PURE__*/React.createElement("button", {
+    className: "btn",
+    onClick: onCancel
+  }, "キャンセル"))));
+}
 // ── 顧客一覧（人脈ネクサス視点：検索・CSV連携）─────────────────
 function NexusListSection({
   customers,
@@ -30324,6 +30392,8 @@ function NexusListSection({
   const [showContractImport, setShowContractImport] = useState(false);
   const [showCsbImport, setShowCsbImport] = useState(false);
   const [showImportHub, setShowImportHub] = useState(false);
+  // P0c追加：CSV取込で重複候補が見つかった行の確認画面用。nullなら非表示。
+  const [csvReviewRows, setCsvReviewRows] = useState(null);
   const [showTextImport, setShowTextImport] = useState(false);
   const exportCSV = () => {
     const byId = {};
@@ -30374,7 +30444,7 @@ function NexusListSection({
     },
     onChange: e => {
       if (e.target.files[0]) {
-        importCSV(e.target.files[0], setCustomers);
+        importCSV(e.target.files[0], setCustomers, customers, withDup => setCsvReviewRows(withDup));
         e.target.value = '';
       }
     }
@@ -30513,6 +30583,14 @@ function NexusListSection({
     customers: customers,
     setCustomers: setCustomers,
     onClose: () => setShowTextImport(false)
+  }), csvReviewRows && /*#__PURE__*/React.createElement(NexusCsvImportReviewScreen, {
+    rows: csvReviewRows,
+    setRows: setCsvReviewRows,
+    onCommit: () => {
+      nexusCommitCsvImportRows(csvReviewRows, setCustomers);
+      setCsvReviewRows(null);
+    },
+    onCancel: () => setCsvReviewRows(null)
   }));
 }
 
