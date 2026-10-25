@@ -798,9 +798,10 @@ function nexusAssetKindItemValue(item, kind) {
     return currentValue > 0 ? currentValue : principal;
   }
   if (kind === 'realEstate') return nexusRealEstateYenValue(item);
+  if (kind === 'securitiesAccounts') return nexusSecuritiesAccountTotal(item);
   return parseFloat(item.value) || 0; // deposits/bonds/fx/crypto/others
 }
-const NEXUS_PORTFOLIO_ASSET_KINDS = ['deposits', 'bonds', 'fx', 'crypto', 'others', 'stocks', 'funds', 'corporateDc', 'ideco', 'mutualPension', 'realEstate'];
+const NEXUS_PORTFOLIO_ASSET_KINDS = ['deposits', 'bonds', 'fx', 'crypto', 'others', 'stocks', 'funds', 'corporateDc', 'ideco', 'mutualPension', 'realEstate', 'securitiesAccounts'];
 // 資産項目1件を、指定した対象メンバー一覧(targetMembers)へ持分に応じて配分する。
 // 戻り値の5項目を足すと必ず評価額（旧方式の単純合計の1件分）に一致する（design doc
 // STEP2#1,6「新旧合計の差額は名義未確認・持分不明・第三者名義で説明できる」ための土台）。
@@ -1044,6 +1045,56 @@ function NexusFundAccountTypeSelect({
     key: t,
     value: t
   }, "区分：", t)));
+}
+// ── P3：証券口座・NISA拡充（design doc「証券口座区分の拡充設計」） ──────────────
+// 名義人→金融機関→口座→税制区分、口座→保有商品、の階層構造。既存のfunds/stocks配列は
+// そのまま残し、securitiesAccountsは並行して追加する新しい入力経路（自動移行は行わない）。
+// 口座には手入力の残高フィールドを持たせず、評価額は常にholdingsの合計から算出することで
+// 「口座残高と商品別評価額の二重計上」を構造的に防止する（不動産のlinkedLoanIdと同じ方針）。
+const NEXUS_SECURITIES_TAX_CATEGORY_GROUPS = [
+  { label: '課税口座', items: [
+    { key: 'specific_with_withholding', label: '特定口座（源泉徴収あり）' },
+    { key: 'specific_without_withholding', label: '特定口座（源泉徴収なし）' },
+    { key: 'general', label: '一般口座' }
+  ] },
+  // 新NISAは「成長投資枠」「つみたて投資枠」が同一口座内に共存するため口座区分としては一本化し、
+  // 投資枠の区別は保有商品(holdings)側のinvestmentFrameに持たせる（design doc 3-2の「成長投資枠・
+  // つみたて投資枠は必ずしも別々の口座ではない」という注意点への対応。設計書内のデータ構造サンプル
+  // がtaxCategoryをnisa_growth/nisa_tsumitateに分けていた記載と、直後の解説文（投資枠はholdings側
+  // に持たせる）が矛盾していたため、理由が明示されている後者を優先した。実装上の判断として報告）。
+  { label: 'NISA関連', items: [
+    { key: 'nisa', label: 'NISA（新NISA・投資枠は保有商品ごとに指定）' },
+    { key: 'old_nisa_general', label: '旧NISA（一般NISA）' },
+    { key: 'old_nisa_tsumitate', label: '旧NISA（つみたてNISA）' },
+    { key: 'old_junior_nisa', label: '旧ジュニアNISA' },
+    { key: 'minor_tsumitate_pending', label: '未成年者向けつみたて投資枠（制度未確定・仮区分）' }
+  ] },
+  { label: '年金・その他', items: [
+    { key: 'ideco', label: 'iDeCo' },
+    { key: 'corporate_dc', label: '企業型DC' },
+    { key: 'other', label: 'その他' }
+  ] }
+];
+const NEXUS_SECURITIES_TAX_CATEGORY_LABELS = NEXUS_SECURITIES_TAX_CATEGORY_GROUPS.reduce((acc, g) => { g.items.forEach(it => { acc[it.key] = it.label; }); return acc; }, {});
+function nexusDefaultSecuritiesAccount() {
+  return { id: uid(), brokerage: '', ownerRef: nexusDefaultOwnerRef(), taxCategory: '', continuousManagementAccount: false, holdings: [] };
+}
+function nexusDefaultSecuritiesHolding() {
+  return { id: uid(), productName: '', tickerCode: '', acquisitionDate: '', acquisitionAmount: '', acquisitionUnitPrice: '', quantity: '', currentValue: '', valuationDate: '', investmentFrame: '', taxFreeExpiryDate: '', afterExpiryHandling: '' };
+}
+// 口座の評価額は常に保有商品(holdings)の評価額合計から算出する一方向の計算とし、口座残高を
+// 別途手入力できる構造にはしない（二重計上の防止。design doc 3-2）。
+function nexusSecuritiesAccountTotal(account) {
+  return ((account && account.holdings) || []).reduce((sum, h) => sum + (parseFloat(h.currentValue) || 0), 0);
+}
+// 評価損益は保存せず、表示の都度「現在評価額－取得金額」で計算する（評価時点のズレを防ぐ。
+// design doc 3-2のholdingsサンプルコメントどおり）。いずれかが未入力ならnull（0円と混同しない）。
+function nexusCalcUnrealizedGainLoss(holding) {
+  if (!holding) return null;
+  const cur = holding.currentValue === '' || holding.currentValue === undefined || holding.currentValue === null ? null : parseFloat(holding.currentValue);
+  const acq = holding.acquisitionAmount === '' || holding.acquisitionAmount === undefined || holding.acquisitionAmount === null ? null : parseFloat(holding.acquisitionAmount);
+  if (cur === null || acq === null || isNaN(cur) || isNaN(acq)) return null;
+  return cur - acq;
 }
 function NexusSimpleAssetList({
   title,
@@ -37405,6 +37456,146 @@ function NexusLifePlanSimSection({
   }, "※ ", a))));
 }
 
+// ── P3：証券口座・NISA拡充 画面 ────────────────────────────────────────────
+// 「名義人→金融機関→口座→税制区分・投資枠→保有商品」の階層をそのまま画面に反映する。
+// 口座には残高の手入力欄を置かず、口座の評価額は常に保有商品(holdings)の合計として表示する
+// （二重計上防止。design doc 3-2）。既存のfunds/stocks入力とは別の、並行する新しい入力経路。
+function NexusSecuritiesAccountHoldingRow({ holding, onChange, onRemove, showInvestmentFrame }) {
+  const gainLoss = nexusCalcUnrealizedGainLoss(holding);
+  return /*#__PURE__*/React.createElement("div", {
+    style: { border: '1px dashed var(--border)', borderRadius: 6, padding: 8, marginTop: 6 }
+  },
+    /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6, flexWrap: 'wrap' } },
+      /*#__PURE__*/React.createElement("input", {
+        className: "form-input", style: { flex: 1.4, minWidth: 100 }, placeholder: "商品名",
+        value: holding.productName || '', onChange: e => onChange({ productName: e.target.value })
+      }),
+      /*#__PURE__*/React.createElement("input", {
+        className: "form-input", style: { width: 90 }, placeholder: "銘柄コード",
+        value: holding.tickerCode || '', onChange: e => onChange({ tickerCode: e.target.value })
+      }),
+      showInvestmentFrame && /*#__PURE__*/React.createElement("select", {
+        className: "form-select", style: { fontSize: 12, padding: '4px 6px', width: 'auto' },
+        value: holding.investmentFrame || '', onChange: e => onChange({ investmentFrame: e.target.value })
+      },
+        /*#__PURE__*/React.createElement("option", { value: "" }, "投資枠：未設定"),
+        /*#__PURE__*/React.createElement("option", { value: "growth" }, "投資枠：成長投資枠"),
+        /*#__PURE__*/React.createElement("option", { value: "tsumitate" }, "投資枠：つみたて投資枠")
+      ),
+      /*#__PURE__*/React.createElement("button", {
+        type: "button", onClick: onRemove,
+        style: { background: 'none', border: 'none', color: 'var(--danger)', fontSize: 16, cursor: 'pointer', marginLeft: 'auto' }
+      }, "×")
+    ),
+    /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6, flexWrap: 'wrap' } },
+      /*#__PURE__*/React.createElement("input", {
+        type: "date", className: "form-input", style: { width: 130 },
+        value: holding.acquisitionDate || '', onChange: e => onChange({ acquisitionDate: e.target.value })
+      }),
+      /*#__PURE__*/React.createElement(AmountInput, {
+        prefix: "¥", placeholder: "取得金額", value: holding.acquisitionAmount || '',
+        onChange: e => onChange({ acquisitionAmount: e.target.value })
+      }),
+      /*#__PURE__*/React.createElement("input", {
+        type: "number", className: "form-input", style: { width: 80 }, placeholder: "数量",
+        value: holding.quantity || '', onChange: e => onChange({ quantity: e.target.value })
+      })
+    ),
+    /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' } },
+      /*#__PURE__*/React.createElement(AmountInput, {
+        prefix: "¥", placeholder: "現在評価額", value: holding.currentValue || '',
+        onChange: e => onChange({ currentValue: e.target.value })
+      }),
+      /*#__PURE__*/React.createElement("input", {
+        type: "date", className: "form-input", style: { width: 130 }, title: "評価日",
+        value: holding.valuationDate || '', onChange: e => onChange({ valuationDate: e.target.value })
+      }),
+      gainLoss !== null && /*#__PURE__*/React.createElement("span", {
+        style: { fontSize: 12, fontWeight: 700, color: gainLoss >= 0 ? 'var(--success)' : 'var(--danger)' }
+      }, "評価損益：", gainLoss >= 0 ? '+' : '', Math.round(gainLoss).toLocaleString(), "円")
+    )
+  );
+}
+function NexusSecuritiesAccountCard({ account, ops, holdingOps, candidates }) {
+  const taxCategory = account.taxCategory || '';
+  const isOldJuniorNisa = taxCategory === 'old_junior_nisa';
+  const isMinorPending = taxCategory === 'minor_tsumitate_pending';
+  const showInvestmentFrame = taxCategory === 'nisa';
+  const hOps = holdingOps(account.id);
+  const holdings = account.holdings || [];
+  const total = nexusSecuritiesAccountTotal(account);
+  return /*#__PURE__*/React.createElement("div", {
+    style: { border: '1px solid var(--border)', borderRadius: 8, padding: 10, marginBottom: 10 }
+  },
+    /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6, flexWrap: 'wrap' } },
+      /*#__PURE__*/React.createElement("input", {
+        className: "form-input", style: { flex: 1, minWidth: 100 }, placeholder: "金融機関名（例：楽天証券）",
+        value: account.brokerage || '', onChange: e => ops.update(account.id, { brokerage: e.target.value })
+      }),
+      /*#__PURE__*/React.createElement(NexusOwnerRefSelect, {
+        ownerRef: account.ownerRef, candidates: candidates,
+        onChange: v => ops.update(account.id, { ownerRef: v })
+      }),
+      /*#__PURE__*/React.createElement("button", {
+        type: "button", onClick: () => ops.remove(account.id),
+        style: { background: 'none', border: 'none', color: 'var(--danger)', fontSize: 18, cursor: 'pointer', marginLeft: 'auto' }
+      }, "×")
+    ),
+    /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6, flexWrap: 'wrap' } },
+      /*#__PURE__*/React.createElement("select", {
+        className: "form-select", style: { fontSize: 12, padding: '4px 6px', width: 'auto' },
+        value: taxCategory, onChange: e => ops.update(account.id, { taxCategory: e.target.value })
+      },
+        /*#__PURE__*/React.createElement("option", { value: "" }, "税制区分：未設定"),
+        NEXUS_SECURITIES_TAX_CATEGORY_GROUPS.map(g => /*#__PURE__*/React.createElement("optgroup", { key: g.label, label: g.label },
+          g.items.map(it => /*#__PURE__*/React.createElement("option", { key: it.key, value: it.key }, it.label))
+        ))
+      ),
+      isOldJuniorNisa && /*#__PURE__*/React.createElement("label", { style: { fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 } },
+        /*#__PURE__*/React.createElement("input", {
+          type: "checkbox", checked: !!account.continuousManagementAccount,
+          onChange: e => ops.update(account.id, { continuousManagementAccount: e.target.checked })
+        }), "継続管理勘定に移行済み"
+      )
+    ),
+    isMinorPending && /*#__PURE__*/React.createElement("div", {
+      style: { fontSize: 11, color: 'var(--warning)', marginBottom: 6 }
+    }, "⚠️ 未成年者向け新NISA制度はまだ確定していません（報道情報の段階）。正式確定まで仮の区分として扱ってください。"),
+    holdings.length === 0 && /*#__PURE__*/React.createElement("div", {
+      style: { fontSize: 12, color: 'var(--text-sub)' }
+    }, "保有商品の登録なし"),
+    holdings.map(h => /*#__PURE__*/React.createElement(NexusSecuritiesAccountHoldingRow, {
+      key: h.id, holding: h, showInvestmentFrame: showInvestmentFrame,
+      onChange: patch => hOps.update(h.id, patch), onRemove: () => hOps.remove(h.id)
+    })),
+    /*#__PURE__*/React.createElement("button", {
+      type: "button", className: "btn btn-outline", style: { fontSize: 11, padding: '4px 10px', marginTop: 6 },
+      onClick: hOps.add
+    }, "＋ 保有商品を追加"),
+    /*#__PURE__*/React.createElement("div", {
+      style: { fontSize: 12, fontWeight: 700, marginTop: 8, textAlign: 'right' }
+    }, "口座評価額合計：¥", Math.round(total).toLocaleString())
+  );
+}
+function NexusSecuritiesAccountsSection({ accounts, ops, holdingOps, candidates }) {
+  const list = accounts || [];
+  return /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("div", {
+      style: { fontWeight: 700, fontSize: 13, color: 'var(--text)', marginBottom: 10 }
+    }, "証券口座・NISA管理（口座単位）"),
+    list.length === 0 && /*#__PURE__*/React.createElement("div", {
+      style: { fontSize: 12, color: 'var(--text-sub)', marginBottom: 8 }
+    }, "登録なし"),
+    list.map(account => /*#__PURE__*/React.createElement(NexusSecuritiesAccountCard, {
+      key: account.id, account: account, ops: ops, holdingOps: holdingOps, candidates: candidates
+    })),
+    /*#__PURE__*/React.createElement("button", {
+      type: "button", className: "btn btn-outline", style: { fontSize: 12, padding: '8px 12px' },
+      onClick: ops.add
+    }, "＋ 証券口座を追加")
+  );
+}
+
 function NexusPlanningSection({
   customers,
   setCustomers
@@ -37777,6 +37968,31 @@ function NexusPlanningSection({
     remove: id => updateLpPortfolio({
       [key]: (customer.lp && customer.lp.portfolio && customer.lp.portfolio[key] || []).filter(r => r.id !== id)
     })
+  });
+  // P3：証券口座（securitiesAccounts）は口座→保有商品の2階層のため、makePortfolioListOps
+  // （1階層のCRUD専用）とは別に、口座用と「指定した口座内の保有商品用」のops一式を作る。
+  const securitiesAccounts = (customer.lp && customer.lp.portfolio && customer.lp.portfolio.securitiesAccounts) || [];
+  const securitiesAccountOps = {
+    add: () => updateLpPortfolio({ securitiesAccounts: [...securitiesAccounts, nexusDefaultSecuritiesAccount()] }),
+    update: (id, patch) => updateLpPortfolio({ securitiesAccounts: securitiesAccounts.map(a => a.id === id ? { ...a, ...patch } : a) }),
+    remove: id => updateLpPortfolio({ securitiesAccounts: securitiesAccounts.filter(a => a.id !== id) })
+  };
+  const securitiesHoldingOps = accountId => ({
+    add: () => {
+      const acct = securitiesAccounts.find(a => a.id === accountId);
+      if (!acct) return;
+      securitiesAccountOps.update(accountId, { holdings: [...(acct.holdings || []), nexusDefaultSecuritiesHolding()] });
+    },
+    update: (holdingId, patch) => {
+      const acct = securitiesAccounts.find(a => a.id === accountId);
+      if (!acct) return;
+      securitiesAccountOps.update(accountId, { holdings: (acct.holdings || []).map(h => h.id === holdingId ? { ...h, ...patch } : h) });
+    },
+    remove: holdingId => {
+      const acct = securitiesAccounts.find(a => a.id === accountId);
+      if (!acct) return;
+      securitiesAccountOps.update(accountId, { holdings: (acct.holdings || []).filter(h => h.id !== holdingId) });
+    }
   });
   const depositOps = makePortfolioListOps('deposits');
   const bondOps = makePortfolioListOps('bonds');
@@ -42851,6 +43067,13 @@ function NexusPlanningSection({
   }, /*#__PURE__*/React.createElement(NexusOwnerAttributedPanel, {
     customer: customer,
     customers: customers
+  })), customer && /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement(NexusSecuritiesAccountsSection, {
+    accounts: securitiesAccounts,
+    ops: securitiesAccountOps,
+    holdingOps: securitiesHoldingOps,
+    candidates: householdCandidates
   })));
 }
 
