@@ -2267,7 +2267,10 @@ const csStyle = st => ({
 // ── P6a：新契約・手数料入金・証券お渡し管理（データ設計・計算ロジック） ──────
 // 商品種類（固定選択）。既存のtype（自由入力）は削除・変更せず、並行運用する新しい
 // 選択式フィールド（productCategory）用の選択肢（design doc 3-1・8章-5参照）。
-const NEXUS_PRODUCT_CATEGORIES = ['終身保険', '定期保険', '収入保障保険', '養老保険', '医療保険', 'がん保険', '三大疾病保険', '就業不能保険', '介護保険', '個人年金保険', '学資保険', 'その他'];
+// 最終一括実装指示書8：損害保険の商品種類を追加する（生命保険の既存項目はすべて維持）。
+// 生命保険・損害保険を別管理画面・別ダッシュボードに分けず、同じcontract.productCategory
+// （同じcustomers[].contracts[]）・同じAC計算方式・同じ月次集計・同じ入金管理で扱う。
+const NEXUS_PRODUCT_CATEGORIES = ['終身保険', '定期保険', '収入保障保険', '養老保険', '医療保険', 'がん保険', '三大疾病保険', '就業不能保険', '介護保険', '個人年金保険', '学資保険', '自動車保険', '火災保険', '地震保険', '傷害保険', '賠償責任保険', 'その他の損害保険', 'その他'];
 // 商品特性（複数選択）。既存のpurposes[]と同じトグルボタンUIで扱う。
 const NEXUS_PRODUCT_CHARACTERISTICS = ['円建', '外貨建', '変額', '定額', '積立型', '無配当', '有配当', 'その他'];
 const NEXUS_SECURITIES_PREP_ITEM_DEFS = [{
@@ -2539,12 +2542,16 @@ function nexusSecuritiesPrepOf(contract) {
   // デフォルト値を補う（保存はしない。表示専用）。
   return { caseNeeded: '未確認', printoutsNeeded: '未確認', ...prep };
 }
-// 最終確定指示書8：「準備状況：未準備／準備完了」は、既存の各資料の準備ステータス
-// （items[].status）を再利用して導出する（新しい保存先は作らない）。全項目が準備完了のときに
-// 限り「準備完了」とする。
+// 最終確定指示書8／最終一括実装指示書7：「準備状況：未準備／準備完了」は、既存の各資料の
+// 準備ステータス（items[].status）を再利用して導出する（新しい保存先は作らない）。
+// 「不要」と選択された資料（証券ケース・印刷物）は対象外とする（不要な資料を未準備件数に
+// 含めない）。'case'キーの項目は証券ケースの要否、それ以外の項目は印刷物の要否に対応する。
+// 未確認（まだ判断していない）は、推測で不要とみなさず対象に含める。
 function nexusSimplePrepStatus(prep) {
   const items = prep.items || [];
-  return items.length > 0 && items.every(i => i.status === '準備完了') ? '準備完了' : '未準備';
+  const relevant = items.filter(i => i.key === 'case' ? prep.caseNeeded !== '不要' : prep.printoutsNeeded !== '不要');
+  if (relevant.length === 0) return '準備完了';
+  return relevant.every(i => i.status === '準備完了') ? '準備完了' : '未準備';
 }
 function nexusSimplePrepCompletedAt(prep) {
   if (nexusSimplePrepStatus(prep) !== '準備完了') return '';
@@ -2630,6 +2637,12 @@ function nexusChangeApplicationStatus(contract, newStatus) {
     applicationStatus: newStatus,
     applicationStatusHistory: [...history, { status: newStatus, changedAt: new Date().toISOString() }]
   };
+}
+// 現在の年月（YYYY-MM）。月次ACダッシュボードの既定値、および「今月の新契約」タブの
+// ラベル切り替え判定で共通に使う。
+function nexusCurrentYm() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 // 契約の「申込月」（YYYY-MM）。申込日が無い旧契約はnullを返し、月次集計の対象外とする
 // （指示書3：「申込日が不明な旧契約は『申込日未確認』と表示」。当月実績へ勝手に含めない）。
@@ -4388,6 +4401,7 @@ function NexusAcCalculationBlock({ contract, onChangeAcMethod, onAdoptComputedAc
   const fmtYen = v => v === null || v === undefined ? '未確認' : Math.round(v).toLocaleString() + '円';
   return /*#__PURE__*/React.createElement("div", { style: { fontSize: 12, lineHeight: 1.8 } },
     /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, marginBottom: 4 } }, "AC計算方式・見込みAC"),
+    /*#__PURE__*/React.createElement("div", { style: { fontSize: 10.5, color: 'var(--text-sub)' } }, "見込みACは常に①手数料見込額（税抜）を基準に計算します。代理店確定額（②）が入力されていても見込みACの基準は変わりません（下の「手数料・入金管理」の分割後手数料は確定額を優先するため、基準が異なり数値が一致しない場合があります）。"),
     /*#__PURE__*/React.createElement("div", null, `分担前見込手数料（税抜）：${fmtYen(estimate.amountExclTax)} ／ 自分の分担割合：${selfPct}%`),
     /*#__PURE__*/React.createElement("div", null, `分担後見込手数料：税抜${fmtYen(splitAfterDisplay && splitAfterDisplay.amountExclTax)} ／ 税込${fmtYen(splitAfterDisplay && splitAfterDisplay.amountInclTax)}`),
     /*#__PURE__*/React.createElement("div", { style: { marginTop: 4 } },
@@ -4419,7 +4433,7 @@ function NexusAcCalculationBlock({ contract, onChangeAcMethod, onAdoptComputedAc
       `見込みACと確定手数料の差額：${fmtYen(confirmedDiffYen)}`
     ),
     /*#__PURE__*/React.createElement("div", null,
-      `確定手数料と実入金額の差額（未入金残高）：${outstanding === null ? '未確認' : fmtYen(outstanding)}　／　入金状況：${paymentStatus}`
+      `確定手数料と実入金額の差額（未入金残高）：${outstanding === null ? '未確認' : fmtYen(outstanding)}　／　代理店入金状況：${paymentStatus === '全額入金済み' ? '入金済み' : paymentStatus}`
     )
   );
 }
@@ -4457,9 +4471,11 @@ function ContractCommissionBlock({ contract, onChange }) {
   const confirmedDisplay = nexusCalcTaxDisplay(commission.confirmed.amountExclTax, commission.confirmed.taxRatePercent, commission.confirmed.roundingMethod);
   const outstandingBalance = nexusCalcOutstandingBalance(contract);
   const paymentStatus = nexusCalcPaymentStatus(contract);
+  // 最終一括実装指示書5：入金確認日（担当者が入金を確認した日）は、実入金日（銀行等の
+  // 実際の入金日）とは別に記録する。
   const addPayment = () => updateCommission({
     paymentHistory: [...(commission.paymentHistory || []), {
-      id: uid(), paidAt: todayStr(), enteredAmount: null, enteredAs: 'excl', amountExclTax: null,
+      id: uid(), paidAt: todayStr(), confirmedPaidAt: '', enteredAmount: null, enteredAs: 'excl', amountExclTax: null,
       taxRatePercent: commission.confirmed.taxRatePercent || 10, roundingMethod: 'round', memo: '',
       recordedAt: new Date().toISOString(), splitSnapshot: split.parties
     }]
@@ -4519,8 +4535,12 @@ function ContractCommissionBlock({ contract, onChange }) {
   );
   // 最終一括実装指示書10：未入金残高の算出基準（確定額／見込額のどちら）を画面上に明示する。
   const balanceBasisLabel = commission.confirmed && commission.confirmed.amountExclTax !== null && commission.confirmed.amountExclTax !== undefined ? '確定額基準' : '見込額基準（確定額未入力）';
+  // 最終一括実装指示書5：代理店入金の状況は「未確認（基準額が未入力）」「未入金」「一部入金」
+  // 「入金済み」の4区分を区別する（nexusCalcPaymentStatusの'全額入金済み'は、この一覧向けの
+  // 表示では「入金済み」と表記する。内部の判定値そのものは変更しない）。
+  const paymentStatusDisplay = paymentStatus === '全額入金済み' ? '入金済み' : paymentStatus;
   const balanceRow = /*#__PURE__*/React.createElement("div", { style: { fontSize: 12.5, fontWeight: 600 } },
-    `⑦未入金残高：${outstandingBalance === null ? '未確認' : outstandingBalance}（${balanceBasisLabel}）　／　入金状況：${paymentStatus}`
+    `⑦未入金残高：${outstandingBalance === null ? '未確認' : outstandingBalance}（${balanceBasisLabel}）　／　代理店入金状況：${paymentStatusDisplay}`
   );
   const paymentRows = (commission.paymentHistory || []).map(p => {
     const display = nexusCalcTaxDisplay(p.amountExclTax, p.taxRatePercent, p.roundingMethod);
@@ -4531,8 +4551,15 @@ function ContractCommissionBlock({ contract, onChange }) {
       ? snapshot.map(sp => `${sp.partyRef.kind === 'self' ? '自分' : (sp.partyRef.name || '相手')}：${sp.percentage}%`).join(' / ')
       : null;
     return /*#__PURE__*/React.createElement("div", { key: p.id, className: "card", style: { padding: 8, marginBottom: 6 } },
-      /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 6 } },
-        /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", value: p.paidAt || '', onChange: e => updatePaymentField(p.id, 'paidAt', e.target.value) }),
+      /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
+        /*#__PURE__*/React.createElement("div", { style: { flex: '1 1 120px' } },
+          /*#__PURE__*/React.createElement("label", { style: { fontSize: 10, color: 'var(--text-sub)' } }, "実入金日"),
+          /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", value: p.paidAt || '', onChange: e => updatePaymentField(p.id, 'paidAt', e.target.value) })
+        ),
+        /*#__PURE__*/React.createElement("div", { style: { flex: '1 1 120px' } },
+          /*#__PURE__*/React.createElement("label", { style: { fontSize: 10, color: 'var(--text-sub)' } }, "入金確認日"),
+          /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", value: p.confirmedPaidAt || '', onChange: e => updatePaymentField(p.id, 'confirmedPaidAt', e.target.value) })
+        ),
         /*#__PURE__*/React.createElement("input", { className: "form-input", type: "number", placeholder: "⑥入金額", value: p.enteredAmount === null ? '' : p.enteredAmount, onChange: e => updatePaymentAmount(p.id, e.target.value) }),
         /*#__PURE__*/React.createElement("button", { className: "btn btn-sm", type: "button", onClick: () => removePayment(p.id) }, "削除")
       ),
@@ -4567,8 +4594,13 @@ function ContractCommissionBlock({ contract, onChange }) {
   const splitAmountsExcl = split.mode !== 'none' ? nexusComputeSplitAmounts(contract, 'excl') : null;
   const splitAmountsIncl = split.mode !== 'none' ? nexusComputeSplitAmounts(contract, 'incl') : null;
   const fmtAmt = v => v === null || v === undefined ? '未確認' : v.toLocaleString() + '円';
+  // 最終一括実装指示書4：「分割後手数料」は確定額があれば確定額、無ければ見込額を基準にする
+  // （nexusCommissionSplitBaseAmount／nexusCommissionBaseExclTaxと同じ優先順位）。AC計算方式・
+  // 見込みAC（⑥のブロック）は常に見込額のみを基準にするため、基準が異なることを明示する
+  // （表示名と計算根拠を明確にし、数値不一致の原因を推測で補正しない＝指示書4）。
+  const splitBasisLabel = commission.confirmed && commission.confirmed.amountExclTax !== null && commission.confirmed.amountExclTax !== undefined ? '確定額基準' : '見込額基準';
   const splitAmountsRow = splitAmountsExcl && /*#__PURE__*/React.createElement("div", { style: { fontSize: 12, marginTop: 6, lineHeight: 1.7 } },
-    /*#__PURE__*/React.createElement("div", null, `分割前手数料：税抜${fmtAmt(splitAmountsExcl.baseAmount)} ／ 税込${fmtAmt(splitAmountsIncl.baseAmount)}`),
+    /*#__PURE__*/React.createElement("div", null, `分割前手数料（${splitBasisLabel}。見込みAC／⑥の計算とは基準が異なる場合があります）：税抜${fmtAmt(splitAmountsExcl.baseAmount)} ／ 税込${fmtAmt(splitAmountsIncl.baseAmount)}`),
     splitAmountsExcl.parties.map((p, i) => /*#__PURE__*/React.createElement("div", { key: i },
       `分割後の${p.partyRef.kind === 'self' ? '自分' : (p.partyRef.name || '相手')}の手数料：税抜${fmtAmt(p.amount)} ／ 税込${fmtAmt(splitAmountsIncl.parties[i].amount)}（${p.percentage}%）`
     ))
@@ -4737,7 +4769,14 @@ function nexusContractListRowValues(row, amountBasis) {
     return sum + (v || 0);
   }, 0);
   const latestPaidAt = paymentHistory.map(p => p.paidAt).filter(Boolean).sort().slice(-1)[0] || '';
-  const prepSummary = `${prep.items.filter(i => i.status === '準備完了').length}/${prep.items.length}完了`;
+  // 最終一括実装指示書5：一覧に「代理店入金」列を追加する。未確認（基準額未入力）・未入金・
+  // 一部入金・入金済みの4区分を区別する（内部の判定値'全額入金済み'は、一覧では
+  // 「入金済み」と表記する）。
+  const paymentStatusRaw = nexusCalcPaymentStatus(ct);
+  const paymentStatusText = paymentStatusRaw === '全額入金済み' ? '入金済み' : paymentStatusRaw;
+  // 最終一括実装指示書7：「0/4完了」表示は廃止し、未準備／準備完了の2値表示に簡素化する
+  // （不要な資料は件数に含めない。nexusSimplePrepStatus）。
+  const prepSummary = nexusSimplePrepStatus(prep);
   const splitAmounts = split.mode !== 'none' ? nexusComputeSplitAmounts(ct, amountBasis) : null;
   const splitRatioText = split.mode === 'none' ? '分割なし（100%）' : (split.parties || []).map(p => `${p.partyRef.kind === 'self' ? '自分' : (p.partyRef.name || '相手')}${p.percentage}%`).join('／');
   const splitAmountText = splitAmounts ? splitAmounts.parties.map(p => `${p.partyRef.kind === 'self' ? '自分' : (p.partyRef.name || '相手')}:${p.amount === null ? '未確認' : p.amount.toLocaleString() + '円'}`).join('／') : '-';
@@ -4767,6 +4806,7 @@ function nexusContractListRowValues(row, amountBasis) {
     { key: 'deliveryStatus', label: 'お渡し状況', value: delivery.status },
     { key: 'estimateAmount', label: '手数料見込額', value: estimateText === null || estimateText === undefined ? '' : estimateText.toLocaleString() + '円' },
     { key: 'confirmedAmount', label: '代理店確定手数料', value: confirmedText === null || confirmedText === undefined ? '' : confirmedText.toLocaleString() + '円' },
+    { key: 'paymentStatus', label: '代理店入金', value: paymentStatusText },
     { key: 'expectedPaymentMonth', label: '入金予定年月', value: commission.expectedPaymentMonth || '' },
     { key: 'latestPaidAt', label: '実際の入金年月日', value: latestPaidAt },
     { key: 'paidTotal', label: '入金額', value: paidTotal ? paidTotal.toLocaleString() + '円' : '' },
@@ -5041,7 +5081,69 @@ function NexusNewContractIntakeForm({ customers, onCreateContract, onClose, onSa
     )
   );
 }
-function NexusContractManagementScreen({ customers, onOpenCustomer, onCreateContract }) {
+// 最終一括実装指示書6：新契約一覧の行をタップすると、顧客タブではなくこの契約詳細・編集
+// 画面を直接開く。既存のContractBlock（商品詳細・申込状況・手数料入金管理・証券ケース/
+// お渡しの4ブロックをすべて含む）をそのまま再利用し、別の保存先・別の編集UIは新設しない
+// （customers[].contracts[]を単一の保存先として参照）。「顧客詳細を見る」ボタンを押した
+// 場合のみ顧客タブへ遷移する。
+function NexusContractDetailScreen({ customer, contract, customers, onSave, onRemove, onClose, onOpenCustomerDetail }) {
+  const [localContract, setLocalContract] = useState(() => contract);
+  const [savedFlash, setSavedFlash] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+  const handleChange = updated => {
+    setLocalContract(updated);
+    setSavedFlash(false);
+  };
+  const handleSave = () => {
+    const result = onSave(localContract);
+    if (result && result.ok) {
+      setSavedFlash(true);
+      setErrorMsg('');
+    } else {
+      setErrorMsg(
+        result && result.reason === 'customer_not_found' ? '顧客が見つかりませんでした（他の場所で削除された可能性があります）。' :
+        result && result.reason === 'contract_not_found' ? '契約が見つかりませんでした（他の場所で削除された可能性があります）。' :
+        '保存に失敗しました。もう一度お試しください。'
+      );
+    }
+  };
+  const handleRemove = () => {
+    if (window.confirm('この契約を削除しますか？削除すると元に戻せません。')) onRemove();
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: "nexus-contract-detail-overlay",
+    style: { position: 'fixed', inset: 0, zIndex: 9999, background: 'var(--bg)', display: 'flex', flexDirection: 'column' }
+  },
+    /*#__PURE__*/React.createElement("div", {
+      style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px', borderBottom: '1px solid var(--border)', flex: 'none' }
+    },
+      /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, fontSize: 15 } }, "契約詳細"),
+      /*#__PURE__*/React.createElement("button", { type: "button", className: "btn btn-sm", onClick: onClose }, "✕ 閉じる")
+    ),
+    /*#__PURE__*/React.createElement("div", { style: { flex: 1, overflowY: 'auto', padding: '14px 16px 110px' } },
+      /*#__PURE__*/React.createElement("div", { className: "card", style: { marginBottom: 10, padding: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+        /*#__PURE__*/React.createElement("div", { style: { fontSize: 13 } }, `契約者：${nexusDisplayName(customer)}`),
+        // 最終一括実装指示書6：「顧客詳細を見る」ボタンを押した場合のみ顧客タブへ遷移する。
+        /*#__PURE__*/React.createElement("button", { type: "button", className: "btn btn-outline btn-sm", onClick: onOpenCustomerDetail }, "👤 顧客詳細を見る")
+      ),
+      savedFlash ? /*#__PURE__*/React.createElement("div", {
+        style: { background: '#DCFCE7', border: '1px solid #16A34A', borderRadius: 6, padding: '6px 10px', fontSize: 12, color: '#15803D', marginBottom: 10 }
+      }, "✓ 保存しました（一覧・ダッシュボードにも反映されます）") : null,
+      errorMsg ? /*#__PURE__*/React.createElement("div", { style: { color: '#c0392b', fontSize: 12, marginBottom: 10 } }, errorMsg) : null,
+      /*#__PURE__*/React.createElement(ContractBlock, { contract: localContract, onChange: handleChange, onRemove: handleRemove, index: 0, customers: customers })
+    ),
+    /*#__PURE__*/React.createElement("div", {
+      style: { flex: 'none', padding: '10px 16px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8 }
+    },
+      /*#__PURE__*/React.createElement("button", { type: "button", className: "btn btn-outline", style: { flex: 1 }, onClick: onClose }, "閉じる"),
+      /*#__PURE__*/React.createElement("button", { type: "button", className: "btn btn-primary", style: { flex: 2 }, onClick: handleSave }, "この内容で保存する")
+    )
+  );
+}
+function NexusContractManagementScreen({ customers, onOpenCustomer, onCreateContract, onUpdateContract, onRemoveContract }) {
+  // 最終一括実装指示書6：一覧の行をタップすると、顧客タブではなく契約詳細・編集画面を
+  // 直接開く（「顧客詳細を見る」ボタンを押した場合のみ顧客タブへ遷移する）。
+  const [openContractKey, setOpenContractKey] = useState(null); // { customerId, contractId, index }
   // 初期表示は申込日基準の「今月の申込」とする（最終一括実装指示書12）。
   const [activeTab, setActiveTab] = useState('newThisMonth');
   const [search, setSearch] = useState('');
@@ -5050,16 +5152,23 @@ function NexusContractManagementScreen({ customers, onOpenCustomer, onCreateCont
   const [showIntake, setShowIntake] = useState(false);
   // 最終一括実装指示書5：月次ACダッシュボード。月を選んで過去月の実績も確認できる
   // （デフォルトは今月）。
-  const [dashboardMonth, setDashboardMonth] = useState(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-  });
+  const [dashboardMonth, setDashboardMonth] = useState(() => nexusCurrentYm());
   const dashboard = useMemo(() => nexusComputeMonthlyAcDashboard(customers, dashboardMonth), [customers, dashboardMonth]);
   const rows = useMemo(() => nexusFlattenAllContracts(customers).map(row => ({ ...row, flags: nexusContractStatusFlags(row.contract) })), [customers]);
-  const counted = NEXUS_CONTRACT_STATUS_TABS.map(t => ({ ...t, count: rows.filter(r => t.test(r.flags)).length }));
-  const activeTabDef = NEXUS_CONTRACT_STATUS_TABS.find(t => t.key === activeTab);
+  // 最終一括実装指示書3：月次ACダッシュボードの対象年月と、契約一覧の「今月の新契約」タブの
+  // 対象年月を共通化する（ダッシュボードの月選択と一覧が連動する）。横断管理タブ（手数料
+  // 未入金・前月以前からの未入金・資料準備待ち・お渡し待ち等）は、申込月に関係なく全期間を
+  // 対象のまま変更しない（「選択月の申込実績」と「月をまたぐ未完了業務」を明確に分ける）。
+  const thisRealMonth = nexusCurrentYm();
+  const tabs = useMemo(() => NEXUS_CONTRACT_STATUS_TABS.map(t => t.key === 'newThisMonth' ? {
+    ...t,
+    label: dashboardMonth === thisRealMonth ? '今月の新契約' : `${dashboardMonth}の新契約`,
+    test: (f, r) => nexusContractApplicationMonth(r.contract) === dashboardMonth
+  } : { ...t, test: (f, r) => t.test(f) }), [dashboardMonth, thisRealMonth]);
+  const counted = tabs.map(t => ({ ...t, count: rows.filter(r => t.test(r.flags, r)).length }));
+  const activeTabDef = tabs.find(t => t.key === activeTab);
   const filtered = rows.filter(r => {
-    if (activeTabDef && !activeTabDef.test(r.flags)) return false;
+    if (activeTabDef && !activeTabDef.test(r.flags, r)) return false;
     if (!search) return true;
     const q = search.toLowerCase();
     // 最終指示書：被保険者・申込番号でも検索できるようにする（保険会社・商品名・顧客名・
@@ -5113,6 +5222,12 @@ function NexusContractManagementScreen({ customers, onOpenCustomer, onCreateCont
       `※今月の申込ACは、成立待ち・成立・不成立・取消を含む全件の合計です。有効AC（成立待ち＋成立）：${acYen(dashboard.effectiveAcTotal)}／不成立・取消を除いた金額です。`
     )
   );
+  // 最終一括実装指示書3：「選択月の申込実績」（ダッシュボードの月と連動するタブ）と
+  // 「月をまたぐ未完了業務」（手数料未入金・前月以前からの未入金・資料準備待ち・お渡し待ち等。
+  // 申込月に関係なく全期間が対象）を明確に分けて案内する。
+  const tabsNote = /*#__PURE__*/React.createElement("div", { style: { padding: '0 16px', fontSize: 10.5, color: 'var(--text-sub)', marginBottom: 4 } },
+    "💡「新契約」タブはダッシュボードで選んだ年月の申込実績のみ、他のタブ（未入金・資料準備待ち等）は月をまたいで全期間が対象です。"
+  );
   const tabsRow = /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 6, marginBottom: 10, padding: '0 16px' } },
     counted.map(t => /*#__PURE__*/React.createElement("button", {
       key: t.key, type: "button", className: `toggle-btn ${activeTab === t.key ? 'sel' : ''}`, style: { flex: 'none' }, onClick: () => setActiveTab(t.key)
@@ -5134,7 +5249,8 @@ function NexusContractManagementScreen({ customers, onOpenCustomer, onCreateCont
     )
   );
   // 最終一括実装指示書12：先頭列は申込日を優先し、契約日・成立日は別列として残す。
-  const columnLabels = ['No.', '契約者', '申込日', '申込状況', '契約日', '被保険者', '保険会社', '商品名', '商品種類', '商品特性', '証券番号', '申込番号', '保険料', '払込方法', 'AC', '成立日', '証券ケース', '資料準備状況', 'お渡し状況', '手数料見込額', '代理店確定手数料', '入金予定年月', '実際の入金年月日', '入金額', '未入金残高', '分割割合', '分割後手数料', '備考'];
+  // 最終一括実装指示書5：「代理店入金」列を追加（代理店確定手数料の直後）。
+  const columnLabels = ['No.', '契約者', '申込日', '申込状況', '契約日', '被保険者', '保険会社', '商品名', '商品種類', '商品特性', '証券番号', '申込番号', '保険料', '払込方法', 'AC', '成立日', '証券ケース', '資料準備状況', 'お渡し状況', '手数料見込額', '代理店確定手数料', '代理店入金', '入金予定年月', '実際の入金年月日', '入金額', '未入金残高', '分割割合', '分割後手数料', '備考'];
   // iPhoneでも紙の一覧表と同じ26項目を確認できるよう、横スクロール可能な表形式で一覧表示する
   // （タップすると顧客詳細の契約編集へ遷移し、そちらで編集する＝一覧と編集画面を併用）。
   const table = /*#__PURE__*/React.createElement("div", { style: { overflowX: 'auto', margin: '0 16px 16px', border: '1px solid var(--border)', borderRadius: 8 } },
@@ -5147,8 +5263,12 @@ function NexusContractManagementScreen({ customers, onOpenCustomer, onCreateCont
         // 最終指示書9：idを持たない旧データの契約も一覧に表示できるよう、idが無い場合は
         // 顧客id＋行番号で安全なキーを作る（idそのものは書き換えない）。
         const rowKey = row.contract.id || `${row.customer.id}-${idx}`;
+        // idを持たない旧データの契約は、customer.contracts[]内の実際のインデックスで特定する
+        // （参照の一致で安全に求める。idそのものは書き換えない）。
+        const contractIndexInCustomer = (row.customer.contracts || []).indexOf(row.contract);
         return /*#__PURE__*/React.createElement("tr", {
-          key: rowKey, style: { cursor: 'pointer', borderBottom: '1px solid var(--border)' }, onClick: () => onOpenCustomer(row.customer)
+          key: rowKey, style: { cursor: 'pointer', borderBottom: '1px solid var(--border)' },
+          onClick: () => setOpenContractKey({ customerId: row.customer.id, contractId: row.contract.id || null, index: contractIndexInCustomer })
         },
           /*#__PURE__*/React.createElement("td", { style: { padding: '6px 8px' } }, idx + 1),
           /*#__PURE__*/React.createElement("td", { style: { padding: '6px 8px' } }, cells.find(c => c.key === 'policyholder').value),
@@ -5158,6 +5278,33 @@ function NexusContractManagementScreen({ customers, onOpenCustomer, onCreateCont
     )
   );
   const emptyState = sorted.length === 0 ? /*#__PURE__*/React.createElement("div", { className: "empty", style: { padding: '30px 16px' } }, "該当する契約がありません") : null;
+  // 最終一括実装指示書6：契約詳細画面で表示・編集する対象を、customers（最新のprops）から
+  // 都度再導出する（保存後、一覧・ダッシュボードに即時反映される）。
+  const openRow = useMemo(() => {
+    if (!openContractKey) return null;
+    const cust = customers.find(c => c.id === openContractKey.customerId);
+    if (!cust) return null;
+    const contracts = cust.contracts || [];
+    let ct = openContractKey.contractId ? contracts.find(c => c.id === openContractKey.contractId) : null;
+    if (!ct && !openContractKey.contractId && openContractKey.index !== null && openContractKey.index !== undefined) ct = contracts[openContractKey.index];
+    if (!ct) return null;
+    return { customer: cust, contract: ct };
+  }, [customers, openContractKey]);
+  const contractDetailOverlay = openRow ? /*#__PURE__*/React.createElement(NexusContractDetailScreen, {
+    customer: openRow.customer,
+    contract: openRow.contract,
+    customers: customers,
+    onSave: updatedContract => onUpdateContract(openContractKey.customerId, openContractKey.contractId, openContractKey.index, updatedContract),
+    onRemove: () => {
+      onRemoveContract(openContractKey.customerId, openContractKey.contractId, openContractKey.index);
+      setOpenContractKey(null);
+    },
+    onClose: () => setOpenContractKey(null),
+    onOpenCustomerDetail: () => {
+      setOpenContractKey(null);
+      onOpenCustomer(openRow.customer);
+    }
+  }) : null;
   const intakeForm = showIntake ? /*#__PURE__*/React.createElement(NexusNewContractIntakeForm, {
     customers: customers,
     onCreateContract: onCreateContract,
@@ -5169,7 +5316,7 @@ function NexusContractManagementScreen({ customers, onOpenCustomer, onCreateCont
       setActiveTab('all');
     }
   }) : null;
-  return /*#__PURE__*/React.createElement("div", null, headerRow, subHeaderRow, dashboardCard, tabsRow, searchRow, sortRow, emptyState, table, intakeForm);
+  return /*#__PURE__*/React.createElement("div", null, headerRow, subHeaderRow, dashboardCard, tabsNote, tabsRow, searchRow, sortRow, emptyState, table, intakeForm, contractDetailOverlay);
 }
 
 // ── P6b：職域別営業分析（design doc 4章のMVP実装） ──────────────────────────
@@ -52093,6 +52240,60 @@ function App() {
     setCustomers(nextCustomers);
     return { ok: true, customer: targetCustomer, contract: newContract };
   };
+  // 最終一括実装指示書6：新契約一覧の行から直接開く契約詳細画面用の安全な更新・削除処理。
+  // createContractForIntakeと同じ安全策（書き込み直前に必ずlocalStorageの最新値を読み直す）
+  // を使い、該当する1件の契約だけを置き換える／取り除く。契約にidが無い旧データは、
+  // 一覧を開いた時点のインデックス（indexFallback）で特定する（idそのものは書き換えない）。
+  const findCustomerAndContractIndex = (customerId, contractId, indexFallback, latestCustomers) => {
+    const custIdx = latestCustomers.findIndex(x => x.id === customerId);
+    if (custIdx < 0) return { custIdx: -1, ctIdx: -1 };
+    const contracts = latestCustomers[custIdx].contracts || [];
+    let ctIdx = contractId ? contracts.findIndex(c => c.id === contractId) : -1;
+    if (ctIdx < 0 && !contractId && indexFallback !== null && indexFallback !== undefined && contracts[indexFallback]) ctIdx = indexFallback;
+    return { custIdx, ctIdx };
+  };
+  const updateContractInPlace = (customerId, contractId, indexFallback, updatedContract) => {
+    let latestCustomers;
+    try {
+      const raw = localStorage.getItem('customers_v1');
+      latestCustomers = raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      latestCustomers = null;
+    }
+    if (!Array.isArray(latestCustomers)) latestCustomers = customers;
+    const { custIdx, ctIdx } = findCustomerAndContractIndex(customerId, contractId, indexFallback, latestCustomers);
+    if (custIdx < 0) return { ok: false, reason: 'customer_not_found' };
+    if (ctIdx < 0) return { ok: false, reason: 'contract_not_found' };
+    const cust = latestCustomers[custIdx];
+    const nextContracts = (cust.contracts || []).map((c, i) => i === ctIdx ? updatedContract : c);
+    const nextCustomer = { ...cust, contracts: nextContracts, updatedAt: new Date().toISOString() };
+    const nextCustomers = latestCustomers.map((x, i) => i === custIdx ? nextCustomer : x);
+    const writeResult = nexusLifePlanWriteCustomersVerified(nextCustomers);
+    if (!writeResult.ok) return { ok: false, reason: 'write_failed' };
+    setCustomers(nextCustomers);
+    return { ok: true, customer: nextCustomer, contract: updatedContract };
+  };
+  const removeContractInPlace = (customerId, contractId, indexFallback) => {
+    let latestCustomers;
+    try {
+      const raw = localStorage.getItem('customers_v1');
+      latestCustomers = raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      latestCustomers = null;
+    }
+    if (!Array.isArray(latestCustomers)) latestCustomers = customers;
+    const { custIdx, ctIdx } = findCustomerAndContractIndex(customerId, contractId, indexFallback, latestCustomers);
+    if (custIdx < 0) return { ok: false, reason: 'customer_not_found' };
+    if (ctIdx < 0) return { ok: false, reason: 'contract_not_found' };
+    const cust = latestCustomers[custIdx];
+    const nextContracts = (cust.contracts || []).filter((c, i) => i !== ctIdx);
+    const nextCustomer = { ...cust, contracts: nextContracts, updatedAt: new Date().toISOString() };
+    const nextCustomers = latestCustomers.map((x, i) => i === custIdx ? nextCustomer : x);
+    const writeResult = nexusLifePlanWriteCustomersVerified(nextCustomers);
+    if (!writeResult.ok) return { ok: false, reason: 'write_failed' };
+    setCustomers(nextCustomers);
+    return { ok: true, customer: nextCustomer };
+  };
   const openNewCustomer = () => {
     setEditingCustomer(null);
     setShowCustomerForm(true);
@@ -52561,7 +52762,9 @@ function App() {
       setTab('list');
       setSelectedCustomer(c);
     },
-    onCreateContract: createContractForIntake
+    onCreateContract: createContractForIntake,
+    onUpdateContract: updateContractInPlace,
+    onRemoveContract: removeContractInPlace
   }), tab === 'occupation' && /*#__PURE__*/React.createElement(NexusOccupationAnalyticsScreen, {
     customers: customers,
     setCustomers: setCustomers,
