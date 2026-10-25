@@ -2504,6 +2504,81 @@ function nexusFindDuplicateContractsByNumber(customers, applicationNum, policyNu
   });
   return matches;
 }
+// ── 最終一括実装指示書：新契約・AC・手数料・保全管理 ──────────────────────
+// 申込状況（下書き〜成立/不成立/取消）を、既存のcontract.contractStatus（有効/減額/解約/失効
+// ＝成立後の契約そのものの状態）とは別の、申込〜送り込み〜成立までの「業務プロセスの状態」
+// として新設する。別名義・別配列は作らず、既存customers[].contracts[]にフィールドを追加する。
+const NEXUS_APPLICATION_STATUSES = ['下書き', '申込書準備中', '申込書送付済み', '代理店提出済み', '保険会社受付済み', '成立待ち', '成立', '不成立', '取消'];
+// 代理店提出済み・保険会社受付済み・成立待ち・成立は、いずれも「代理店へ送り込み済み」の状態
+// （指示書4：送り込み済みACの集計基準＝代理店提出済み以降。取消・不成立は除外）。
+const NEXUS_SUBMITTED_OR_LATER_STATUSES = ['代理店提出済み', '保険会社受付済み', '成立待ち', '成立'];
+const NEXUS_CANCELLED_APPLICATION_STATUSES = ['不成立', '取消'];
+// applicationStatusが未設定の旧契約（本機能導入前のデータ）向けの表示専用フォールバック。
+// 既存に記録されている事実（成立日・申込日の有無）だけから導出し、不明な情報を新たに
+// 推測して補完するものではない（成立日が記録済み＝実際に成立した実績そのもの）。
+// 戻り値はあくまで一覧・集計表示用であり、contractオブジェクトへは一切書き込まない。
+function nexusDeriveEffectiveApplicationStatus(contract) {
+  if (contract.applicationStatus) return contract.applicationStatus;
+  if (contract.policyIssuedDate) return '成立';
+  if (contract.applicationDate) return '成立待ち';
+  return '';
+}
+// 申込状況を変更する（履歴に積む。既存の履歴は削除しない）。既にその状態であれば履歴を
+// 増やさない（明示的に設定済みの場合のみ）。
+function nexusChangeApplicationStatus(contract, newStatus) {
+  const current = contract.applicationStatus || nexusDeriveEffectiveApplicationStatus(contract) || '';
+  if (contract.applicationStatus && contract.applicationStatus === newStatus) return contract;
+  const history = Array.isArray(contract.applicationStatusHistory) ? contract.applicationStatusHistory : [];
+  return {
+    ...contract,
+    applicationStatus: newStatus,
+    applicationStatusHistory: [...history, { status: newStatus, changedAt: new Date().toISOString() }]
+  };
+}
+// 契約の「申込月」（YYYY-MM）。申込日が無い旧契約はnullを返し、月次集計の対象外とする
+// （指示書3：「申込日が不明な旧契約は『申込日未確認』と表示」。当月実績へ勝手に含めない）。
+function nexusContractApplicationMonth(contract) {
+  const d = (contract.applicationDate || '').slice(0, 7);
+  return d || null;
+}
+// AC金額を数値として取得する（未入力はnullのまま返す。0円と決めつけない＝指示書5）。
+function nexusContractAcAmount(contract) {
+  const v = contract.acAmount;
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return isNaN(n) ? null : n;
+}
+// 月次ACダッシュボード（指示書5）。申込日が指定月に属する契約（＝その月のコホート）を対象に、
+// 送り込み済み／成立／成立待ち／取消・不成立の各ACを、現在の申込状況で振り分けて集計する。
+// 申込AC・送り込み済みAC・成立ACはそれぞれ状態別の内訳であり、合算して「総AC」にはしない
+// （指示書5：二重計上防止）。
+function nexusComputeMonthlyAcDashboard(customers, yearMonth) {
+  const cohortAll = nexusFlattenAllContracts(customers).filter(r => nexusContractApplicationMonth(r.contract) === yearMonth);
+  const sumAc = list => list.reduce((s, r) => s + (nexusContractAcAmount(r.contract) || 0), 0);
+  const statusOf = r => nexusDeriveEffectiveApplicationStatus(r.contract);
+  const cancelled = cohortAll.filter(r => NEXUS_CANCELLED_APPLICATION_STATUSES.includes(statusOf(r)));
+  // 指示書5：「取消・不成立のACは、有効な申込AC・送り込み済みACから除外し、履歴として
+  // 別集計する」。そのため申込AC・送り込み済みAC・成立AC・成立待ちACは、いずれも取消・不成立
+  // を除いた「有効な申込」のコホートのみを対象とする。
+  const cohort = cohortAll.filter(r => !NEXUS_CANCELLED_APPLICATION_STATUSES.includes(statusOf(r)));
+  const submitted = cohort.filter(r => NEXUS_SUBMITTED_OR_LATER_STATUSES.includes(statusOf(r)));
+  const approved = cohort.filter(r => statusOf(r) === '成立');
+  const awaitingDecision = cohort.filter(r => statusOf(r) === '成立待ち');
+  const acMissingCount = cohort.filter(r => nexusContractAcAmount(r.contract) === null).length;
+  return {
+    yearMonth,
+    applicationCount: cohort.length,
+    applicationAcTotal: sumAc(cohort),
+    submittedCount: submitted.length,
+    submittedAcTotal: sumAc(submitted),
+    approvedCount: approved.length,
+    approvedAcTotal: sumAc(approved),
+    awaitingDecisionAcTotal: sumAc(awaitingDecision),
+    cancelledCount: cancelled.length,
+    cancelledAcTotal: sumAc(cancelled),
+    acMissingCount
+  };
+}
 function ContractBlock({
   contract,
   onChange,
@@ -4054,6 +4129,9 @@ function ContractBlock({
     onChange: onChange,
     customers: customers,
     currentContractId: contract.id
+  }), /*#__PURE__*/React.createElement(ContractApplicationStatusBlock, {
+    contract: contract,
+    onChange: onChange
   }), /*#__PURE__*/React.createElement(ContractCommissionBlock, {
     contract: contract,
     onChange: onChange
@@ -4145,6 +4223,40 @@ function ContractProductDetailsBlock({ contract, onChange, customers, currentCon
     remarksField
   );
 }
+// 最終一括実装指示書4：申込状況・送り込み管理ブロック。申込〜代理店提出〜保険会社受付〜
+// 成立／不成立／取消までの業務プロセスの状態を、履歴付きで管理する。既存の
+// contract.contractStatus（有効／減額／解約／失効＝成立後の契約そのものの状態）とは別概念
+// のため、既存フィールドは一切変更しない。
+function ContractApplicationStatusBlock({ contract, onChange }) {
+  const s = k => e => onChange({ ...contract, [k]: e.target.value });
+  const explicitStatus = contract.applicationStatus || '';
+  const effectiveStatus = nexusDeriveEffectiveApplicationStatus(contract);
+  const history = Array.isArray(contract.applicationStatusHistory) ? contract.applicationStatusHistory : [];
+  const dateField = (label, key) => /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("label", { className: "form-label" }, label),
+    /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", value: contract[key] || '', onChange: s(key) })
+  );
+  return /*#__PURE__*/React.createElement(NexusCollapsibleSection, { title: "申込状況・送り込み管理" },
+    /*#__PURE__*/React.createElement("div", null,
+      /*#__PURE__*/React.createElement("label", { className: "form-label" }, "申込状況"),
+      /*#__PURE__*/React.createElement("div", { className: "toggle-group" },
+        NEXUS_APPLICATION_STATUSES.map(st => /*#__PURE__*/React.createElement("button", {
+          key: st, type: "button", className: `toggle-btn ${explicitStatus === st ? 'sel' : ''}`,
+          onClick: () => onChange(nexusChangeApplicationStatus(contract, st))
+        }, st))
+      ),
+      !explicitStatus && effectiveStatus ? /*#__PURE__*/React.createElement("div", { style: { fontSize: 11, color: 'var(--text-sub)', marginTop: 4 } },
+        `申込状況が未設定のため、既存の申込日・成立日から「${effectiveStatus}」として表示しています（実際に選択するとここに記録されます）。`
+      ) : null
+    ),
+    dateField('代理店提出日', 'submittedToAgencyDate'),
+    dateField('保険会社受付日', 'insurerReceivedDate'),
+    history.length > 0 ? /*#__PURE__*/React.createElement("div", { style: { fontSize: 11, color: 'var(--text-sub)' } },
+      /*#__PURE__*/React.createElement("div", { style: { fontWeight: 600, marginBottom: 2 } }, "状況変更履歴"),
+      history.map((h, i) => /*#__PURE__*/React.createElement("div", { key: i }, `${(h.changedAt || '').slice(0, 10)}：${h.status}`))
+    ) : null
+  );
+}
 // P6a-2追加：手数料・入金管理ブロック（design doc 3-3・3-4）。原額(enteredAmount)は
 // そのまま保持し、税抜金額だけを内部の基準値として同時に保存する。消費税額・税込金額・
 // 未入金残高は常にその場で計算し、別途保存しない。
@@ -4223,8 +4335,10 @@ function ContractCommissionBlock({ contract, onChange }) {
       `当初の入金予定年月：${commission.originalExpectedPaymentMonth}`,
       commission.originalExpectedPaymentMonth !== commission.expectedPaymentMonth ? '（未入金のため繰越中）' : '')
   );
+  // 最終一括実装指示書10：未入金残高の算出基準（確定額／見込額のどちら）を画面上に明示する。
+  const balanceBasisLabel = commission.confirmed && commission.confirmed.amountExclTax !== null && commission.confirmed.amountExclTax !== undefined ? '確定額基準' : '見込額基準（確定額未入力）';
   const balanceRow = /*#__PURE__*/React.createElement("div", { style: { fontSize: 12.5, fontWeight: 600 } },
-    `⑦未入金残高：${outstandingBalance === null ? '未確認' : outstandingBalance}　／　入金状況：${paymentStatus}`
+    `⑦未入金残高：${outstandingBalance === null ? '未確認' : outstandingBalance}（${balanceBasisLabel}）　／　入金状況：${paymentStatus}`
   );
   const paymentRows = (commission.paymentHistory || []).map(p => {
     const display = nexusCalcTaxDisplay(p.amountExclTax, p.taxRatePercent, p.roundingMethod);
@@ -4338,6 +4452,12 @@ function nexusContractStatusFlags(contract) {
   const deliveryDone = delivery.status === '手渡し済み' || delivery.status === '配達確認済み';
   const isAwaitingCase = !caseItem || caseItem.status !== '準備完了';
   const isAwaitingDocs = docItems.length > 0 && docItems.some(i => i.status !== '準備完了');
+  // 最終一括実装指示書：営業実績は申込日（applicationDate）基準で管理する（契約日・成立日とは
+  // 別集計）。effectiveStatusは申込状況が未設定の旧契約向けの表示専用フォールバック
+  // （nexusDeriveEffectiveApplicationStatus）であり、既存のisNewThisMonth／isAwaitingIssue等
+  // （契約日基準）は後方互換のため変更しない。
+  const applicationMonth = nexusContractApplicationMonth(ct);
+  const effectiveStatus = nexusDeriveEffectiveApplicationStatus(ct);
   return {
     isNewThisMonth: !!contractMonth && contractMonth === thisMonth,
     isAwaitingIssue: !!(ct.applicationDate && !ct.policyIssuedDate),
@@ -4350,14 +4470,28 @@ function nexusContractStatusFlags(contract) {
     // （証券ケース単独の絞り込みは、既存のisAwaitingCaseタブとして別途残す）。
     isAwaitingAnyPrep: isAwaitingCase || isAwaitingDocs,
     isAwaitingDelivery: !deliveryDone,
-    isComplete: paymentStatus === '全額入金済み' && allPrepDone && deliveryDone
+    isComplete: paymentStatus === '全額入金済み' && allPrepDone && deliveryDone,
+    // ここから最終一括実装指示書で追加：申込日・申込状況ベースの分類。
+    isNewApplicationThisMonth: !!applicationMonth && applicationMonth === thisMonth,
+    isAwaitingSubmission: !!effectiveStatus && !NEXUS_SUBMITTED_OR_LATER_STATUSES.includes(effectiveStatus) && !NEXUS_CANCELLED_APPLICATION_STATUSES.includes(effectiveStatus),
+    isSubmittedToAgency: NEXUS_SUBMITTED_OR_LATER_STATUSES.includes(effectiveStatus),
+    isAwaitingDecision: effectiveStatus === '成立待ち',
+    isApproved: effectiveStatus === '成立',
+    isCancelledOrDeclined: NEXUS_CANCELLED_APPLICATION_STATUSES.includes(effectiveStatus)
   };
 }
 // 本番公開後の最終指示書（8タブ構成）に合わせて並び・表記を統一。既存の、より細かい
 // 絞り込み（一部入金・証券ケースのみ）は役割が明確な追加タブとして末尾に残す（削除しない）。
+// 最終一括実装指示書：申込日・送り込み状況ベースのタブを追加（既存タブは削除・変更しない）。
+// 「成立待ち」タブは、新しい明示的な申込状況（isAwaitingDecision）も合わせて判定するよう
+// 拡張した（既存のisAwaitingIssueによる判定はそのまま残るため、既存データの表示は変わらない）。
 const NEXUS_CONTRACT_STATUS_TABS = [
+  { key: 'newApplicationThisMonth', label: '今月の申込', test: f => f.isNewApplicationThisMonth },
   { key: 'newThisMonth', label: '今月の新契約', test: f => f.isNewThisMonth },
-  { key: 'awaitingIssue', label: '成立待ち', test: f => f.isAwaitingIssue },
+  { key: 'awaitingSubmission', label: '送り込み待ち', test: f => f.isAwaitingSubmission },
+  { key: 'submittedToAgency', label: '送り込み済み', test: f => f.isSubmittedToAgency },
+  { key: 'awaitingIssue', label: '成立待ち', test: f => f.isAwaitingIssue || f.isAwaitingDecision },
+  { key: 'approved', label: '成立済み', test: f => f.isApproved },
   { key: 'awaitingPayment', label: '手数料未入金', test: f => f.isAwaitingPayment },
   { key: 'overdueCarryover', label: '前月以前からの未入金', test: f => f.isOverdueCarryover },
   { key: 'awaitingAnyPrep', label: '資料準備待ち', test: f => f.isAwaitingAnyPrep },
@@ -4397,10 +4531,14 @@ function nexusContractListRowValues(row, amountBasis) {
   const splitAmounts = split.mode !== 'none' ? nexusComputeSplitAmounts(ct, amountBasis) : null;
   const splitRatioText = split.mode === 'none' ? '分割なし（100%）' : (split.parties || []).map(p => `${p.partyRef.kind === 'self' ? '自分' : (p.partyRef.name || '相手')}${p.percentage}%`).join('／');
   const splitAmountText = splitAmounts ? splitAmounts.parties.map(p => `${p.partyRef.kind === 'self' ? '自分' : (p.partyRef.name || '相手')}:${p.amount === null ? '未確認' : p.amount.toLocaleString() + '円'}`).join('／') : '-';
+  // 最終一括実装指示書3：一覧の先頭列は申込日を優先する。申込日が無い旧契約は
+  // 「申込日未確認」と表示し、0件・当月実績には含めない（nexusContractApplicationMonth）。
+  const applicationStatusText = nexusDeriveEffectiveApplicationStatus(ct) || '未設定';
   return [
+    { key: 'policyholder', label: '契約者', value: nexusDisplayName(row.customer) },
+    { key: 'applicationDate', label: '申込日', value: ct.applicationDate || '申込日未確認' },
+    { key: 'applicationStatus', label: '申込状況', value: applicationStatusText },
     { key: 'contractDate', label: '契約日', value: ct.date || ct.contractDate || '' },
-    { key: 'policyholder', label: '契約者', value: nexusDisplayName(row.customer) },
-    { key: 'policyholder', label: '契約者', value: nexusDisplayName(row.customer) },
     { key: 'insuredName', label: '被保険者', value: ct.insuredName || nexusDisplayName(row.customer) },
     { key: 'company', label: '保険会社', value: ct.company || '' },
     { key: 'productName', label: '商品名', value: ct.productName || '' },
@@ -4438,9 +4576,9 @@ function NexusNewContractIntakeForm({ customers, onCreateContract, onClose, onSa
   const [newCustomerName, setNewCustomerName] = useState('');
   const [newCustomerType, setNewCustomerType] = useState('個人');
   const [fields, setFields] = useState({
-    applicationDate: '', date: '', policyIssuedDate: '', company: '', productName: '',
+    applicationDate: '', date: '', submittedToAgencyDate: '', insurerReceivedDate: '', policyIssuedDate: '', company: '', productName: '',
     productCategory: '', productCharacteristics: [], insuredName: '', premium: '',
-    paymentCycle: '', applicationNum: '', policyNum: '', acAmount: '', remarks: ''
+    paymentCycle: '', applicationNum: '', policyNum: '', acAmount: '', applicationStatus: '下書き', remarks: ''
   });
   const [errorMsg, setErrorMsg] = useState('');
   const set = k => e => setFields(f => ({ ...f, [k]: e.target.value }));
@@ -4460,7 +4598,10 @@ function NexusNewContractIntakeForm({ customers, onCreateContract, onClose, onSa
   );
   const handleSave = () => {
     if (!canSave) return;
-    const contractFields = { ...fields, acAmount: fields.acAmount === '' ? null : Number(fields.acAmount) };
+    const contractFields = {
+      ...fields, acAmount: fields.acAmount === '' ? null : Number(fields.acAmount),
+      applicationStatusHistory: [{ status: fields.applicationStatus, changedAt: new Date().toISOString() }]
+    };
     const selection = customerMode === 'existing'
       ? { mode: 'existing', customerId: selectedCustomerId }
       : { mode: 'new', name: newCustomerName.trim(), customerType: newCustomerType };
@@ -4515,7 +4656,15 @@ function NexusNewContractIntakeForm({ customers, onCreateContract, onClose, onSa
       ),
       /*#__PURE__*/React.createElement("div", { className: "card", style: { marginBottom: 10, padding: 10 } },
         /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, fontSize: 13, marginBottom: 8 } }, "② 契約の基本情報"),
-        field('申込日', /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", value: fields.applicationDate, onChange: set('applicationDate') })),
+        field('申込日（営業実績・申込ACの基準日）', /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", value: fields.applicationDate, onChange: set('applicationDate') })),
+        field('申込状況', /*#__PURE__*/React.createElement("div", { className: "toggle-group" },
+          NEXUS_APPLICATION_STATUSES.map(st => /*#__PURE__*/React.createElement("button", {
+            key: st, type: "button", className: `toggle-btn ${fields.applicationStatus === st ? 'sel' : ''}`,
+            onClick: () => setFields(f => ({ ...f, applicationStatus: st }))
+          }, st))
+        )),
+        field('代理店提出日', /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", value: fields.submittedToAgencyDate, onChange: set('submittedToAgencyDate') })),
+        field('保険会社受付日', /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", value: fields.insurerReceivedDate, onChange: set('insurerReceivedDate') })),
         field('契約日', /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", value: fields.date, onChange: set('date') })),
         field('契約成立日', /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", value: fields.policyIssuedDate, onChange: set('policyIssuedDate') })),
         field('保険会社', /*#__PURE__*/React.createElement("input", { className: "form-input", value: fields.company, onChange: set('company') })),
@@ -4562,12 +4711,19 @@ function NexusNewContractIntakeForm({ customers, onCreateContract, onClose, onSa
   );
 }
 function NexusContractManagementScreen({ customers, onOpenCustomer, onCreateContract }) {
-  // 初期表示は「今月の新契約」を中心とした業務管理画面とする（最終指示書3-1）。
-  const [activeTab, setActiveTab] = useState('newThisMonth');
+  // 初期表示は申込日基準の「今月の申込」とする（最終一括実装指示書12）。
+  const [activeTab, setActiveTab] = useState('newApplicationThisMonth');
   const [search, setSearch] = useState('');
-  const [sortKey, setSortKey] = useState('contractDateDesc');
+  const [sortKey, setSortKey] = useState('applicationDateDesc');
   const [amountBasis, setAmountBasis] = useState('excl');
   const [showIntake, setShowIntake] = useState(false);
+  // 最終一括実装指示書5：月次ACダッシュボード。月を選んで過去月の実績も確認できる
+  // （デフォルトは今月）。
+  const [dashboardMonth, setDashboardMonth] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  });
+  const dashboard = useMemo(() => nexusComputeMonthlyAcDashboard(customers, dashboardMonth), [customers, dashboardMonth]);
   const rows = useMemo(() => nexusFlattenAllContracts(customers).map(row => ({ ...row, flags: nexusContractStatusFlags(row.contract) })), [customers]);
   const counted = NEXUS_CONTRACT_STATUS_TABS.map(t => ({ ...t, count: rows.filter(r => t.test(r.flags)).length }));
   const activeTabDef = NEXUS_CONTRACT_STATUS_TABS.find(t => t.key === activeTab);
@@ -4585,6 +4741,9 @@ function NexusContractManagementScreen({ customers, onOpenCustomer, onCreateCont
       const eb = (nexusCommissionOf(b.contract).expectedPaymentMonth) || '';
       return ea.localeCompare(eb);
     }
+    if (sortKey === 'applicationDateDesc') {
+      return (b.contract.applicationDate || '').localeCompare(a.contract.applicationDate || '');
+    }
     return (b.contract.date || b.contract.contractDate || '').localeCompare(a.contract.date || a.contract.contractDate || '');
   });
 
@@ -4598,6 +4757,33 @@ function NexusContractManagementScreen({ customers, onOpenCustomer, onCreateCont
   const subHeaderRow = /*#__PURE__*/React.createElement("div", { style: { padding: '0 16px 10px', fontSize: 11.5, color: 'var(--text-sub)' } },
     "新規申込みから成立・手数料入金・資料準備・お客様へのお渡しまでを1画面で管理します。"
   );
+  // 最終一括実装指示書5：月次ACダッシュボード（申込日基準。契約日・成立日ベースの一覧とは別）。
+  const acCell = (label, value, sub) => /*#__PURE__*/React.createElement("div", { style: { minWidth: 120 } },
+    /*#__PURE__*/React.createElement("div", { style: { fontSize: 10.5, color: 'var(--text-sub)' } }, label),
+    /*#__PURE__*/React.createElement("div", { style: { fontSize: 15, fontWeight: 700 } }, value),
+    sub ? /*#__PURE__*/React.createElement("div", { style: { fontSize: 10, color: 'var(--text-sub)' } }, sub) : null
+  );
+  const acYen = n => `${Math.round(n).toLocaleString()}万円`;
+  const dashboardCard = /*#__PURE__*/React.createElement("div", { className: "card", style: { margin: '0 16px 10px', padding: 10 } },
+    /*#__PURE__*/React.createElement("div", { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 } },
+      /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, fontSize: 13 } }, "📈 月次ACダッシュボード（申込日基準）"),
+      /*#__PURE__*/React.createElement("input", { type: "month", className: "form-input", style: { width: 140, fontSize: 12 }, value: dashboardMonth, onChange: e => setDashboardMonth(e.target.value) })
+    ),
+    /*#__PURE__*/React.createElement("div", { style: { display: 'flex', flexWrap: 'wrap', gap: 10, overflowX: 'auto' } },
+      acCell('今月の申込件数', `${dashboard.applicationCount}件`),
+      acCell('今月の申込AC', acYen(dashboard.applicationAcTotal)),
+      acCell('今月の送り込み済み件数', `${dashboard.submittedCount}件`, '代理店提出済み以降（取消・不成立は除く）'),
+      acCell('今月の送り込み済みAC', acYen(dashboard.submittedAcTotal)),
+      acCell('今月申込分の成立件数', `${dashboard.approvedCount}件`),
+      acCell('今月申込分の成立AC', acYen(dashboard.approvedAcTotal)),
+      acCell('今月申込分の成立待ちAC', acYen(dashboard.awaitingDecisionAcTotal)),
+      acCell('取消・不成立AC', acYen(dashboard.cancelledAcTotal), `${dashboard.cancelledCount}件（有効な申込AC等からは除外済み）`),
+      acCell('AC未入力件数', `${dashboard.acMissingCount}件`, '0円ではなく未入力として別表示')
+    ),
+    /*#__PURE__*/React.createElement("div", { style: { fontSize: 10.5, color: 'var(--text-sub)', marginTop: 6 } },
+      "※申込AC・送り込み済みAC・成立ACはそれぞれ状態別の内訳です。合算した「総AC」ではありません。"
+    )
+  );
   const tabsRow = /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 6, marginBottom: 10, padding: '0 16px' } },
     counted.map(t => /*#__PURE__*/React.createElement("button", {
       key: t.key, type: "button", className: `toggle-btn ${activeTab === t.key ? 'sel' : ''}`, style: { flex: 'none' }, onClick: () => setActiveTab(t.key)
@@ -4609,6 +4795,7 @@ function NexusContractManagementScreen({ customers, onOpenCustomer, onCreateCont
   );
   const sortRow = /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 6, margin: '10px 16px' } },
     /*#__PURE__*/React.createElement("select", { className: "form-select", value: sortKey, onChange: e => setSortKey(e.target.value) },
+      /*#__PURE__*/React.createElement("option", { value: "applicationDateDesc" }, "申込日が新しい順"),
       /*#__PURE__*/React.createElement("option", { value: "contractDateDesc" }, "契約日が新しい順"),
       /*#__PURE__*/React.createElement("option", { value: "expectedPaymentAsc" }, "入金予定が早い順")
     ),
@@ -4617,7 +4804,8 @@ function NexusContractManagementScreen({ customers, onOpenCustomer, onCreateCont
       /*#__PURE__*/React.createElement("option", { value: "incl" }, "税込で表示")
     )
   );
-  const columnLabels = ['No.', '契約者', '契約日', '被保険者', '保険会社', '商品名', '商品種類', '商品特性', '証券番号', '申込番号', '保険料', '払込方法', 'AC', '成立日', '証券ケース', '資料準備状況', 'お渡し状況', '手数料見込額', '代理店確定手数料', '入金予定年月', '実際の入金年月日', '入金額', '未入金残高', '分割割合', '分割後手数料', '備考'];
+  // 最終一括実装指示書12：先頭列は申込日を優先し、契約日・成立日は別列として残す。
+  const columnLabels = ['No.', '契約者', '申込日', '申込状況', '契約日', '被保険者', '保険会社', '商品名', '商品種類', '商品特性', '証券番号', '申込番号', '保険料', '払込方法', 'AC', '成立日', '証券ケース', '資料準備状況', 'お渡し状況', '手数料見込額', '代理店確定手数料', '入金予定年月', '実際の入金年月日', '入金額', '未入金残高', '分割割合', '分割後手数料', '備考'];
   // iPhoneでも紙の一覧表と同じ26項目を確認できるよう、横スクロール可能な表形式で一覧表示する
   // （タップすると顧客詳細の契約編集へ遷移し、そちらで編集する＝一覧と編集画面を併用）。
   const table = /*#__PURE__*/React.createElement("div", { style: { overflowX: 'auto', margin: '0 16px 16px', border: '1px solid var(--border)', borderRadius: 8 } },
@@ -4652,7 +4840,7 @@ function NexusContractManagementScreen({ customers, onOpenCustomer, onCreateCont
       setActiveTab('all');
     }
   }) : null;
-  return /*#__PURE__*/React.createElement("div", null, headerRow, subHeaderRow, tabsRow, searchRow, sortRow, emptyState, table, intakeForm);
+  return /*#__PURE__*/React.createElement("div", null, headerRow, subHeaderRow, dashboardCard, tabsRow, searchRow, sortRow, emptyState, table, intakeForm);
 }
 
 // ── P6b：職域別営業分析（design doc 4章のMVP実装） ──────────────────────────
