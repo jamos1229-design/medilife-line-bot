@@ -18224,6 +18224,14 @@ const NEXUS_MAINTENANCE_SUBTYPE_GROUPS = [{
     { key: 'reinstatement', label: '復活・失効対応' },
     { key: 'other', label: 'その他' }
   ]
+}, {
+  // P6a-4追加：新契約・手数料入金・証券お渡し管理（design doc 1-5）。既存のmaintenance
+  // サブタイプの仕組みをそのまま再利用し、新しい専用の活動種別は追加しない。
+  label: '証券お渡し・入金確認',
+  items: [
+    { key: 'securities_delivery', label: '証券お渡し' },
+    { key: 'payment_confirmation', label: '入金確認' }
+  ]
 }];
 const NEXUS_MAINTENANCE_STATUSES = ['受付', '手続中', '完了'];
 const NEXUS_MAINTENANCE_DECLINE_REASONS = ['保険料が高い', '他社へ切替', '保障が不要になった', '家計見直し', '資金が必要', '契約内容への不満', '担当者・会社への不満', 'その他'];
@@ -22228,7 +22236,23 @@ function TaskForm({
       whiteSpace: 'nowrap'
     }
   }, "顧客詳細へ →"));
-  return /*#__PURE__*/React.createElement(React.Fragment, null, linkedCustomerBanner, /*#__PURE__*/React.createElement("div", {
+  // P6a-4追加：タスクを契約単位で追跡できるよう、aiContractIdによる契約への紐付けを
+  // 追加する（design doc 5章：既存のdealIdは常に空文字列のまま使われていないため、
+  // 新しいcontractIdフィールドを使う）。関連する顧客が選ばれていて、かつその顧客に
+  // aiContractIdを持つ契約がある場合のみ選択肢を表示する。
+  const linkableContracts = linkedCustomer ? (linkedCustomer.contracts || []).filter(ct => ct.aiContractId) : [];
+  const contractLinkSelector = linkedCustomer && linkableContracts.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: { marginBottom: 10 }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "関連する契約（任意）"), /*#__PURE__*/React.createElement("select", {
+    className: "form-select",
+    value: form.contractId || '',
+    onChange: e => s('contractId')(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", { value: "" }, "紐付けなし"), linkableContracts.map(ct => /*#__PURE__*/React.createElement("option", {
+    key: ct.aiContractId, value: ct.aiContractId
+  }, `${ct.company || '保険会社未入力'}／${ct.productName || ct.type || '商品名未入力'}（${ct.aiContractId}）`))));
+  return /*#__PURE__*/React.createElement(React.Fragment, null, linkedCustomerBanner, contractLinkSelector, /*#__PURE__*/React.createElement("div", {
     className: "form-group"
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
