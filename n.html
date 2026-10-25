@@ -13016,6 +13016,44 @@ function nexusMergeCustomers(primary, secondary) {
   merged.memo = [...new Set(memoParts)].join('\n');
   return merged;
 }
+// P0d追加（統合の履歴化）：統合履歴（nexus_merge_history_v1）の読み書き。useLSの
+// リアクティブなstateを経由せず、既存のml_dot_ref_map_v1等と同じ「単純なストア」として
+// 直接localStorageを読み書きする。
+const NEXUS_MERGE_HISTORY_KEY = 'nexus_merge_history_v1';
+function nexusReadMergeHistory() {
+  try {
+    const raw = localStorage.getItem(NEXUS_MERGE_HISTORY_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    return [];
+  }
+}
+// 履歴エントリを追加する。書き込み・読み戻し検証に失敗した場合はfalseを返す
+// （呼び出し側は、記録できなかった統合を実行しない＝記録の無い＝取り消せない統合を
+// 作らないため）。
+function nexusAppendMergeHistory(entry) {
+  const list = nexusReadMergeHistory();
+  const next = [...list, entry];
+  try {
+    const json = JSON.stringify(next);
+    localStorage.setItem(NEXUS_MERGE_HISTORY_KEY, json);
+    return localStorage.getItem(NEXUS_MERGE_HISTORY_KEY) === json;
+  } catch (e) {
+    return false;
+  }
+}
+function nexusUpdateMergeHistoryEntry(id, patch) {
+  const list = nexusReadMergeHistory();
+  const next = list.map(h => h.id === id ? { ...h, ...patch } : h);
+  try {
+    const json = JSON.stringify(next);
+    localStorage.setItem(NEXUS_MERGE_HISTORY_KEY, json);
+    return localStorage.getItem(NEXUS_MERGE_HISTORY_KEY) === json;
+  } catch (e) {
+    return false;
+  }
+}
 function NexusCustomerMergeScreen({
   customerA,
   customerB,
@@ -13029,8 +13067,28 @@ function NexusCustomerMergeScreen({
   const displayName = c => c.customerType === '法人' ? c.corporateName || c.name : c.name;
   const summary = c => [c.phone, c.address, (c.contracts || []).length + '件の契約', (c.suspects || []).length + '件のサスペクト'].filter(Boolean).join(' / ');
   const handleConfirm = () => {
-    if (!window.confirm(`「${displayName(secondary)}」を「${displayName(primary)}」に統合します。統合される側の顧客データは削除されます。この操作は取り消せません。よろしいですか？`)) return;
+    // P0d追加（統合の履歴化）：統合は物理削除ではなく、統合前の内容を履歴に記録した上で
+    // 行う。統合先（primary）に合成された内容は「取り消し」では元に戻らないため、
+    // その旨を確認ダイアログにも明記する。
+    if (!window.confirm(`「${displayName(secondary)}」を「${displayName(primary)}」に統合します。\n\n統合される側（${displayName(secondary)}）の統合前の内容は履歴に記録され、後から統合履歴画面で元の顧客として復帰させることができます。ただし、統合先（${displayName(primary)}）に合成された契約・サスペクト等の内容は、取り消しでは元に戻りません。\n\nよろしいですか？`)) return;
     const merged = nexusMergeCustomers(primary, secondary);
+    const historyEntry = {
+      id: uid(),
+      mergedAt: new Date().toISOString(),
+      primaryId: primary.id,
+      secondaryId: secondary.id,
+      primaryName: displayName(primary),
+      secondaryName: displayName(secondary),
+      primarySnapshotBeforeMerge: primary,
+      secondarySnapshotBeforeMerge: secondary,
+      mergedSnapshot: merged,
+      undone: false,
+      undoneAt: null
+    };
+    if (!nexusAppendMergeHistory(historyEntry)) {
+      alert('統合履歴の記録に失敗したため、統合を中止しました。既存データは変更されていません。');
+      return;
+    }
     const next = customers.filter(c => c.id !== secondary.id).map(c => {
       if (c.id === primary.id) return merged;
       let patch = null;
@@ -13146,10 +13204,52 @@ function NexusCustomerMergeScreen({
     style: {
       color: 'var(--danger)'
     }
-  }, "削除される側：", displayName(secondary))), /*#__PURE__*/React.createElement("button", {
+  }, "一覧から無くなる側（統合履歴から復帰可能）：", displayName(secondary))), /*#__PURE__*/React.createElement("button", {
     className: "btn btn-primary btn-full",
     onClick: handleConfirm
   }, "「", displayName(secondary), "」を「", displayName(primary), "」に統合する")));
+}
+// P0d追加：統合履歴の一覧・取り消し画面。過去の統合操作（いつ・誰を・誰に統合したか）を
+// 確認できるようにし、統合される側（secondary）のレコードだけを元の一覧へ復帰させる
+// 「取り消し」を提供する。統合先（primary）に合成された内容（契約・サスペクト等）は
+// 技術的に逆再生が難しいため、取り消しの対象にはしない（画面にもその旨を明記する）。
+function NexusMergeHistoryScreen({ customers, setCustomers, onClose }) {
+  const [history, setHistory] = useState(() => nexusReadMergeHistory());
+  const handleUndo = entry => {
+    if (!window.confirm(`「${entry.secondaryName}」を、統合前の内容で一覧に復帰させます。\n\n統合先「${entry.primaryName}」に合成された契約・サスペクト等の内容は、この操作では元に戻りません。必要であれば手動でご確認・修正してください。\n\nよろしいですか？`)) return;
+    if (customers.some(c => c.id === entry.secondarySnapshotBeforeMerge.id)) {
+      alert('同じIDの顧客が既に存在するため、取り消せません。');
+      return;
+    }
+    setCustomers(prev => [...prev, entry.secondarySnapshotBeforeMerge]);
+    const ok = nexusUpdateMergeHistoryEntry(entry.id, { undone: true, undoneAt: new Date().toISOString() });
+    setHistory(nexusReadMergeHistory());
+    if (!ok) {
+      alert('顧客の復帰は完了しましたが、履歴の更新記録に失敗しました。履歴画面の表示が最新でない場合があります。');
+    } else {
+      alert(`「${entry.secondaryName}」を一覧に復帰させました。`);
+    }
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: "full-screen"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "full-header"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-sm",
+    onClick: onClose
+  }, "← 戻る"), /*#__PURE__*/React.createElement("div", null, "統合履歴")), history.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: { padding: 16, fontSize: 13, color: 'var(--text-sub)' }
+  }, "統合履歴はまだありません。") : [...history].reverse().map(h => /*#__PURE__*/React.createElement("div", {
+    key: h.id,
+    className: "card",
+    style: { margin: '8px 16px', padding: 10, fontSize: 13 }
+  }, /*#__PURE__*/React.createElement("div", null, new Date(h.mergedAt).toLocaleString('ja-JP')), /*#__PURE__*/React.createElement("div", null, `「${h.secondaryName}」→「${h.primaryName}」に統合`), h.undone ? /*#__PURE__*/React.createElement("div", {
+    style: { color: 'var(--text-sub)', marginTop: 4 }
+  }, `取り消し済み（${new Date(h.undoneAt).toLocaleString('ja-JP')}）`) : /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-sm",
+    style: { marginTop: 6 },
+    onClick: () => handleUndo(h)
+  }, "この統合を取り消す（統合される側のみ復帰）"))));
 }
 function CustomerListTab({
   customers,
@@ -13169,6 +13269,7 @@ function CustomerListTab({
   const [mergeMode, setMergeMode] = useState(false);
   const [mergeSelection, setMergeSelection] = useState([]);
   const [mergePair, setMergePair] = useState(null);
+  const [showMergeHistory, setShowMergeHistory] = useState(false);
   const toggleMergeMode = () => {
     setMergeMode(v => !v);
     setMergeSelection([]);
@@ -13329,7 +13430,19 @@ function CustomerListTab({
       cursor: 'pointer',
       fontWeight: 600
     }
-  }, mergeMode ? '✕ 統合をやめる' : '🔀 重複を統合'), /*#__PURE__*/React.createElement("div", {
+  }, mergeMode ? '✕ 統合をやめる' : '🔀 重複を統合'), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setShowMergeHistory(true),
+    style: {
+      fontSize: 12,
+      padding: '4px 10px',
+      borderRadius: 8,
+      border: '1.5px solid var(--border)',
+      background: '#fff',
+      color: 'var(--text-sub)',
+      cursor: 'pointer',
+      fontWeight: 600
+    }
+  }, "📜統合履歴"), /*#__PURE__*/React.createElement("div", {
     style: {
       position: 'relative'
     }
@@ -13552,6 +13665,10 @@ function CustomerListTab({
       setMergeMode(false);
       setMergeSelection([]);
     }
+  }), showMergeHistory && /*#__PURE__*/React.createElement(NexusMergeHistoryScreen, {
+    customers: customers,
+    setCustomers: setCustomers,
+    onClose: () => setShowMergeHistory(false)
   }));
 }
 
