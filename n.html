@@ -2663,6 +2663,18 @@ function nexusContractAcAmount(contract) {
   const n = Number(v);
   return isNaN(n) ? null : n;
 }
+// 【不具合修正】nexusContractAcAmountと同じ優先順位（計算結果優先、旧手入力acAmountに
+// フォールバック）だが、万円に丸めず円単位の精度を保つ版。目標達成率（5.6%等、小数点以下を
+// 要する計算）は、万円に丸めた値では精度が不足するため、この円単位の値を使う（表示用の
+// 「○万円」セルは既存どおりnexusContractAcAmountのままで変更しない）。
+function nexusContractAcAmountYen(contract) {
+  const yen = nexusComputeEstimatedAcYen(contract);
+  if (yen !== null) return yen;
+  const v = contract.acAmount;
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return isNaN(n) ? null : n * 10000;
+}
 // 月次ACダッシュボード（指示書5）。申込日が指定月に属する契約（＝その月のコホート）を対象に、
 // 送り込み済み／成立／成立待ち／取消・不成立の各ACを、現在の申込状況で振り分けて集計する。
 // 申込AC・送り込み済みAC・成立ACはそれぞれ状態別の内訳であり、合算して「総AC」にはしない
@@ -2719,6 +2731,17 @@ function nexusComputeMonthlyAcDashboard(customers, yearMonth) {
 function nexusComputeUnifiedMonthlyRevenueDashboard(customers, opportunities, yearMonth) {
   const base = nexusComputeMonthlyAcDashboard(customers, yearMonth);
   const cohort = nexusFlattenAllContracts(customers).filter(r => nexusContractApplicationMonth(r.contract) === yearMonth);
+  // 【不具合修正】目標達成率（申込AC÷月間AC目標、成立AC÷月間AC目標）は、既存の「○万円」
+  // 表示セル（nexusContractAcAmount、万円に四捨五入）をそのまま使うと精度が不足するため
+  // （例：280,000円を5,000,000円で割った5.6%のような小数点以下の結果が必要）、円単位の
+  // 精度を保つnexusContractAcAmountYenで別途正確に合計する。既存の万円表示セルの値・丸め方は
+  // 一切変更しない。
+  const sumAcYen = list => list.reduce((s, r) => s + (nexusContractAcAmountYen(r.contract) || 0), 0);
+  const awaitingDecisionRows = cohort.filter(r => nexusDeriveEffectiveApplicationStatus(r.contract) === '成立待ち');
+  const approvedRows = cohort.filter(r => nexusDeriveEffectiveApplicationStatus(r.contract) === '成立');
+  const applicationAcYenTotal = sumAcYen(cohort);
+  const awaitingDecisionAcYenTotal = sumAcYen(awaitingDecisionRows);
+  const approvedAcYenTotal = sumAcYen(approvedRows);
   let confirmedCommissionTotal = 0, confirmedCommissionCount = 0;
   cohort.forEach(r => {
     const commission = nexusCommissionOf(r.contract);
@@ -2742,15 +2765,24 @@ function nexusComputeUnifiedMonthlyRevenueDashboard(customers, opportunities, ye
   const openOpportunities = (opportunities || []).filter(o => o.status === 'open');
   const dedupedOpportunities = openOpportunities.filter(o => !(o.customerId && contractedCustomerIds.has(o.customerId)));
   const pipelineExcludedCount = openOpportunities.length - dedupedOpportunities.length;
-  const pipelineExpectedAcTotal = dedupedOpportunities.reduce((s, o) => s + (Number(o.expectedRevenue) || 0), 0);
+  // 【不具合修正】「見込ACが未入力」と「金額0円が実際に入力されている」を区別する
+  // （算出できない金額を0円と決めつけない）。expectedRevenueが数値として入力されている
+  // 案件だけを合計対象とし、未入力件数は別途カウントして画面に表示できるようにする。
+  const hasEnteredAmount = o => o.expectedRevenue !== null && o.expectedRevenue !== undefined && o.expectedRevenue !== '' && !isNaN(Number(o.expectedRevenue));
+  const pipelineWithAmount = dedupedOpportunities.filter(hasEnteredAmount);
+  const pipelineMissingAmountCount = dedupedOpportunities.length - pipelineWithAmount.length;
+  const pipelineExpectedAcTotal = pipelineWithAmount.reduce((s, o) => s + Number(o.expectedRevenue), 0);
   return {
     yearMonth,
     applicationCount: base.applicationCount,
     applicationAcTotal: base.applicationAcTotal,
+    applicationAcYenTotal,
     awaitingDecisionCount: base.awaitingDecisionCount,
     awaitingDecisionAcTotal: base.awaitingDecisionAcTotal,
+    awaitingDecisionAcYenTotal,
     approvedCount: base.approvedCount,
     approvedAcTotal: base.approvedAcTotal,
+    approvedAcYenTotal,
     declinedCount: base.declinedCount,
     declinedAcTotal: base.declinedAcTotal,
     cancelledCount: base.cancelledCount,
@@ -2763,6 +2795,7 @@ function nexusComputeUnifiedMonthlyRevenueDashboard(customers, opportunities, ye
     actualPaidCount,
     pipelineExpectedAcTotal,
     pipelineExpectedCount: dedupedOpportunities.length,
+    pipelineMissingAmountCount,
     pipelineExcludedCount
   };
 }
@@ -5224,8 +5257,13 @@ function NexusContractManagementScreen({ customers, opportunities, sales, onOpen
   // 【不具合修正・統合】ホーム・契約・タスク画面で数字が一致するよう、確定手数料・実入金額・
   // 商談中の見込ACも同じ共通関数（nexusComputeUnifiedMonthlyRevenueDashboard）から取得する。
   const unified = useMemo(() => nexusComputeUnifiedMonthlyRevenueDashboard(customers, opportunities, dashboardMonth), [customers, opportunities, dashboardMonth]);
-  const monthlyTarget = Number((sales || {}).target) || 0;
-  const achievementPct = monthlyTarget > 0 ? Math.round(unified.confirmedCommissionTotal / monthlyTarget * 100) : null;
+  // 【不具合修正】月間500万円は「確定手数料の目標」ではなく「AC目標」として管理する。
+  // 申込AC（取消・不成立を含むグロス）と成立ACは明確に区別し、それぞれの達成率を別々に
+  // 表示する（確定手数料・実入金額はAC目標の達成率計算には使わない）。精度のため、
+  // 万円に丸めたdashboard側の値ではなく円単位のunified.*AcYenTotalを使う。
+  const monthlyAcTarget = Number((sales || {}).target) || 0;
+  const applicationAcAchievementPct = monthlyAcTarget > 0 ? Math.round(unified.applicationAcYenTotal / monthlyAcTarget * 1000) / 10 : null;
+  const approvedAcAchievementPct = monthlyAcTarget > 0 ? Math.round(unified.approvedAcYenTotal / monthlyAcTarget * 1000) / 10 : null;
   const rows = useMemo(() => nexusFlattenAllContracts(customers).map(row => ({ ...row, flags: nexusContractStatusFlags(row.contract) })), [customers]);
   // 最終一括実装指示書3：月次ACダッシュボードの対象年月と、契約一覧の「今月の新契約」タブの
   // 対象年月を共通化する（ダッシュボードの月選択と一覧が連動する）。横断管理タブ（手数料
@@ -5299,12 +5337,15 @@ function NexusContractManagementScreen({ customers, opportunities, sales, onOpen
   // nexusComputeUnifiedMonthlyRevenueDashboardの戻り値を表示する。ACは万円、確定手数料・
   // 実入金額・目標は円で、単位も対象期間も明確に分けて表示する（ACと実際の手数料の混同防止）。
   const unifiedCard = /*#__PURE__*/React.createElement("div", { className: "card", style: { margin: '0 16px 10px', padding: 10 } },
-    /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, fontSize: 13, marginBottom: 8 } }, "💰 契約実績・入金・商談中AC（ホーム・タスクと共通集計）"),
+    /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, fontSize: 13, marginBottom: 8 } }, "💰 月間AC目標・契約実績（ホーム・タスクと共通集計）"),
     /*#__PURE__*/React.createElement("div", { style: { display: 'flex', flexWrap: 'wrap', gap: 10, overflowX: 'auto' } },
+      acCell('月間AC目標', monthlyAcTarget > 0 ? fmtYenNum(monthlyAcTarget) : '未設定', 'タスク画面の「売上トラッカー」から設定できます'),
+      monthlyAcTarget > 0 ? acCell('申込AC達成率', `${applicationAcAchievementPct}%`, `申込AC ${fmtYenNum(unified.applicationAcYenTotal)}（取消・不成立を含むグロス）`) : null,
+      monthlyAcTarget > 0 ? acCell('成立AC達成率', `${approvedAcAchievementPct}%`, `成立AC ${fmtYenNum(unified.approvedAcYenTotal)}`) : null,
+      acCell('成立待ちAC', fmtYenNum(unified.awaitingDecisionAcYenTotal), `${unified.awaitingDecisionCount}件`),
+      acCell('商談中の見込AC', fmtYenNum(unified.pipelineExpectedAcTotal), `商談データ基準・${unified.pipelineExpectedCount}件${unified.pipelineMissingAmountCount > 0 ? `（うち金額未入力${unified.pipelineMissingAmountCount}件）` : ''}${unified.pipelineExcludedCount > 0 ? `（申込済みのため${unified.pipelineExcludedCount}件は二重計上を避けて除外）` : ''}`),
       acCell('確定手数料合計', fmtYenNum(unified.confirmedCommissionTotal), `申込月基準・${unified.confirmedCommissionCount}件（代理店確定額入力済みのみ）`),
-      acCell('実入金額合計', fmtYenNum(unified.actualPaidTotal), `実入金日基準・${unified.actualPaidCount}件（申込月とは別の対象期間）`),
-      acCell('商談中の見込AC', fmtYenNum(unified.pipelineExpectedAcTotal), `商談データ基準・${unified.pipelineExpectedCount}件${unified.pipelineExcludedCount > 0 ? `（申込済みのため${unified.pipelineExcludedCount}件は二重計上を避けて除外）` : ''}`),
-      monthlyTarget > 0 ? acCell('目標達成率', `${achievementPct}%`, `確定手数料 ${fmtYenNum(unified.confirmedCommissionTotal)} ／ 月間目標 ${fmtYenNum(monthlyTarget)}`) : acCell('月間目標', '未設定', 'タスク画面の「売上トラッカー」から設定できます')
+      acCell('実入金額合計', fmtYenNum(unified.actualPaidTotal), `実入金日基準・${unified.actualPaidCount}件（申込月とは別の対象期間）`)
     )
   );
   // 最終一括実装指示書3：「選択月の申込実績」（ダッシュボードの月と連動するタブ）と
@@ -13913,18 +13954,23 @@ function NexusSalesKpiCard({
   const kpi = nexusActivityKpi(activityLogs, range.start, range.end);
   const referralAcquiredCustomers = nexusReferralAcquiredCustomers(customers, range.start, range.end);
   const referralAcquired = referralAcquiredCustomers.length;
+  // 【不具合修正②】ホーム画面の主要KPIから、契約データと連動しない旧手入力の売上
+  // （sales.current・タスクのexpectedRevenue集計）を外す。数値そのものは削除せず、
+  // 下の「旧データ確認」欄（折りたたみ）に残して参照・照合できるようにする。
   const pipelineExpectedRevenue = (tasks || []).filter(t => !t.completed && t.salesRank && t.expectedRevenue).reduce((s, t) => s + (Number(t.expectedRevenue) || 0), 0);
+  const [showLegacyRevenue, setShowLegacyRevenue] = useState(false);
   const target = Number((sales || {}).target) || 0;
   const current = Number((sales || {}).current) || 0;
-  const remaining = Math.max(0, target - current);
-  // 【不具合修正・統合】ホーム・契約・タスク画面で集計元が分かれていた問題に対応。
+  // 【不具合修正①③・統合】ホーム・契約・タスク画面で集計元が分かれていた問題に対応。
   // 契約データ（customers[].contracts[]）を正本として、タスク画面（SalesTracker）・
-  // 契約一覧画面（NexusContractManagementScreen）と同じ共通関数から確定手数料・実入金額・
-  // 商談中の見込ACを取得する。上のpipelineExpectedRevenue／current（sales.current）は
-  // 既存の手入力データとして削除せず、下に「参考（手入力）」として残す。
+  // 契約一覧画面（NexusContractManagementScreen）と同じ共通関数から申込AC・成立AC・
+  // 確定手数料・実入金額・商談中の見込ACを取得する。月間500万円は確定手数料ではなく
+  // 「AC目標」として扱い、申込AC達成率・成立AC達成率をそれぞれ別に算出する。
   const unifiedYm = nexusCurrentYm();
   const unified = nexusComputeUnifiedMonthlyRevenueDashboard(customers, opportunities, unifiedYm);
-  const unifiedAchievementPct = target > 0 ? Math.round(unified.confirmedCommissionTotal / target * 100) : null;
+  const monthlyAcTarget = target;
+  const applicationAcAchievementPct = monthlyAcTarget > 0 ? Math.round(unified.applicationAcYenTotal / monthlyAcTarget * 1000) / 10 : null;
+  const approvedAcAchievementPct = monthlyAcTarget > 0 ? Math.round(unified.approvedAcYenTotal / monthlyAcTarget * 1000) / 10 : null;
   const periodChips = /*#__PURE__*/React.createElement("div", {
     className: "filter-chips",
     style: {
@@ -14024,35 +14070,43 @@ function NexusSalesKpiCard({
       color: 'var(--text-sub)'
     }
   }, "1商談あたり", r.revenuePerDeal.toLocaleString(), "円")))));
-  const salesRow = /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexWrap: 'wrap',
-      gap: 8,
-      marginTop: 10,
-      fontSize: 12,
-      color: 'var(--text-sub)'
-    }
-  }, /*#__PURE__*/React.createElement("span", null, "見込み売上（オープン案件・タスクの手入力）：", pipelineExpectedRevenue.toLocaleString(), "円"), target > 0 && /*#__PURE__*/React.createElement("span", null, "／確定売上（参考・手入力の旧値）：", current.toLocaleString(), "円／目標：", target.toLocaleString(), "円／残り：", remaining.toLocaleString(), "円"));
-  // 【不具合修正・統合】契約データ（customers[].contracts[]）を正本とした、タスク画面・
-  // 契約一覧画面と同じ定義・同じ対象期間の数字（nexusComputeUnifiedMonthlyRevenueDashboard）。
-  // 上のsalesRow（手入力の旧値）は消さず、その下に正式な集計として別枠で表示する。
-  const unifiedRow = /*#__PURE__*/React.createElement("div", {
-    style: { marginTop: 10, padding: '8px 10px', borderRadius: 8, background: 'var(--accent-light, #EFF6FF)', fontSize: 12 }
+  // 【不具合修正②⑥】ホーム画面の主要KPI。優先順位は①月間AC目標②申込ACと達成率③成立ACと
+  // 達成率④成立待ちAC⑤商談中の見込AC⑥確定手数料⑦実入金額（指示書⑥のまま）。金額・進捗・
+  // 単位が一目でわかるタイル形式にし、長文の説明は添えない。
+  const kpiTile = (label, value, sub) => /*#__PURE__*/React.createElement("div", {
+    style: { background: 'var(--bg)', borderRadius: 10, padding: '8px 10px', minWidth: 0 }
   },
-    /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, marginBottom: 4 } }, `📋 契約実績（${unifiedYm}・契約データ基準）`),
-    /*#__PURE__*/React.createElement("div", { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
-      /*#__PURE__*/React.createElement("span", null, "申込AC（申込日基準）：", Math.round(unified.applicationAcTotal).toLocaleString(), "万円"),
-      /*#__PURE__*/React.createElement("span", null, "成立待ちAC：", Math.round(unified.awaitingDecisionAcTotal).toLocaleString(), "万円"),
-      /*#__PURE__*/React.createElement("span", null, "成立AC：", Math.round(unified.approvedAcTotal).toLocaleString(), "万円")
+    /*#__PURE__*/React.createElement("div", { style: { fontSize: 10.5, color: 'var(--text-sub)', fontWeight: 600 } }, label),
+    /*#__PURE__*/React.createElement("div", { style: { fontSize: 16, fontWeight: 800 } }, value),
+    sub ? /*#__PURE__*/React.createElement("div", { style: { fontSize: 10, color: 'var(--text-sub)', marginTop: 1 } }, sub) : null
+  );
+  const unifiedRow = /*#__PURE__*/React.createElement("div", {
+    style: { marginTop: 10 }
+  },
+    /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, fontSize: 12.5, marginBottom: 6 } }, `📋 ${unifiedYm}の営業実績（契約データ基準）`),
+    /*#__PURE__*/React.createElement("div", { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 } },
+      kpiTile('① 月間AC目標', monthlyAcTarget > 0 ? `¥${monthlyAcTarget.toLocaleString()}` : '未設定', '「設定」から変更できます'),
+      monthlyAcTarget > 0
+        ? kpiTile('② 申込AC達成率', `${applicationAcAchievementPct}%`, `¥${Math.round(unified.applicationAcYenTotal).toLocaleString()}（取消・不成立含む）`)
+        : kpiTile('② 申込AC', `¥${Math.round(unified.applicationAcYenTotal).toLocaleString()}`, '取消・不成立を含むグロス'),
+      monthlyAcTarget > 0
+        ? kpiTile('③ 成立AC達成率', `${approvedAcAchievementPct}%`, `¥${Math.round(unified.approvedAcYenTotal).toLocaleString()}`)
+        : kpiTile('③ 成立AC', `¥${Math.round(unified.approvedAcYenTotal).toLocaleString()}`, `${unified.approvedCount}件`),
+      kpiTile('④ 成立待ちAC', `¥${Math.round(unified.awaitingDecisionAcYenTotal).toLocaleString()}`, `${unified.awaitingDecisionCount}件`),
+      kpiTile('⑤ 商談中の見込AC', `¥${Math.round(unified.pipelineExpectedAcTotal).toLocaleString()}`, `${unified.pipelineExpectedCount}件${unified.pipelineMissingAmountCount > 0 ? `・未入力${unified.pipelineMissingAmountCount}件` : ''}${unified.pipelineExcludedCount > 0 ? `・除外${unified.pipelineExcludedCount}件` : ''}`),
+      kpiTile('⑥ 確定手数料', `¥${Math.round(unified.confirmedCommissionTotal).toLocaleString()}`, `${unified.confirmedCommissionCount}件`),
+      kpiTile('⑦ 実入金額', `¥${Math.round(unified.actualPaidTotal).toLocaleString()}`, `${unified.actualPaidCount}件（入金日基準）`)
     ),
-    /*#__PURE__*/React.createElement("div", { style: { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4 } },
-      /*#__PURE__*/React.createElement("span", null, "確定手数料合計（申込月基準・", unified.confirmedCommissionCount, "件）：", Math.round(unified.confirmedCommissionTotal).toLocaleString(), "円"),
-      /*#__PURE__*/React.createElement("span", null, "実入金額合計（実入金日基準・", unified.actualPaidCount, "件）：", Math.round(unified.actualPaidTotal).toLocaleString(), "円"),
-      /*#__PURE__*/React.createElement("span", null, "商談中の見込AC（商談データ基準・", unified.pipelineExpectedCount, "件", unified.pipelineExcludedCount > 0 ? `・申込済み${unified.pipelineExcludedCount}件は二重計上防止で除外` : '', "）：", Math.round(unified.pipelineExpectedAcTotal).toLocaleString(), "円")
-    ),
-    target > 0 && /*#__PURE__*/React.createElement("div", { style: { marginTop: 4, fontWeight: 700 } },
-      `目標達成率：${unifiedAchievementPct}％（確定手数料 ${Math.round(unified.confirmedCommissionTotal).toLocaleString()}円 ／ 月間目標 ${target.toLocaleString()}円）`
+    /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => setShowLegacyRevenue(v => !v),
+      style: { marginTop: 8, background: 'none', border: 'none', color: 'var(--text-sub)', fontSize: 11, cursor: 'pointer', textDecoration: 'underline', padding: 0 }
+    }, showLegacyRevenue ? '旧データ確認を閉じる ▲' : '旧データ確認（契約データと連動していない手入力値） ▼'),
+    showLegacyRevenue && /*#__PURE__*/React.createElement("div", {
+      style: { marginTop: 6, padding: '8px 10px', borderRadius: 8, background: 'var(--bg)', fontSize: 11.5, color: 'var(--text-sub)' }
+    },
+      /*#__PURE__*/React.createElement("div", null, `旧・確定売上（手入力・契約データとは連動していません）：¥${current.toLocaleString()}`),
+      /*#__PURE__*/React.createElement("div", null, `旧・見込み売上（オープン案件・タスクの手入力）：¥${pipelineExpectedRevenue.toLocaleString()}`)
     )
   );
   const aiAnalysisBtn = onOpenAIAnalysis && /*#__PURE__*/React.createElement("button", {
@@ -14080,7 +14134,7 @@ function NexusSalesKpiCard({
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "card-title"
-  }, "📊 営業KPI"), periodChips, statGrid, rateGrid, marketSourceCard, salesRow, unifiedRow, aiAnalysisBtn, referralDetailSheet, activityDetailSheet);
+  }, "📊 営業KPI"), periodChips, statGrid, rateGrid, marketSourceCard, unifiedRow, aiAnalysisBtn, referralDetailSheet, activityDetailSheet);
 }
 // ── 活動ログベースのKPIタイル（新規接触数・見込フォロー数・紹介依頼数・案件打診数・
 // 相談・問合せ数・アポ依頼数・アポ確定数・商談数・提案数・成約数）共通の内訳シート。
@@ -17955,14 +18009,16 @@ function SalesTracker({
 }) {
   const [editing, setEditing] = React.useState(false);
   const [form, setForm] = React.useState(sales);
+  // 【不具合修正①】月間500万円は「AC目標」として管理する（確定手数料の目標ではない）。
+  // 進捗バーのメイン数値は成立AC（確定した契約の実績）を使い、申込AC達成率は別の参考値として
+  // 添える。sales.current（旧・手入力の確定売上）自体は削除せず、manualCurrentとして下に
+  // 参考表示する。
   const target = Number(sales.target) || 0;
-  // 【不具合修正・統合】月間目標の進捗（current）を、手入力のsales.currentではなく
-  // 契約データ（customers[].contracts[]の確定手数料。ホーム・契約一覧と同じ共通関数）を
-  // 正本として算出する。sales.current自体は削除せず、manualCurrentとして下に参考表示する。
   const manualCurrent = Number(sales.current) || 0;
   const unifiedYm = nexusCurrentYm();
   const unified = nexusComputeUnifiedMonthlyRevenueDashboard(customers, opportunities, unifiedYm);
-  const current = unified.confirmedCommissionTotal;
+  const current = unified.approvedAcYenTotal;
+  const applicationAcAchievementPct = target > 0 ? Math.round(unified.applicationAcYenTotal / target * 1000) / 10 : null;
   const pct = target > 0 ? Math.min(Math.round(current / target * 100), 999) : 0;
   const achieved = target > 0 && current >= target;
   const fmt = v => Number(v).toLocaleString('ja-JP');
@@ -18062,7 +18118,7 @@ function SalesTracker({
     }
   }, "🎉")), /*#__PURE__*/React.createElement("div", {
     style: { fontSize: 10.5, color: 'var(--text-sub)', marginBottom: 6 }
-  }, `確定手数料（契約データ基準・${unifiedYm}の申込分・${unified.confirmedCommissionCount}件）で算出`, manualCurrent !== current && /*#__PURE__*/React.createElement("span", null, `　／　参考（手入力の旧値）：¥${fmt(manualCurrent)}`)), /*#__PURE__*/React.createElement("div", {
+  }, `成立AC（契約データ基準・${unifiedYm}の申込分・${unified.approvedCount}件）で算出`, target > 0 && /*#__PURE__*/React.createElement("span", null, `　／　申込AC達成率：${applicationAcAchievementPct}%`), manualCurrent !== current && /*#__PURE__*/React.createElement("span", null, `　／　旧・手入力値：¥${fmt(manualCurrent)}`)), /*#__PURE__*/React.createElement("div", {
     style: {
       background: 'rgba(0,0,0,0.08)',
       borderRadius: 6,
@@ -18130,7 +18186,8 @@ function SalesTracker({
   }, "未入力"))), /*#__PURE__*/React.createElement("div", {
     style: { marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(0,0,0,0.07)', fontSize: 11.5, color: 'var(--text-sub)' }
   },
-    /*#__PURE__*/React.createElement("div", null, `商談中の見込AC（商談データ基準・${unified.pipelineExpectedCount}件${unified.pipelineExcludedCount > 0 ? `・申込済み${unified.pipelineExcludedCount}件は二重計上防止で除外` : ''}）：¥${fmt(unified.pipelineExpectedAcTotal)}`),
+    /*#__PURE__*/React.createElement("div", null, `商談中の見込AC（商談データ基準・${unified.pipelineExpectedCount}件${unified.pipelineMissingAmountCount > 0 ? `・未入力${unified.pipelineMissingAmountCount}件` : ''}${unified.pipelineExcludedCount > 0 ? `・申込済み${unified.pipelineExcludedCount}件は二重計上防止で除外` : ''}）：¥${fmt(unified.pipelineExpectedAcTotal)}`),
+    /*#__PURE__*/React.createElement("div", null, `確定手数料（申込月基準・${unified.confirmedCommissionCount}件）：¥${fmt(unified.confirmedCommissionTotal)}`),
     /*#__PURE__*/React.createElement("div", null, `実入金額合計（実入金日基準・${unified.actualPaidCount}件）：¥${fmt(unified.actualPaidTotal)}`)
   )), editing && /*#__PURE__*/React.createElement("div", {
     style: {
@@ -52742,7 +52799,15 @@ function App() {
       color: 'var(--text-sub)',
       lineHeight: 1.6
     }
-  }, /*#__PURE__*/React.createElement("div", null, nexusLastBackupMeta ? `最終バックアップ：${new Date(nexusLastBackupMeta.exportedAt).toLocaleString('ja-JP')}／${nexusLastBackupMeta.customerCount}名／形式version${nexusLastBackupMeta.version}` : '最終バックアップ：まだありません'), nexusAutoBackupMeta && nexusAutoBackupMeta.kind === 'ready' && /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("div", null, nexusLastBackupMeta ? `最終バックアップ：${new Date(nexusLastBackupMeta.exportedAt).toLocaleString('ja-JP')}／${nexusLastBackupMeta.customerCount}名／形式version${nexusLastBackupMeta.version}` : '最終バックアップ：まだありません'),
+  // 【不具合修正】バックアップが一度も作成されていない場合、実際に作成されていないのに
+  // 作成済みと偽らず、かつ放置されないよう、既存の337名規模のデータがあるのに未保存の場合は
+  // 明確な警告と「今すぐ端末に保存する操作が必要」という案内を追加する（削除・初期化は行わず、
+  // 既存の「💾書出」ボタンを押すという既存の安全な操作を促すだけ）。
+  !nexusLastBackupMeta && customers.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: { marginTop: 4, padding: '6px 8px', borderRadius: 6, background: '#FEF3C7', border: '1px solid #F59E0B', color: '#92400E', fontWeight: 600 }
+  }, `⚠️ バックアップファイルがまだ作成されていません。顧客${customers.length}名分のデータを保護するため、上の「💾書出」から今すぐ端末に保存することをおすすめします（この操作にはタップが必要です。自動では保存されません）。`),
+  nexusAutoBackupMeta && nexusAutoBackupMeta.kind === 'ready' && /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
