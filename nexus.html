@@ -2699,6 +2699,73 @@ function nexusComputeMonthlyAcDashboard(customers, yearMonth) {
     acMissingCount
   };
 }
+// 【不具合修正・統合】ホーム・契約・タスク画面でAC・売上の集計元が分かれていた問題に対応。
+// customers[].contracts[]（契約データ）を正本として、申込AC等（既存のnexusComputeMonthlyAcDashboard
+// をそのまま再利用し重複ロジックは作らない）に加え、確定手数料合計・実入金額合計・商談中の
+// 見込ACまでを一度に算出する共通関数。ホーム（NexusSalesKpiCard）・タスク（SalesTracker）・
+// 契約一覧（NexusContractManagementScreen）がすべてこの関数の戻り値を表示に使うことで、
+// 同じ定義・同じ対象期間の数字が画面間で必ず一致するようにする。
+//   ・申込AC／成立待ちAC／成立AC等：対象期間＝申込日がyearMonthの契約（コホート）。
+//   ・確定手数料合計：同じ申込月コホートのうち、代理店確定額（commission.confirmed.
+//     amountExclTax）が入力済みの契約のみを合計する（未確定契約は0円ではなく件数から除外。
+//     ACと確定手数料は基準が異なるため混同しない）。
+//   ・実入金額合計：対象期間は申込月ではなく「実入金日」。全契約の入金履歴
+//     （commission.paymentHistory[].paidAt）のうちyearMonthに該当する明細を横断的に
+//     合計する（申込コホートとは対象期間の基準が異なることを呼び出し側で明示する）。
+//   ・商談中の見込AC：opportunities（商談データ）のstatus==='open'のexpectedRevenueを
+//     合計する。customerIdが同じ顧客がこの申込月コホートに既に契約を持つ場合は、同じ案件が
+//     契約として既に計上されている可能性が高いため、二重計上を避けて商談側の集計からは
+//     除外する（除外件数も返し、画面側で「n件は申込済みのため除外」と明示できるようにする）。
+function nexusComputeUnifiedMonthlyRevenueDashboard(customers, opportunities, yearMonth) {
+  const base = nexusComputeMonthlyAcDashboard(customers, yearMonth);
+  const cohort = nexusFlattenAllContracts(customers).filter(r => nexusContractApplicationMonth(r.contract) === yearMonth);
+  let confirmedCommissionTotal = 0, confirmedCommissionCount = 0;
+  cohort.forEach(r => {
+    const commission = nexusCommissionOf(r.contract);
+    if (commission.confirmed && commission.confirmed.amountExclTax !== null && commission.confirmed.amountExclTax !== undefined) {
+      confirmedCommissionTotal += commission.confirmed.amountExclTax;
+      confirmedCommissionCount++;
+    }
+  });
+  const allContracts = nexusFlattenAllContracts(customers);
+  let actualPaidTotal = 0, actualPaidCount = 0;
+  allContracts.forEach(r => {
+    const commission = nexusCommissionOf(r.contract);
+    (commission.paymentHistory || []).forEach(p => {
+      if ((p.paidAt || '').slice(0, 7) === yearMonth) {
+        actualPaidTotal += Number(p.amountExclTax) || 0;
+        actualPaidCount++;
+      }
+    });
+  });
+  const contractedCustomerIds = new Set(cohort.map(r => r.customer.id));
+  const openOpportunities = (opportunities || []).filter(o => o.status === 'open');
+  const dedupedOpportunities = openOpportunities.filter(o => !(o.customerId && contractedCustomerIds.has(o.customerId)));
+  const pipelineExcludedCount = openOpportunities.length - dedupedOpportunities.length;
+  const pipelineExpectedAcTotal = dedupedOpportunities.reduce((s, o) => s + (Number(o.expectedRevenue) || 0), 0);
+  return {
+    yearMonth,
+    applicationCount: base.applicationCount,
+    applicationAcTotal: base.applicationAcTotal,
+    awaitingDecisionCount: base.awaitingDecisionCount,
+    awaitingDecisionAcTotal: base.awaitingDecisionAcTotal,
+    approvedCount: base.approvedCount,
+    approvedAcTotal: base.approvedAcTotal,
+    declinedCount: base.declinedCount,
+    declinedAcTotal: base.declinedAcTotal,
+    cancelledCount: base.cancelledCount,
+    cancelledAcTotal: base.cancelledAcTotal,
+    effectiveAcTotal: base.effectiveAcTotal,
+    acMissingCount: base.acMissingCount,
+    confirmedCommissionTotal,
+    confirmedCommissionCount,
+    actualPaidTotal,
+    actualPaidCount,
+    pipelineExpectedAcTotal,
+    pipelineExpectedCount: dedupedOpportunities.length,
+    pipelineExcludedCount
+  };
+}
 function ContractBlock({
   contract,
   onChange,
@@ -5140,7 +5207,7 @@ function NexusContractDetailScreen({ customer, contract, customers, onSave, onRe
     )
   );
 }
-function NexusContractManagementScreen({ customers, onOpenCustomer, onCreateContract, onUpdateContract, onRemoveContract }) {
+function NexusContractManagementScreen({ customers, opportunities, sales, onOpenCustomer, onCreateContract, onUpdateContract, onRemoveContract }) {
   // 最終一括実装指示書6：一覧の行をタップすると、顧客タブではなく契約詳細・編集画面を
   // 直接開く（「顧客詳細を見る」ボタンを押した場合のみ顧客タブへ遷移する）。
   const [openContractKey, setOpenContractKey] = useState(null); // { customerId, contractId, index }
@@ -5154,6 +5221,11 @@ function NexusContractManagementScreen({ customers, onOpenCustomer, onCreateCont
   // （デフォルトは今月）。
   const [dashboardMonth, setDashboardMonth] = useState(() => nexusCurrentYm());
   const dashboard = useMemo(() => nexusComputeMonthlyAcDashboard(customers, dashboardMonth), [customers, dashboardMonth]);
+  // 【不具合修正・統合】ホーム・契約・タスク画面で数字が一致するよう、確定手数料・実入金額・
+  // 商談中の見込ACも同じ共通関数（nexusComputeUnifiedMonthlyRevenueDashboard）から取得する。
+  const unified = useMemo(() => nexusComputeUnifiedMonthlyRevenueDashboard(customers, opportunities, dashboardMonth), [customers, opportunities, dashboardMonth]);
+  const monthlyTarget = Number((sales || {}).target) || 0;
+  const achievementPct = monthlyTarget > 0 ? Math.round(unified.confirmedCommissionTotal / monthlyTarget * 100) : null;
   const rows = useMemo(() => nexusFlattenAllContracts(customers).map(row => ({ ...row, flags: nexusContractStatusFlags(row.contract) })), [customers]);
   // 最終一括実装指示書3：月次ACダッシュボードの対象年月と、契約一覧の「今月の新契約」タブの
   // 対象年月を共通化する（ダッシュボードの月選択と一覧が連動する）。横断管理タブ（手数料
@@ -5204,6 +5276,7 @@ function NexusContractManagementScreen({ customers, onOpenCustomer, onCreateCont
     sub ? /*#__PURE__*/React.createElement("div", { style: { fontSize: 10, color: 'var(--text-sub)' } }, sub) : null
   );
   const acYen = n => `${Math.round(n).toLocaleString()}万円`;
+  const fmtYenNum = n => `${Math.round(n).toLocaleString()}円`;
   const dashboardCard = /*#__PURE__*/React.createElement("div", { className: "card", style: { margin: '0 16px 10px', padding: 10 } },
     /*#__PURE__*/React.createElement("div", { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 } },
       /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, fontSize: 13 } }, "📈 月次ACダッシュボード（申込日基準）"),
@@ -5220,6 +5293,18 @@ function NexusContractManagementScreen({ customers, onOpenCustomer, onCreateCont
     ),
     /*#__PURE__*/React.createElement("div", { style: { fontSize: 10.5, color: 'var(--text-sub)', marginTop: 6 } },
       `※今月の申込ACは、成立待ち・成立・不成立・取消を含む全件の合計です。有効AC（成立待ち＋成立）：${acYen(dashboard.effectiveAcTotal)}／不成立・取消を除いた金額です。`
+    )
+  );
+  // 【不具合修正・統合】ホーム（NexusSalesKpiCard）・タスク（SalesTracker）と同じ
+  // nexusComputeUnifiedMonthlyRevenueDashboardの戻り値を表示する。ACは万円、確定手数料・
+  // 実入金額・目標は円で、単位も対象期間も明確に分けて表示する（ACと実際の手数料の混同防止）。
+  const unifiedCard = /*#__PURE__*/React.createElement("div", { className: "card", style: { margin: '0 16px 10px', padding: 10 } },
+    /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, fontSize: 13, marginBottom: 8 } }, "💰 契約実績・入金・商談中AC（ホーム・タスクと共通集計）"),
+    /*#__PURE__*/React.createElement("div", { style: { display: 'flex', flexWrap: 'wrap', gap: 10, overflowX: 'auto' } },
+      acCell('確定手数料合計', fmtYenNum(unified.confirmedCommissionTotal), `申込月基準・${unified.confirmedCommissionCount}件（代理店確定額入力済みのみ）`),
+      acCell('実入金額合計', fmtYenNum(unified.actualPaidTotal), `実入金日基準・${unified.actualPaidCount}件（申込月とは別の対象期間）`),
+      acCell('商談中の見込AC', fmtYenNum(unified.pipelineExpectedAcTotal), `商談データ基準・${unified.pipelineExpectedCount}件${unified.pipelineExcludedCount > 0 ? `（申込済みのため${unified.pipelineExcludedCount}件は二重計上を避けて除外）` : ''}`),
+      monthlyTarget > 0 ? acCell('目標達成率', `${achievementPct}%`, `確定手数料 ${fmtYenNum(unified.confirmedCommissionTotal)} ／ 月間目標 ${fmtYenNum(monthlyTarget)}`) : acCell('月間目標', '未設定', 'タスク画面の「売上トラッカー」から設定できます')
     )
   );
   // 最終一括実装指示書3：「選択月の申込実績」（ダッシュボードの月と連動するタブ）と
@@ -5316,7 +5401,7 @@ function NexusContractManagementScreen({ customers, onOpenCustomer, onCreateCont
       setActiveTab('all');
     }
   }) : null;
-  return /*#__PURE__*/React.createElement("div", null, headerRow, subHeaderRow, dashboardCard, tabsNote, tabsRow, searchRow, sortRow, emptyState, table, intakeForm, contractDetailOverlay);
+  return /*#__PURE__*/React.createElement("div", null, headerRow, subHeaderRow, dashboardCard, unifiedCard, tabsNote, tabsRow, searchRow, sortRow, emptyState, table, intakeForm, contractDetailOverlay);
 }
 
 // ── P6b：職域別営業分析（design doc 4章のMVP実装） ──────────────────────────
@@ -13789,6 +13874,7 @@ function NexusSalesKpiCard({
   tasks,
   sales,
   customers,
+  opportunities,
   onOpenAIAnalysis
 }) {
   const [period, setPeriod] = useState('今日');
@@ -13831,6 +13917,14 @@ function NexusSalesKpiCard({
   const target = Number((sales || {}).target) || 0;
   const current = Number((sales || {}).current) || 0;
   const remaining = Math.max(0, target - current);
+  // 【不具合修正・統合】ホーム・契約・タスク画面で集計元が分かれていた問題に対応。
+  // 契約データ（customers[].contracts[]）を正本として、タスク画面（SalesTracker）・
+  // 契約一覧画面（NexusContractManagementScreen）と同じ共通関数から確定手数料・実入金額・
+  // 商談中の見込ACを取得する。上のpipelineExpectedRevenue／current（sales.current）は
+  // 既存の手入力データとして削除せず、下に「参考（手入力）」として残す。
+  const unifiedYm = nexusCurrentYm();
+  const unified = nexusComputeUnifiedMonthlyRevenueDashboard(customers, opportunities, unifiedYm);
+  const unifiedAchievementPct = target > 0 ? Math.round(unified.confirmedCommissionTotal / target * 100) : null;
   const periodChips = /*#__PURE__*/React.createElement("div", {
     className: "filter-chips",
     style: {
@@ -13939,7 +14033,28 @@ function NexusSalesKpiCard({
       fontSize: 12,
       color: 'var(--text-sub)'
     }
-  }, /*#__PURE__*/React.createElement("span", null, "見込み売上（オープン案件）：", pipelineExpectedRevenue.toLocaleString(), "円"), target > 0 && /*#__PURE__*/React.createElement("span", null, "／確定売上：", current.toLocaleString(), "円／目標：", target.toLocaleString(), "円／残り：", remaining.toLocaleString(), "円"));
+  }, /*#__PURE__*/React.createElement("span", null, "見込み売上（オープン案件・タスクの手入力）：", pipelineExpectedRevenue.toLocaleString(), "円"), target > 0 && /*#__PURE__*/React.createElement("span", null, "／確定売上（参考・手入力の旧値）：", current.toLocaleString(), "円／目標：", target.toLocaleString(), "円／残り：", remaining.toLocaleString(), "円"));
+  // 【不具合修正・統合】契約データ（customers[].contracts[]）を正本とした、タスク画面・
+  // 契約一覧画面と同じ定義・同じ対象期間の数字（nexusComputeUnifiedMonthlyRevenueDashboard）。
+  // 上のsalesRow（手入力の旧値）は消さず、その下に正式な集計として別枠で表示する。
+  const unifiedRow = /*#__PURE__*/React.createElement("div", {
+    style: { marginTop: 10, padding: '8px 10px', borderRadius: 8, background: 'var(--accent-light, #EFF6FF)', fontSize: 12 }
+  },
+    /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, marginBottom: 4 } }, `📋 契約実績（${unifiedYm}・契約データ基準）`),
+    /*#__PURE__*/React.createElement("div", { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
+      /*#__PURE__*/React.createElement("span", null, "申込AC（申込日基準）：", Math.round(unified.applicationAcTotal).toLocaleString(), "万円"),
+      /*#__PURE__*/React.createElement("span", null, "成立待ちAC：", Math.round(unified.awaitingDecisionAcTotal).toLocaleString(), "万円"),
+      /*#__PURE__*/React.createElement("span", null, "成立AC：", Math.round(unified.approvedAcTotal).toLocaleString(), "万円")
+    ),
+    /*#__PURE__*/React.createElement("div", { style: { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4 } },
+      /*#__PURE__*/React.createElement("span", null, "確定手数料合計（申込月基準・", unified.confirmedCommissionCount, "件）：", Math.round(unified.confirmedCommissionTotal).toLocaleString(), "円"),
+      /*#__PURE__*/React.createElement("span", null, "実入金額合計（実入金日基準・", unified.actualPaidCount, "件）：", Math.round(unified.actualPaidTotal).toLocaleString(), "円"),
+      /*#__PURE__*/React.createElement("span", null, "商談中の見込AC（商談データ基準・", unified.pipelineExpectedCount, "件", unified.pipelineExcludedCount > 0 ? `・申込済み${unified.pipelineExcludedCount}件は二重計上防止で除外` : '', "）：", Math.round(unified.pipelineExpectedAcTotal).toLocaleString(), "円")
+    ),
+    target > 0 && /*#__PURE__*/React.createElement("div", { style: { marginTop: 4, fontWeight: 700 } },
+      `目標達成率：${unifiedAchievementPct}％（確定手数料 ${Math.round(unified.confirmedCommissionTotal).toLocaleString()}円 ／ 月間目標 ${target.toLocaleString()}円）`
+    )
+  );
   const aiAnalysisBtn = onOpenAIAnalysis && /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "btn btn-outline btn-full",
@@ -13965,7 +14080,7 @@ function NexusSalesKpiCard({
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "card-title"
-  }, "📊 営業KPI"), periodChips, statGrid, rateGrid, marketSourceCard, salesRow, aiAnalysisBtn, referralDetailSheet, activityDetailSheet);
+  }, "📊 営業KPI"), periodChips, statGrid, rateGrid, marketSourceCard, salesRow, unifiedRow, aiAnalysisBtn, referralDetailSheet, activityDetailSheet);
 }
 // ── 活動ログベースのKPIタイル（新規接触数・見込フォロー数・紹介依頼数・案件打診数・
 // 相談・問合せ数・アポ依頼数・アポ確定数・商談数・提案数・成約数）共通の内訳シート。
@@ -14580,6 +14695,7 @@ function DashboardTab({
     tasks: tasks,
     sales: sales,
     customers: customers,
+    opportunities: opportunities,
     onOpenAIAnalysis: () => setShowAIAnalysis(true)
   }), nexusFanFollows && /*#__PURE__*/React.createElement(NexusFanTodayFollowCard, {
     follows: nexusFanFollows,
@@ -17833,12 +17949,20 @@ const HELP_CATS = ['医療', '生命', '相続', '損保', 'その他'];
 function SalesTracker({
   sales,
   onChange,
-  clients
+  clients,
+  customers,
+  opportunities
 }) {
   const [editing, setEditing] = React.useState(false);
   const [form, setForm] = React.useState(sales);
   const target = Number(sales.target) || 0;
-  const current = Number(sales.current) || 0;
+  // 【不具合修正・統合】月間目標の進捗（current）を、手入力のsales.currentではなく
+  // 契約データ（customers[].contracts[]の確定手数料。ホーム・契約一覧と同じ共通関数）を
+  // 正本として算出する。sales.current自体は削除せず、manualCurrentとして下に参考表示する。
+  const manualCurrent = Number(sales.current) || 0;
+  const unifiedYm = nexusCurrentYm();
+  const unified = nexusComputeUnifiedMonthlyRevenueDashboard(customers, opportunities, unifiedYm);
+  const current = unified.confirmedCommissionTotal;
   const pct = target > 0 ? Math.min(Math.round(current / target * 100), 999) : 0;
   const achieved = target > 0 && current >= target;
   const fmt = v => Number(v).toLocaleString('ja-JP');
@@ -17937,6 +18061,8 @@ function SalesTracker({
       marginLeft: 4
     }
   }, "🎉")), /*#__PURE__*/React.createElement("div", {
+    style: { fontSize: 10.5, color: 'var(--text-sub)', marginBottom: 6 }
+  }, `確定手数料（契約データ基準・${unifiedYm}の申込分・${unified.confirmedCommissionCount}件）で算出`, manualCurrent !== current && /*#__PURE__*/React.createElement("span", null, `　／　参考（手入力の旧値）：¥${fmt(manualCurrent)}`)), /*#__PURE__*/React.createElement("div", {
     style: {
       background: 'rgba(0,0,0,0.08)',
       borderRadius: 6,
@@ -18001,7 +18127,12 @@ function SalesTracker({
       color: 'var(--text-sub)',
       fontWeight: 500
     }
-  }, "未入力")))), editing && /*#__PURE__*/React.createElement("div", {
+  }, "未入力"))), /*#__PURE__*/React.createElement("div", {
+    style: { marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(0,0,0,0.07)', fontSize: 11.5, color: 'var(--text-sub)' }
+  },
+    /*#__PURE__*/React.createElement("div", null, `商談中の見込AC（商談データ基準・${unified.pipelineExpectedCount}件${unified.pipelineExcludedCount > 0 ? `・申込済み${unified.pipelineExcludedCount}件は二重計上防止で除外` : ''}）：¥${fmt(unified.pipelineExpectedAcTotal)}`),
+    /*#__PURE__*/React.createElement("div", null, `実入金額合計（実入金日基準・${unified.actualPaidCount}件）：¥${fmt(unified.actualPaidTotal)}`)
+  )), editing && /*#__PURE__*/React.createElement("div", {
     style: {
       position: 'fixed',
       inset: 0,
@@ -23102,6 +23233,7 @@ function TaskTab({
   sales,
   setSales,
   customers,
+  opportunities,
   onOpenCustomer
 }) {
   const [subTab, setSubTab] = useState('today');
@@ -23177,7 +23309,9 @@ function TaskTab({
   }, todayFull()), /*#__PURE__*/React.createElement(SalesTracker, {
     sales: sales,
     onChange: setSales,
-    clients: clients
+    clients: clients,
+    customers: customers,
+    opportunities: opportunities
   }), (() => {
     const td = todayStr();
     const overdue = pendingTasks.filter(t => t.date && t.date < td);
@@ -51366,6 +51500,29 @@ function App() {
       localStorage.setItem('nexus_customer_contact_backfill_v1', 'done');
     } catch {}
   }, []);
+  // 【不具合修正】非常に古い顧客データでidフィールドが欠落していると、顧客編集画面での保存時に
+  // CustomerForm側が新しいidを採番してしまい（form.id || uid()）、本来は既存顧客の更新のはずが
+  // 「別の場所で既に削除されている」という誤判定（saveCustomerのwasEditingExistingの判定が、
+  // 新たに採番されたidをlatestCustomersの中に見つけられないため）を起こしていた。
+  // 既存のフィールドは一切変更せず、idが欠落している顧客にだけ安全に補完する（削除・初期化・
+  // 上書きは行わない）。別タブの最新データを壊さないようlocalStorageを読み直してから書き込み、
+  // 書き込みはnexusLifePlanWriteCustomersVerifiedで読み戻し検証する。書き込みに失敗した場合は
+  // 何もしない（既存データは変更されない。次回の読み込み時に再試行される）。
+  React.useEffect(() => {
+    if (!customers.some(c => !c.id)) return;
+    let latestCustomers;
+    try {
+      const raw = localStorage.getItem('customers_v1');
+      latestCustomers = raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      latestCustomers = null;
+    }
+    if (!Array.isArray(latestCustomers)) latestCustomers = customers;
+    if (!latestCustomers.some(c => !c.id)) return;
+    const patched = latestCustomers.map(c => c.id ? c : { ...c, id: uid() });
+    const writeResult = nexusLifePlanWriteCustomersVerified(patched);
+    if (writeResult.ok) setCustomers(patched);
+  }, [customers]);
   const [opportunities, setOpportunities] = useLS('nexus_opportunities_v1', []);
   // P6b：CSB（NEXUS外部システム）基準の職域別人数は手入力でしか取得できないため、
   // NEXUS側の登録件数と並べて比較表示するための手入力値のみを保存する（自動連携はしない）。
@@ -52163,9 +52320,21 @@ function App() {
   // localStorageから最新のcustomers_v1を読み直し、そこへ今回の変更だけをマージする
   // （ライフプラン保存:nexusLifePlanWriteCustomersVerifiedと同じ安全策）。
   // 戻り値：{ok:true, customer} / {ok:false, reason:'deleted_elsewhere'|'conflict'|'write_failed', latest?}
+  // 【不具合修正】顧客が削除されていないのに「別の場所で既に削除されている」と誤判定される
+  // バグの修正。原因：registerSuspect/registerReferrer/registerActivityCustomer/
+  // registerMemoAsCustomer（サスペクト・紹介者・活動記録・メモから新規顧客を登録する機能）は、
+  // いずれもeditingCustomerに「idを持たない」新規オブジェクトをセットする。従来は
+  // editingCustomerが非nullであること"だけ"をもって「既存顧客の編集」と判定していたため、
+  // これら本来は新規登録のはずのケースでも「既存顧客」と誤判定され、CustomerForm側で
+  // 新たに採番されたid（form.id || uid()）がlatestCustomersの中に見つからず、
+  // 「削除されている」という誤ったエラーになっていた。また、非常に古い顧客データでid
+  // フィールド自体が欠落している場合も同じ経路で同じ誤判定が発生する。
+  // 修正：「既存顧客の編集」はeditingCustomerが存在し、かつidを持つ場合のみとする
+  // （idを持たない場合は常に「新規追加」として扱う＝従来どおり安全にlatestCustomersへ
+  // 追加されるだけで、削除判定の対象にはならない）。
   const saveCustomer = c => {
     const baselineUpdatedAt = editingCustomer ? editingCustomer.updatedAt : undefined;
-    const wasEditingExisting = !!editingCustomer;
+    const wasEditingExisting = !!(editingCustomer && editingCustomer.id);
     let latestCustomers;
     try {
       const raw = localStorage.getItem('customers_v1');
@@ -52735,6 +52904,7 @@ function App() {
     sales: sales,
     setSales: setSales,
     customers: customers,
+    opportunities: opportunities,
     onOpenCustomer: id => {
       const target = customers.find(x => x.id === id);
       if (target) {
@@ -52758,6 +52928,8 @@ function App() {
     corpPlanningTargetId: corpPlanningTargetId
   }), tab === 'contracts' && /*#__PURE__*/React.createElement(NexusContractManagementScreen, {
     customers: customers,
+    opportunities: opportunities,
+    sales: sales,
     onOpenCustomer: c => {
       setTab('list');
       setSelectedCustomer(c);
