@@ -39777,6 +39777,13 @@ function NexusPlanningSection({
   // 既存の情報を消すものではない）。
   const linkedSpouseAge = linkedSpouseCustomer ? (linkedSpouseCustomer.birthdate ? calcAge(linkedSpouseCustomer.birthdate) : calcStoredAge(linkedSpouseCustomer.age, linkedSpouseCustomer.ageYear)) : null;
   const ageSpouse = linkedSpouseAge !== null ? linkedSpouseAge : spouseSp ? (spouseSp.birthdate ? calcAge(spouseSp.birthdate) : calcStoredAge(spouseSp.age, spouseSp.ageYear)) : null;
+  // 【不具合調査】配偶者年齢が「未登録」になる原因を画面上で特定できるよう、未登録時のみ
+  // 具体的な理由を併記する（生年月日が無い場合に年齢を推測して表示することはしない。
+  // あくまで「なぜ表示できないか」を案内するだけ）。
+  const spouseAgeUnknownReason = ageSpouse !== null ? null :
+    !spouseSp ? '配偶者として登録された家族情報が見つかりません' :
+    !linkedSpouseCustomer ? '顧客としての連携（linkedCustomerId）が設定されていません。顧客編集の家族情報で「既存の顧客と連携」から連携してください' :
+    '連携先の顧客にも家族情報にも生年月日・年齢が入力されていません';
   // お子様も、配偶者側の顧客レコードにだけ登録されている場合があるため合算する（名前が同じ子は重複除外）。
   // 実在の情報を持たない「空の子供枠」（過去バージョンの名残等）は、実在の子として
   // 数えると教育資金プランニング等で誤って表示されてしまうため、集計対象から除外する。
@@ -41141,7 +41148,12 @@ function NexusPlanningSection({
       fontSize: 12.5,
       marginBottom: 4
     }
-  }, /*#__PURE__*/React.createElement("div", null, "本人年齢：", /*#__PURE__*/React.createElement("b", null, ageSelf !== null ? ageSelf + '歳' : '未登録')), /*#__PURE__*/React.createElement("div", null, "配偶者年齢：", /*#__PURE__*/React.createElement("b", null, ageSpouse !== null ? ageSpouse + '歳' : '未登録')), /*#__PURE__*/React.createElement("div", null, "お子様：", /*#__PURE__*/React.createElement("b", null, kidsSummary))), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("div", null, "本人年齢：", /*#__PURE__*/React.createElement("b", null, ageSelf !== null ? ageSelf + '歳' : '未登録')), /*#__PURE__*/React.createElement("div", null, "配偶者年齢：", /*#__PURE__*/React.createElement("b", null, ageSpouse !== null ? ageSpouse + '歳' : '未登録')), /*#__PURE__*/React.createElement("div", null, "お子様：", /*#__PURE__*/React.createElement("b", null, kidsSummary))),
+  // 【不具合調査】配偶者年齢が未登録の場合のみ、画面上で理由を確認できるようにする。
+  spouseAgeUnknownReason && /*#__PURE__*/React.createElement("div", {
+    style: { fontSize: 11, color: '#c0392b', marginBottom: 4 }
+  }, `⚠️ 配偶者年齢が未登録の理由：${spouseAgeUnknownReason}`),
+  /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 10.5,
       color: 'var(--text-sub)'
@@ -52457,6 +52469,61 @@ function App() {
     return { ok: true, customer: nextC };
   };
   const deleteCustomer = id => setCustomers(prev => prev.filter(c => c.id !== id));
+  // 【不具合修正・根本原因】配偶者（サスペクト）を「顧客登録 →」ボタンで新規の顧客として
+  // 登録しても、作成された新しい顧客へサスペクト側のlinkedCustomerIdが一度も書き戻されて
+  // おらず、見た目は「新しい顧客が増える」だけで、実際にはLPシート・家族相関図・顧客詳細等
+  // どこからも連携されていない状態のままだった（「紐付けたつもり」で実際には紐付いて
+  // いなかった＝LPシートの配偶者年齢が「未登録」のまま直らなかった真因）。
+  // 新しい顧客の保存が成功した直後に、元のサスペクトへ新しい顧客のidを安全に書き戻す
+  // （既存の再読み込み→書き込み→検証パターンを使う。他タブの最新データを壊さない）。
+  const linkSuspectToNewCustomer = (sourceCustomerId, suspectId, newCustomerId) => {
+    let latestCustomers;
+    try {
+      const raw = localStorage.getItem('customers_v1');
+      latestCustomers = raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      latestCustomers = null;
+    }
+    if (!Array.isArray(latestCustomers)) latestCustomers = customers;
+    const srcIdx = latestCustomers.findIndex(c => c.id === sourceCustomerId);
+    if (srcIdx < 0) return { ok: false, reason: 'source_not_found' };
+    const src = latestCustomers[srcIdx];
+    const spIdx = (src.suspects || []).findIndex(sp => sp.id === suspectId);
+    if (spIdx < 0) return { ok: false, reason: 'suspect_not_found' };
+    // 既に別の顧客へ連携済みなら上書きしない（念のための安全策）。
+    if (src.suspects[spIdx].linkedCustomerId) return { ok: true, skipped: true };
+    const nextSuspects = src.suspects.map((sp, i) => i === spIdx ? { ...sp, linkedCustomerId: newCustomerId } : sp);
+    const nextSrc = { ...src, suspects: nextSuspects, updatedAt: new Date().toISOString() };
+    const nextCustomers = latestCustomers.map((c, i) => i === srcIdx ? nextSrc : c);
+    const writeResult = nexusLifePlanWriteCustomersVerified(nextCustomers);
+    if (!writeResult.ok) return { ok: false, reason: 'write_failed' };
+    setCustomers(nextCustomers);
+    return { ok: true };
+  };
+  // 【不具合修正・根本原因】紹介元（referredByName）を「顧客登録 →」ボタンで新規の顧客として
+  // 登録しても、紹介された側の顧客のreferredByが新しい顧客のidに更新されておらず、同じ
+  // 問題（紐付けたつもりで実際には紐付いていない）が紹介者連携にも存在していたため、
+  // 同じ安全なパターンで合わせて修正する。
+  const linkReferrerToNewCustomer = (sourceCustomerId, newCustomerId) => {
+    let latestCustomers;
+    try {
+      const raw = localStorage.getItem('customers_v1');
+      latestCustomers = raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      latestCustomers = null;
+    }
+    if (!Array.isArray(latestCustomers)) latestCustomers = customers;
+    const srcIdx = latestCustomers.findIndex(c => c.id === sourceCustomerId);
+    if (srcIdx < 0) return { ok: false, reason: 'source_not_found' };
+    const src = latestCustomers[srcIdx];
+    if (src.referredBy) return { ok: true, skipped: true };
+    const nextSrc = { ...src, referredBy: newCustomerId, updatedAt: new Date().toISOString() };
+    const nextCustomers = latestCustomers.map((c, i) => i === srcIdx ? nextSrc : c);
+    const writeResult = nexusLifePlanWriteCustomersVerified(nextCustomers);
+    if (!writeResult.ok) return { ok: false, reason: 'write_failed' };
+    setCustomers(nextCustomers);
+    return { ok: true };
+  };
   // 新契約管理画面の「＋新契約登録」用の安全な書き込み処理。saveCustomer（CustomerForm用）とは
   // editingCustomerの編集セッション状態が無関係に独立しているため、別の専用関数とする。
   // 別タブでの最新変更を上書きしないよう、書き込み直前に必ずlocalStorageの最新値を読み直し、
@@ -52588,6 +52655,13 @@ function App() {
   // 活動履歴の手入力名（customerNameText）から新規顧客を登録する。保存時に、同じ名前で
   // 未登録のまま残っている他の活動ログもまとめて新しい顧客IDへ紐づける（下のCustomerFormのonSave参照）。
   const [pendingActivityCustomerName, setPendingActivityCustomerName] = useState(null);
+  // 【不具合修正・根本原因】「顧客登録 →」で配偶者等のサスペクトを新規顧客として登録した際、
+  // 元のサスペクトへ新しい顧客のidを書き戻すために、どの顧客のどのサスペクトから登録を
+  // 始めたかを一時的に覚えておく（保存成功後、linkSuspectToNewCustomerで使う）。
+  const [pendingSuspectLink, setPendingSuspectLink] = useState(null); // {customerId, suspectId}
+  // 同様に、紹介元（referredByName）を新規顧客として登録した場合に、紹介された側の顧客の
+  // referredByへ書き戻すために使う。
+  const [pendingReferrerLink, setPendingReferrerLink] = useState(null); // {customerId}
   const registerActivityCustomer = a => {
     setEditingCustomer({
       name: a.customerNameText || '',
@@ -53108,10 +53182,16 @@ function App() {
     },
     onClose: () => setSelectedCustomer(null),
     onRegisterSuspect: sp => {
+      // 【不具合修正・根本原因】どの顧客のどのサスペクトから登録を始めたかを覚えておき、
+      // 新しい顧客の保存成功後にlinkSuspectToNewCustomerで元のサスペクトへ書き戻す。
+      if (selectedCustomer) setPendingSuspectLink({ customerId: selectedCustomer.id, suspectId: sp.id });
       setSelectedCustomer(null);
       registerSuspect(sp);
     },
     onRegisterReferrer: name => {
+      // 【不具合修正・根本原因】どの顧客が紹介元を未登録のまま持っていたかを覚えておき、
+      // 新しい顧客の保存成功後にlinkReferrerToNewCustomerで元の顧客のreferredByへ書き戻す。
+      if (selectedCustomer) setPendingReferrerLink({ customerId: selectedCustomer.id });
       setSelectedCustomer(null);
       registerReferrer(name);
     },
@@ -53147,12 +53227,27 @@ function App() {
         setActivityLogs(prev => nexusLinkActivityLogsByName(prev, pendingActivityCustomerName, saved.id, new Date().toISOString()));
         setPendingActivityCustomerName(null);
       }
+      // 【不具合修正・根本原因】サスペクト（配偶者・子ども等の家族情報）から「顧客登録 →」で
+      // 新規顧客を作成した場合、元のサスペクトへ新しい顧客のidを書き戻す（これが無いと、
+      // LPシート・家族相関図等のどこからも連携されない「見た目だけの登録」のままになる）。
+      if (pendingSuspectLink) {
+        linkSuspectToNewCustomer(pendingSuspectLink.customerId, pendingSuspectLink.suspectId, saved.id);
+        setPendingSuspectLink(null);
+      }
+      // 同様に、紹介元を新規顧客として登録した場合は、紹介された側の顧客のreferredByへ
+      // 新しい顧客のidを書き戻す。
+      if (pendingReferrerLink) {
+        linkReferrerToNewCustomer(pendingReferrerLink.customerId, saved.id);
+        setPendingReferrerLink(null);
+      }
       if (editingCustomer) setSelectedCustomer(saved);
     },
     onClose: () => {
       setShowCustomerForm(false);
       setEditingCustomer(null);
       setPendingActivityCustomerName(null);
+      setPendingSuspectLink(null);
+      setPendingReferrerLink(null);
     }
   }), selectedMemo && !showMemoForm && /*#__PURE__*/React.createElement(NegotiationDetail, {
     memo: selectedMemo,
