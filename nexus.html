@@ -5670,9 +5670,13 @@ const nexusHasRealChildIdentity = (sp, customers) => {
 // 既存の顧客と連携（linkedCustomerId）している場合は、年齢と同様に連携先の顧客レコードの
 // 名前を優先する（サスペクト自身のnameは連携前の古い名前のまま・あるいは未入力のことがあり、
 // CustomerDetailの一覧表示（displayName）と同じ優先順位に揃える）。
+// 【不具合修正】連携先の顧客レコードのnameが未入力の場合、以前からサスペクト側に
+// 入力されていた名前が「紐付けた途端に空欄表示になる」事故を防ぐため、連携先の名前が
+// 空の場合はサスペクト自身のnameにフォールバックする。
 const nexusChildDisplayName = (sp, customers) => {
   const linked = sp && sp.linkedCustomerId && customers ? customers.find(x => x.id === sp.linkedCustomerId) : null;
-  if (linked) return (linked.name || '').trim();
+  const linkedName = linked ? (linked.name || '').trim() : '';
+  if (linkedName) return linkedName;
   const name = ((sp && sp.name) || '').trim();
   return name && !/^お子様\d+$/.test(name) ? name : '';
 };
@@ -5698,10 +5702,29 @@ function nexusAnonymizeNames(html, nameMap) {
 // サスペクトの年齢は、既存の顧客と連携（linkedCustomerId）している場合はその顧客の登録情報を
 // 優先する（連携している成人した子は、生年月日をサスペクト側ではなく本人の顧客レコードにしか
 // 持っていないことが多く、サスペクト側だけを見ると年齢不明＝未就学児扱いになってしまうため）。
+// 【不具合修正】連携先の顧客レコードに生年月日・年齢のどちらも未入力の場合、以前から
+// サスペクト側に入力されていた年齢情報が「紐付けた途端に見えなくなる」事故を防ぐため、
+// 連携先に年齢情報が無い場合はサスペクト自身の生年月日・年齢にフォールバックする
+// （紐付けは情報を補う・優先するためのものであり、既存の情報を消すものではない）。
 const nexusResolveMemberAge = (sp, customers) => {
   const linked = sp.linkedCustomerId ? (customers || []).find(x => x.id === sp.linkedCustomerId) : null;
-  if (linked) return linked.birthdate ? calcAge(linked.birthdate) : calcStoredAge(linked.age, linked.ageYear);
+  if (linked) {
+    const linkedAge = linked.birthdate ? calcAge(linked.birthdate) : calcStoredAge(linked.age, linked.ageYear);
+    if (linkedAge !== null) return linkedAge;
+  }
   return sp.birthdate ? calcAge(sp.birthdate) : calcStoredAge(sp.age, sp.ageYear);
+};
+// 【不具合修正】年齢と同じ理由で、連携先の顧客レコードのname（個人の場合）・corporateName
+// （法人の場合）がどちらも未入力の場合、以前からサスペクト側に入力されていた名前が
+// 「紐付けた途端に未設定表示になる」事故を防ぐため、連携先に名前が無い場合はサスペクト
+// 自身のnameにフォールバックする。
+const nexusResolveMemberName = (sp, customers, fallback) => {
+  const linked = sp && sp.linkedCustomerId && customers ? customers.find(x => x.id === sp.linkedCustomerId) : null;
+  const linkedName = linked ? (linked.name || linked.corporateName || '').trim() : '';
+  if (linkedName) return linkedName;
+  const spName = ((sp && sp.name) || '').trim();
+  if (spName) return spName;
+  return fallback !== undefined ? fallback : '';
 };
 
 // ── AIプロンプトコピー用の個人情報匿名化（共通ロジック） ──────────────
@@ -5978,21 +6001,13 @@ function buildHouseholdInput(customer, customers) {
   // 「＋お子様を追加」で行を作った時点で、名前・年齢が未入力でも世帯判定上は「子あり」として
   // 扱う（classifyHouseholdは年齢不明の子を判定保留の理由文つきで子育て世帯に分類するため、
   // 未入力のままDINKs・既婚子なし等の「子なし」区分に誤判定されることを防ぐ）。
-  const householdMembers = (customer.suspects || []).filter(sp => sp.cohabiting).map(sp => {
-    const linked = sp.linkedCustomerId && customers ? customers.find(x => x.id === sp.linkedCustomerId) : null;
-    if (linked) {
-      return {
-        relation: sp.relation || '',
-        age: linked.birthdate ? calcAge(linked.birthdate) : calcStoredAge(linked.age, linked.ageYear),
-        disability: sp.disability || 'なし'
-      };
-    }
-    return {
-      relation: sp.relation || '',
-      age: sp.birthdate ? calcAge(sp.birthdate) : calcStoredAge(sp.age, sp.ageYear),
-      disability: sp.disability || 'なし'
-    };
-  });
+  // 【不具合修正】連携先の顧客レコードに年齢情報が無い場合にサスペクト側の既存の年齢情報が
+  // 消えて見えなくならないよう、共通のnexusResolveMemberAgeに統一する（重複ロジックを廃止）。
+  const householdMembers = (customer.suspects || []).filter(sp => sp.cohabiting).map(sp => ({
+    relation: sp.relation || '',
+    age: nexusResolveMemberAge(sp, customers),
+    disability: sp.disability || 'なし'
+  }));
   return {
     age,
     maritalStatus: customer.maritalStatus || '不明',
@@ -10021,8 +10036,10 @@ function CustomerDetail({
     className: "section-header"
   }, "👥 サスペクト（", c.suspects.length, "人）"), c.suspects.map(sp => {
   const linked = sp.linkedCustomerId ? customers.find(x => x.id === sp.linkedCustomerId) : null;
-  const displayName = linked ? linked.name || linked.corporateName || '(名称未設定)' : sp.name || '（名前未入力）';
-  const displayAge = linked ? linked.birthdate ? calcAge(linked.birthdate) : calcStoredAge(linked.age, linked.ageYear) : sp.birthdate ? calcAge(sp.birthdate) : calcStoredAge(sp.age, sp.ageYear);
+  // 【不具合修正】連携先に名前・年齢情報が無い場合にサスペクト側の既存の情報が消えないよう、
+  // 共通のnexusResolveMemberName／nexusResolveMemberAgeに統一する。
+  const displayName = nexusResolveMemberName(sp, customers, '（名前未入力）');
+  const displayAge = nexusResolveMemberAge(sp, customers);
   return /*#__PURE__*/React.createElement("div", {
     key: sp.id,
     className: "card",
@@ -36054,13 +36071,16 @@ function NexusFamilyTree({
     editable: false
   };
   // サスペクトが既存の顧客と連携している場合、名前・年齢・既契約有無はその顧客の登録情報から自動反映する
+  // 【不具合修正】連携先の顧客レコードに年齢情報が無い場合、サスペクト側に以前から入力
+  // されていた年齢が見えなくなっていたため、共通のnexusResolveMemberAgeで両方のケースに
+  // フォールバックするよう統一する。
   const resolveMember = (sp, roleLabel) => {
     const linked = sp.linkedCustomerId ? (customers || []).find(x => x.id === sp.linkedCustomerId) : null;
     if (linked) {
       return {
         key: 'linked-' + sp.id,
-        name: linked.name || roleLabel,
-        age: linked.birthdate ? calcAge(linked.birthdate) : calcStoredAge(linked.age, linked.ageYear),
+        name: nexusResolveMemberName(sp, customers, roleLabel),
+        age: nexusResolveMemberAge(sp, customers),
         roleLabel: roleLabel + '（顧客連携）',
         hasInsurance: (linked.contracts || []).length > 0 ? 'yes' : 'unknown',
         editable: false,
@@ -36070,7 +36090,7 @@ function NexusFamilyTree({
     return {
       key: sp.id,
       name: sp.name || roleLabel,
-      age: sp.birthdate ? calcAge(sp.birthdate) : calcStoredAge(sp.age, sp.ageYear),
+      age: nexusResolveMemberAge(sp, customers),
       roleLabel,
       hasInsurance: sp.hasInsurance || 'unknown',
       editable: true,
@@ -39750,7 +39770,13 @@ function NexusPlanningSection({
   // （夫婦どちらか片方の顧客登録にしかサスペクトを入れていないケースに対応するため）。
   const reverseSpouseCustomer = !forwardLinkedSpouseCustomer ? customers.find(x => x.id !== customer.id && (x.suspects || []).some(sp => sp.relation === '配偶者' && sp.linkedCustomerId === customer.id)) : null;
   const linkedSpouseCustomer = forwardLinkedSpouseCustomer || reverseSpouseCustomer;
-  const ageSpouse = linkedSpouseCustomer ? linkedSpouseCustomer.birthdate ? calcAge(linkedSpouseCustomer.birthdate) : calcStoredAge(linkedSpouseCustomer.age, linkedSpouseCustomer.ageYear) : spouseSp ? spouseSp.birthdate ? calcAge(spouseSp.birthdate) : calcStoredAge(spouseSp.age, spouseSp.ageYear) : null;
+  // 【不具合修正】配偶者として顧客連携済みでも、連携先の顧客レコードに生年月日・年齢の
+  // どちらも入力されていない場合、以前からサスペクト側（spouseSp）に入力されていた年齢が
+  // 「紐付けた途端に未登録表示になる」事故が起きていた。連携先に年齢情報が無い場合は
+  // spouseSp自身の生年月日・年齢にフォールバックする（連携は情報を優先するためのもので、
+  // 既存の情報を消すものではない）。
+  const linkedSpouseAge = linkedSpouseCustomer ? (linkedSpouseCustomer.birthdate ? calcAge(linkedSpouseCustomer.birthdate) : calcStoredAge(linkedSpouseCustomer.age, linkedSpouseCustomer.ageYear)) : null;
+  const ageSpouse = linkedSpouseAge !== null ? linkedSpouseAge : spouseSp ? (spouseSp.birthdate ? calcAge(spouseSp.birthdate) : calcStoredAge(spouseSp.age, spouseSp.ageYear)) : null;
   // お子様も、配偶者側の顧客レコードにだけ登録されている場合があるため合算する（名前が同じ子は重複除外）。
   // 実在の情報を持たない「空の子供枠」（過去バージョンの名残等）は、実在の子として
   // 数えると教育資金プランニング等で誤って表示されてしまうため、集計対象から除外する。
@@ -40058,10 +40084,12 @@ function NexusPlanningSection({
         </p>`).join('')}
       </div>`;
     };
+    // 【不具合修正】連携先の顧客レコードに名前・年齢情報が無い場合にサスペクト側の既存の
+    // 情報が消えないよう、共通のnexusResolveMemberName／nexusResolveMemberAgeに統一する。
     const famRows = docSuspects.length ? docSuspects.map(m => {
       const linked = m.linkedCustomerId ? customers.find(x => x.id === m.linkedCustomerId) : null;
-      const fName = linked ? linked.name || linked.corporateName || '(名称未設定)' : m.name;
-      const fAge = linked ? linked.birthdate ? calcAge(linked.birthdate) : calcStoredAge(linked.age, linked.ageYear) : m.birthdate ? calcAge(m.birthdate) : calcStoredAge(m.age, m.ageYear);
+      const fName = nexusResolveMemberName(m, customers, '(名称未設定)');
+      const fAge = nexusResolveMemberAge(m, customers);
       const fHasInsurance = linked ? (linked.contracts || []).length > 0 ? 'yes' : 'unknown' : m.hasInsurance || 'unknown';
       return `
       <tr><td>${escapeHtmlForPrint(fName)}</td><td>${escapeHtmlForPrint(m.relation)}</td><td>${fAge ?? ''}</td>
@@ -41009,10 +41037,12 @@ function NexusPlanningSection({
     // 家族構成
     row = nexusXlsxSubTitle(ws, row, '家族構成', 5);
     row = nexusXlsxHeaderRow(ws, row, ['お名前', '続柄', '年齢', '既契約', 'メモ']);
+    // 【不具合修正】連携先の顧客レコードに名前・年齢情報が無い場合にサスペクト側の既存の
+    // 情報が消えないよう、共通のnexusResolveMemberName／nexusResolveMemberAgeに統一する。
     const famRows = docSuspects.map(m => {
       const linked = m.linkedCustomerId ? customers.find(x => x.id === m.linkedCustomerId) : null;
-      const fName = linked ? linked.name || linked.corporateName || '(名称未設定)' : m.name || '';
-      const fAge = linked ? linked.birthdate ? calcAge(linked.birthdate) : calcStoredAge(linked.age, linked.ageYear) : m.birthdate ? calcAge(m.birthdate) : calcStoredAge(m.age, m.ageYear);
+      const fName = nexusResolveMemberName(m, customers, '(名称未設定)');
+      const fAge = nexusResolveMemberAge(m, customers);
       const fHasInsurance = linked ? (linked.contracts || []).length > 0 ? 'yes' : 'unknown' : m.hasInsurance || 'unknown';
       return [fName, m.relation || '', fAge ?? '', FAMILY_INSURANCE_LABEL[fHasInsurance], m.memo || ''];
     });
