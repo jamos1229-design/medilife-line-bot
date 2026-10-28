@@ -742,6 +742,42 @@ function nexusResolveOwnerRefLabel(ownerRef, customer, customers) {
   if (ownerRef.kind === 'external') return ownerRef.externalName || 'その他（未入力）';
   return '未設定';
 }
+// 【不具合修正・根本原因】配偶者の紐付けを、本人側の家族情報(customer.suspects)からの
+// 順方向リンクと、相手側の顧客の家族情報からの逆方向リンクの両方で解決する共通関数。
+// これまでLPシート（NexusPlanningSection）内にだけこのロジックが実装されており、
+// 家族相関図（NexusFamilyTree）・顧客詳細のサスペクトカード・プランニング資料の
+// PDF/Excel出力は順方向（本人側にサスペクトがある場合）しか見ていなかった。そのため、
+// 配偶者どちらか片方（例：ご主人側）にしか家族情報を入力・連携していないケースでは、
+// もう片方（例：妻側）の画面を開いたときに「配偶者として登録された家族情報が見つかりま
+// せん」という誤解を招く表示になっていた（紐付け自体は存在するのに、見ている側の画面が
+// それを探しに行っていなかった）。
+// 戻り値：{ spouseSuspect, spouseCustomer, direction } 。spouseSuspect＝本人側に登録されて
+// いる配偶者サスペクト（無ければnull）。spouseCustomer＝連携先として解決できた顧客
+// （無ければnull）。direction＝'forward'（本人側のサスペクトから連携）／'reverse'（相手側
+// の家族情報が本人を配偶者として連携している）／null（どちらの方向でも見つからない）。
+function nexusResolveLinkedSpouse(customer, customers) {
+  if (!customer) return { spouseSuspect: null, spouseCustomer: null, direction: null };
+  const spouseSuspect = (customer.suspects || []).find(sp => sp.relation === '配偶者') || null;
+  const forward = spouseSuspect && spouseSuspect.linkedCustomerId ? (customers || []).find(x => x.id === spouseSuspect.linkedCustomerId) : null;
+  if (forward) return { spouseSuspect, spouseCustomer: forward, direction: 'forward' };
+  const reverse = (customers || []).find(x => x.id !== customer.id && (x.suspects || []).some(sp => sp.relation === '配偶者' && sp.linkedCustomerId === customer.id));
+  if (reverse) return { spouseSuspect, spouseCustomer: reverse, direction: 'reverse' };
+  return { spouseSuspect, spouseCustomer: null, direction: null };
+}
+// 【不具合修正・根本原因】子についても配偶者と同じ理由で、本人側のsuspectsに無くても、
+// 子自身の顧客レコード側の家族情報で本人が「親」として連携されていれば、その子を
+// 取得できるようにする（例：子の顧客登録を先に行い、子側の家族情報に親を連携した場合に、
+// 親側の画面から子が見えなくなる事故を防ぐ）。戻り値は、顧客側のsuspectsに実在する
+// もの（nexusHasRealChildIdentityで判定）に加え、逆方向で見つかった子（相手側の顧客
+// レコードそのもの）を、表示用の擬似サスペクト形式で統合した配列。
+function nexusResolveLinkedChildren(customer, customers) {
+  if (!customer) return [];
+  const forwardKids = (customer.suspects || []).filter(sp => sp.relation === '子供' && nexusHasRealChildIdentity(sp, customers));
+  const reverseKids = (customers || []).filter(x => x.id !== customer.id && (x.suspects || []).some(sp => sp.relation === '親' && sp.linkedCustomerId === customer.id))
+    .filter(x => !forwardKids.some(sp => sp.linkedCustomerId === x.id))
+    .map(x => ({ id: `reverse-child:${x.id}`, relation: '子供', name: x.name || '', linkedCustomerId: x.id, cohabiting: false }));
+  return [...forwardKids, ...reverseKids];
+}
 // P1b：家族全体の解決ロジック。本人を起点に、家族情報(suspects)と、既に別の顧客として
 // 登録されている家族(linkedCustomerId)を統合し、重複なく1人ずつの「世帯メンバー」一覧を
 // 返す（P2のレポート集計で本人/配偶者/夫婦合算/家族全体を数える際の共通基盤。design doc
@@ -10123,7 +10159,29 @@ function CustomerDetail({
       lineHeight: 1.5
     }
   }, sp.memo));
-})), (referredByCustomer || c.referredByName || referredToCustomers.length > 0) && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+})), /*#__PURE__*/(() => {
+  // 【不具合修正・根本原因】この顧客自身のsuspectsに配偶者が登録されていなくても、相手側の
+  // 顧客情報がこの顧客を配偶者として連携している場合（逆方向リンク）、顧客詳細でも
+  // 表示する（nexusResolveLinkedSpouseと同じ判定基準。LPシート・家族相関図では見える
+  // のに顧客詳細では見えない、という画面間の不整合を解消する。既存データへは一切
+  // 書き込まない・読み取り専用の表示）。
+  const hasOwnSpouseSuspect = (c.suspects || []).some(sp => sp.relation === '配偶者');
+  if (hasOwnSpouseSuspect) return null;
+  const reverseLink = nexusResolveLinkedSpouse(c, customers);
+  if (reverseLink.direction !== 'reverse' || !reverseLink.spouseCustomer) return null;
+  const sc = reverseLink.spouseCustomer;
+  const scAge = sc.birthdate ? calcAge(sc.birthdate) : calcStoredAge(sc.age, sc.ageYear);
+  return /*#__PURE__*/React.createElement(React.Fragment, null,
+    /*#__PURE__*/React.createElement("div", { className: "section-header" }, "👥 配偶者（相手側の顧客情報で連携済み）"),
+    /*#__PURE__*/React.createElement("div", { className: "card", style: { marginBottom: 8, padding: '12px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+      /*#__PURE__*/React.createElement("div", null,
+        /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700 } }, sc.name || '（名称未設定）', scAge !== null ? `（${scAge}歳）` : ''),
+        /*#__PURE__*/React.createElement("div", { style: { fontSize: 11, color: 'var(--text-sub)' } }, "配偶者側の顧客情報でこの顧客と連携されています")
+      ),
+      /*#__PURE__*/React.createElement("button", { className: "btn btn-sm btn-outline", style: { fontSize: 12, padding: '6px 10px', whiteSpace: 'nowrap' }, onClick: () => onOpenCustomer(sc.id) }, "本人を見る →")
+    )
+  );
+})(), (referredByCustomer || c.referredByName || referredToCustomers.length > 0) && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "section-header"
   }, "紹介ネットワーク"), /*#__PURE__*/React.createElement("div", {
     className: "card"
@@ -36103,6 +36161,26 @@ function NexusFamilyTree({
     ...resolveMember(sp, sp.relation === '元配偶者' ? '元配偶者' : '配偶者'),
     isExSpouse: sp.relation === '元配偶者'
   }));
+  // 【不具合修正・根本原因】本人側のsuspectsに配偶者が登録されていなくても、相手側の
+  // 顧客情報が本人を配偶者として連携している場合（逆方向リンク）、家族相関図でも表示する
+  // （nexusResolveLinkedSpouseと同じ判定基準。LPシートでは見えるのに家族相関図では
+  // 見えない、という画面間の不整合を解消する。既存のsuspectsデータへは一切書き込まない）。
+  if (spouseSuspects.length === 0) {
+    const reverseLink = nexusResolveLinkedSpouse(customer, customers);
+    if (reverseLink.direction === 'reverse' && reverseLink.spouseCustomer) {
+      const sc = reverseLink.spouseCustomer;
+      spouseNodesList.push({
+        key: 'reverse-spouse-' + sc.id,
+        suspectId: 'reverse-spouse:' + sc.id,
+        name: sc.name || sc.corporateName || '配偶者',
+        age: sc.birthdate ? calcAge(sc.birthdate) : calcStoredAge(sc.age, sc.ageYear),
+        roleLabel: '配偶者（相手側の顧客情報で連携済み）',
+        hasInsurance: (sc.contracts || []).length > 0 ? 'yes' : 'unknown',
+        editable: false,
+        isExSpouse: false
+      });
+    }
+  }
   const grandparents = suspects.filter(sp => sp.relation === '祖父母').map(sp => resolveMember(sp, '祖父母'));
   const parents = suspects.filter(sp => sp.relation === '親').map(sp => resolveMember(sp, '親'));
   const siblings = suspects.filter(sp => sp.relation === '兄弟姉妹').map(sp => resolveMember(sp, '兄弟姉妹'));
@@ -39763,13 +39841,12 @@ function NexusPlanningSection({
   });
   const budgetExpenseMode = budget.expenseMode === 'reverse' ? 'reverse' : 'manual';
   const ageSelf = customer.birthdate ? calcAge(customer.birthdate) : calcStoredAge(customer.age, customer.ageYear);
-  const spouseSp = (customer.suspects || []).find(sp => sp.relation === '配偶者');
-  const forwardLinkedSpouseCustomer = spouseSp && spouseSp.linkedCustomerId ? customers.find(x => x.id === spouseSp.linkedCustomerId) : null;
-  // 逆方向のリンク：自分のサスペクトには配偶者が登録されていなくても、
-  // 相手側の顧客レコードで自分が「配偶者」として顧客連携されていれば、その相手を配偶者とみなす
-  // （夫婦どちらか片方の顧客登録にしかサスペクトを入れていないケースに対応するため）。
-  const reverseSpouseCustomer = !forwardLinkedSpouseCustomer ? customers.find(x => x.id !== customer.id && (x.suspects || []).some(sp => sp.relation === '配偶者' && sp.linkedCustomerId === customer.id)) : null;
-  const linkedSpouseCustomer = forwardLinkedSpouseCustomer || reverseSpouseCustomer;
+  // 【不具合修正・根本原因】配偶者の紐付けを、本人側だけでなく相手側の連携も共通関数
+  // （nexusResolveLinkedSpouse）で解決する。家族相関図・顧客詳細・PDF/Excel出力とも
+  // 同じ関数を使い、夫婦どちらの顧客から開いても同じ結果になるようにする。
+  const spouseLink = nexusResolveLinkedSpouse(customer, customers);
+  const spouseSp = spouseLink.spouseSuspect;
+  const linkedSpouseCustomer = spouseLink.spouseCustomer;
   // 【不具合修正】配偶者として顧客連携済みでも、連携先の顧客レコードに生年月日・年齢の
   // どちらも入力されていない場合、以前からサスペクト側（spouseSp）に入力されていた年齢が
   // 「紐付けた途端に未登録表示になる」事故が起きていた。連携先に年齢情報が無い場合は
@@ -39779,17 +39856,20 @@ function NexusPlanningSection({
   const ageSpouse = linkedSpouseAge !== null ? linkedSpouseAge : spouseSp ? (spouseSp.birthdate ? calcAge(spouseSp.birthdate) : calcStoredAge(spouseSp.age, spouseSp.ageYear)) : null;
   // 【不具合調査】配偶者年齢が「未登録」になる原因を画面上で特定できるよう、未登録時のみ
   // 具体的な理由を併記する（生年月日が無い場合に年齢を推測して表示することはしない。
-  // あくまで「なぜ表示できないか」を案内するだけ）。
+  // あくまで「なぜ表示できないか」を案内するだけ）。連携済みかどうかはlinkedSpouseCustomer
+  // （順方向・逆方向どちらも含む）を基準に判定し、spouseSpの有無だけで「見つからない」と
+  // 誤って表示しないようにする（これが前回までの誤診断の原因だった）。
   const spouseAgeUnknownReason = ageSpouse !== null ? null :
-    !spouseSp ? '配偶者として登録された家族情報が見つかりません' :
+    !linkedSpouseCustomer && !spouseSp ? '配偶者として登録された家族情報が見つかりません（ご本人・配偶者どちらの顧客情報にも配偶者としての連携がありません）' :
     !linkedSpouseCustomer ? '顧客としての連携（linkedCustomerId）が設定されていません。顧客編集の家族情報で「既存の顧客と連携」から連携してください' :
+    spouseLink.direction === 'reverse' ? '配偶者側の顧客情報では連携済みですが、生年月日・年齢がどちらの顧客情報にも入力されていません' :
     '連携先の顧客にも家族情報にも生年月日・年齢が入力されていません';
-  // お子様も、配偶者側の顧客レコードにだけ登録されている場合があるため合算する（名前が同じ子は重複除外）。
-  // 実在の情報を持たない「空の子供枠」（過去バージョンの名残等）は、実在の子として
-  // 数えると教育資金プランニング等で誤って表示されてしまうため、集計対象から除外する。
-  const ownKids = (customer.suspects || []).filter(sp => sp.relation === '子供' && nexusHasRealChildIdentity(sp, customers));
+  // お子様も、配偶者側の顧客レコードにだけ登録されている場合や、子自身の顧客レコード側だけに
+  // 親として連携されている場合があるため、共通関数（nexusResolveLinkedChildren）で両方向を
+  // 解決してから合算する（名前またはlinkedCustomerIdが同じ子は重複除外）。
+  const ownKids = nexusResolveLinkedChildren(customer, customers);
   const spouseKids = linkedSpouseCustomer ? (linkedSpouseCustomer.suspects || []).filter(sp => sp.relation === '子供' && nexusHasRealChildIdentity(sp, customers)) : [];
-  const kids = [...ownKids, ...spouseKids.filter(sk => !ownKids.some(k => (k.name || '').trim() && (k.name || '').trim() === (sk.name || '').trim()))];
+  const kids = [...ownKids, ...spouseKids.filter(sk => !ownKids.some(k => (k.linkedCustomerId && k.linkedCustomerId === sk.linkedCustomerId) || ((k.name || '').trim() && (k.name || '').trim() === (sk.name || '').trim())))];
   const kidsSummary = kids.length ? kids.map(k => {
     const a = nexusResolveMemberAge(k, customers);
     return `${nexusChildDisplayName(k, customers) || '子'}${a !== null ? `（${a}歳）` : ''}`;
@@ -40035,7 +40115,19 @@ function NexusPlanningSection({
     otherAssetChange,
     salaryType: budget.salaryType
   });
-  const docSuspects = docSectionOn('family') ? customer.suspects || [] : [];
+  // 【不具合修正・根本原因】本人側のsuspectsに配偶者・子が登録されていなくても、相手側の
+  // 顧客情報からの逆方向リンクで解決できる場合は、PDF/Excel出力にも含める（画面表示との
+  // 不整合を解消する。既存のsuspectsデータへは一切書き込まない）。
+  const docSuspects = docSectionOn('family') ? (() => {
+    const own = customer.suspects || [];
+    const hasOwnSpouse = own.some(sp => sp.relation === '配偶者');
+    const reverseLink = !hasOwnSpouse ? nexusResolveLinkedSpouse(customer, customers) : null;
+    const reverseSpouseEntry = reverseLink && reverseLink.direction === 'reverse' && reverseLink.spouseCustomer
+      ? [{ id: 'reverse-spouse:' + reverseLink.spouseCustomer.id, relation: '配偶者', name: reverseLink.spouseCustomer.name || '', linkedCustomerId: reverseLink.spouseCustomer.id }]
+      : [];
+    const reverseKidsOnly = nexusResolveLinkedChildren(customer, customers).filter(k => (k.id || '').toString().startsWith('reverse-child:'));
+    return [...own, ...reverseSpouseEntry, ...reverseKidsOnly];
+  })() : [];
   // 「家族情報」OFF時は、配偶者の年齢やお子様の人数・年齢等（家族構成が分かる情報）も出力しない。
   // 本人自身の年齢は資料として必要な範囲のため残す。
   const docAgeSpouse = docSectionOn('family') ? ageSpouse : null;
