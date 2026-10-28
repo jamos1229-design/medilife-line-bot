@@ -764,6 +764,28 @@ function nexusResolveLinkedSpouse(customer, customers) {
   if (reverse) return { spouseSuspect, spouseCustomer: reverse, direction: 'reverse' };
   return { spouseSuspect, spouseCustomer: null, direction: null };
 }
+// 【不具合調査（2回目の再調査）】「既に顧客登録されている人と連携」機能で顧客同士が
+// 連携済み（linkedCustomerIdが設定済み＝画面上は「🔗 顧客連携中」と表示される）でも、
+// サスペクトの「続柄・関係」で「配偶者」が選択されていなければ、nexusResolveLinkedSpouse
+// はその人を配偶者として一切認識しない（単なる顧客連携と夫婦関係は別物であり、連携だけを
+// 根拠に配偶者と決めつけてはならないため）。これは意図した仕様だが、ユーザーからは
+// 「連携済みと表示されているのに配偶者が見つからないと言われる」という矛盾に見えるため、
+// この関数で「連携はあるが続柄が配偶者になっていない」候補を探し、LPシートの診断メッセージ
+// で何が足りないのかを具体的に案内できるようにする（本人側・相手側どちらの連携も見る）。
+function nexusFindUnlabeledSpouseCandidate(customer, customers) {
+  if (!customer) return null;
+  const forward = (customer.suspects || []).find(sp => sp.linkedCustomerId && sp.relation !== '配偶者' && (customers || []).some(x => x.id === sp.linkedCustomerId));
+  if (forward) {
+    const linked = (customers || []).find(x => x.id === forward.linkedCustomerId);
+    return { candidateName: (linked ? nexusDisplayName(linked) : '') || forward.name || '（名前未設定）', currentRelation: forward.relation || '', foundOn: 'self' };
+  }
+  const reverseCustomer = (customers || []).find(x => x.id !== customer.id && (x.suspects || []).some(sp => sp.linkedCustomerId === customer.id && sp.relation !== '配偶者'));
+  if (reverseCustomer) {
+    const sp = (reverseCustomer.suspects || []).find(sp2 => sp2.linkedCustomerId === customer.id && sp2.relation !== '配偶者');
+    return { candidateName: nexusDisplayName(reverseCustomer) || '（名前未設定）', currentRelation: (sp && sp.relation) || '', foundOn: 'other' };
+  }
+  return null;
+}
 // 【不具合修正・根本原因】子についても配偶者と同じ理由で、本人側のsuspectsに無くても、
 // 子自身の顧客レコード側の家族情報で本人が「親」として連携されていれば、その子を
 // 取得できるようにする（例：子の顧客登録を先に行い、子側の家族情報に親を連携した場合に、
@@ -10123,7 +10145,7 @@ function CustomerDetail({
       fontSize: 12,
       color: 'var(--text-sub)'
     }
-  }, "🎂 ", fmtDateFull(sp.birthdate)) : null, sp.relation && /*#__PURE__*/React.createElement("span", {
+  }, "🎂 ", fmtDateFull(sp.birthdate)) : null, sp.relation ? /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 12,
       fontWeight: 700,
@@ -10132,7 +10154,17 @@ function CustomerDetail({
       borderRadius: 6,
       padding: '1px 7px'
     }
-  }, sp.relation))), linked ? /*#__PURE__*/React.createElement("button", {
+  }, sp.relation) : linked && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      fontWeight: 700,
+      background: '#FEF2F2',
+      color: 'var(--danger)',
+      borderRadius: 6,
+      padding: '1px 7px'
+    },
+    title: "顧客連携は設定済みですが、続柄・関係（配偶者・子供等）が選択されていないため、配偶者や子としては認識されません。編集から続柄を選択してください"
+  }, "⚠️ 続柄未設定"))), linked ? /*#__PURE__*/React.createElement("button", {
     className: "btn btn-sm btn-outline",
     style: {
       fontSize: 12,
@@ -39859,7 +39891,15 @@ function NexusPlanningSection({
   // あくまで「なぜ表示できないか」を案内するだけ）。連携済みかどうかはlinkedSpouseCustomer
   // （順方向・逆方向どちらも含む）を基準に判定し、spouseSpの有無だけで「見つからない」と
   // 誤って表示しないようにする（これが前回までの誤診断の原因だった）。
+  // 【不具合調査（2回目の再調査）】「見つかりません」と表示されていても、実際には
+  // 顧客同士が連携済み（🔗 顧客連携中）であるにも関わらず、続柄・関係が「配偶者」に
+  // 選択されていないだけ、というケースがある（平井様のケースで実際に確認された状態：
+  // 本人側・配偶者側どちらのサスペクト欄にも相手が「顧客連携中」と表示されているが、
+  // 続柄のタグが表示されていない＝relationが未設定）。この場合は「見つからない」という
+  // 不正確な表示ではなく、連携は既にあり、続柄の選択だけが残っている旨を具体的に案内する。
+  const unlabeledSpouseCandidate = (!linkedSpouseCustomer && !spouseSp) ? nexusFindUnlabeledSpouseCandidate(customer, customers) : null;
   const spouseAgeUnknownReason = ageSpouse !== null ? null :
+    unlabeledSpouseCandidate ? `「${unlabeledSpouseCandidate.candidateName}」さんと顧客連携（🔗 顧客連携中）は既に設定されていますが、続柄・関係が「配偶者」に選択されていないため配偶者として認識されていません（現在の続柄：${unlabeledSpouseCandidate.currentRelation || '未設定'}）。再連携は不要です。顧客編集のサスペクト欄で、この方のカードの「続柄・関係」から「配偶者」を選択してください` :
     !linkedSpouseCustomer && !spouseSp ? '配偶者として登録された家族情報が見つかりません（ご本人・配偶者どちらの顧客情報にも配偶者としての連携がありません）' :
     !linkedSpouseCustomer ? '顧客としての連携（linkedCustomerId）が設定されていません。顧客編集の家族情報で「既存の顧客と連携」から連携してください' :
     spouseLink.direction === 'reverse' ? '配偶者側の顧客情報では連携済みですが、生年月日・年齢がどちらの顧客情報にも入力されていません' :
