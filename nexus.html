@@ -14063,11 +14063,15 @@ function NexusSalesKpiCard({
   sales,
   customers,
   opportunities,
-  onOpenAIAnalysis
+  onOpenAIAnalysis,
+  nexusFanCampaigns,
+  nexusFanFollows,
+  onNavigate
 }) {
   const [period, setPeriod] = useState('今日');
   const [showReferralDetail, setShowReferralDetail] = useState(false);
   const [activityDetailTile, setActivityDetailTile] = useState(null); // {type, label}
+  const [showFanFollowDetail, setShowFanFollowDetail] = useState(false);
   const today = todayStr();
   const weekRaw = nexusWeekRange(today);
   // nexusWeekRangeは月曜〜日曜の暦週全体を返す（タスクの「今週」フィルタでは未来の
@@ -14101,6 +14105,12 @@ function NexusSalesKpiCard({
   const kpi = nexusActivityKpi(activityLogs, range.start, range.end);
   const referralAcquiredCustomers = nexusReferralAcquiredCustomers(customers, range.start, range.end);
   const referralAcquired = referralAcquiredCustomers.length;
+  // 【ファン化フォロー連動】ファン化フォロー画面の記録一覧（nexusFanFollows）に登録されている
+  // 「実際に実施した接触」だけを、選択中の期間で1件ずつ数える（詳しい条件は
+  // nexusFanFollowCompletedEventsのコメントを参照）。ファン化フォロー機能が未導入
+  // （nexusFanFollowsがundefined）の場合も壊れないよう、空配列扱いにする。
+  const fanFollowEvents = nexusFanFollowCompletedEvents(nexusFanFollows || [], nexusFanCampaigns || [], range.start, range.end);
+  const fanFollowCount = fanFollowEvents.length;
   // 【不具合修正②】ホーム画面の主要KPIから、契約データと連動しない旧手入力の売上
   // （sales.current・タスクのexpectedRevenue集計）を外す。数値そのものは削除せず、
   // 下の「旧データ確認」欄（折りたたみ）に残して参照・照合できるようにする。
@@ -14156,7 +14166,7 @@ function NexusSalesKpiCard({
   // （紹介獲得数だけは活動ログではなく顧客プロフィール基準のため、別のshowReferralDetailで開く）。
   const openTileDetail = (type, label) => () => setActivityDetailTile({ type, label });
   // 特に重視したい「新規接触→アポ確定→商談」を強調表示する
-  const tiles = [tile('新規接触数', kpi.newContact, true, openTileDetail('new_contact', '新規接触数')), tile('見込フォロー数', kpi.leadFollowUp, false, openTileDetail('lead_follow_up', '見込フォロー数')), tile('紹介依頼数', kpi.referralRequest, false, openTileDetail('referral_request', '紹介依頼数')), tile('紹介獲得数', referralAcquired, false, () => setShowReferralDetail(true)), tile('案件打診数', kpi.opportunityPitch, false, openTileDetail('opportunity_pitch', '案件打診数')), tile('相談・問合せ数', kpi.inquiry, false, openTileDetail('inquiry', '相談・問合せ数')), tile('アポ依頼数', kpi.apptRequest, false, openTileDetail('appt_request', 'アポ依頼数')), tile('アポ確定数', kpi.apptConfirmed, true, openTileDetail('appt_confirmed', 'アポ確定数')), tile('商談数', kpi.deal, true, openTileDetail('deal', '商談数')), tile('提案数', kpi.proposal, false, openTileDetail('proposal', '提案数')), tile('成約数', kpi.close, false, openTileDetail('close', '成約数')), tile('成約率', kpi.closeRate === null ? '—' : `${Math.round(kpi.closeRate * 100)}%`)];
+  const tiles = [tile('新規接触数', kpi.newContact, true, openTileDetail('new_contact', '新規接触数')), tile('見込フォロー数', kpi.leadFollowUp, false, openTileDetail('lead_follow_up', '見込フォロー数')), tile('紹介依頼数', kpi.referralRequest, false, openTileDetail('referral_request', '紹介依頼数')), tile('紹介獲得数', referralAcquired, false, () => setShowReferralDetail(true)), tile('案件打診数', kpi.opportunityPitch, false, openTileDetail('opportunity_pitch', '案件打診数')), tile('相談・問合せ数', kpi.inquiry, false, openTileDetail('inquiry', '相談・問合せ数')), tile('アポ依頼数', kpi.apptRequest, false, openTileDetail('appt_request', 'アポ依頼数')), tile('アポ確定数', kpi.apptConfirmed, true, openTileDetail('appt_confirmed', 'アポ確定数')), tile('商談数', kpi.deal, true, openTileDetail('deal', '商談数')), tile('提案数', kpi.proposal, false, openTileDetail('proposal', '提案数')), tile('成約数', kpi.close, false, openTileDetail('close', '成約数')), tile('成約率', kpi.closeRate === null ? '—' : `${Math.round(kpi.closeRate * 100)}%`), tile('ファン化フォロー数', fanFollowCount, false, () => setShowFanFollowDetail(true))];
   const statGrid = /*#__PURE__*/React.createElement("div", {
     className: "stat-grid"
   }, tiles);
@@ -14277,11 +14287,21 @@ function NexusSalesKpiCard({
     periodLabel: period,
     onClose: () => setActivityDetailTile(null)
   });
+  const fanFollowDetailSheet = showFanFollowDetail && /*#__PURE__*/React.createElement(NexusFanFollowKpiDetailSheet, {
+    events: fanFollowEvents,
+    customers: customers,
+    periodLabel: period,
+    onOpenCustomer: onNavigate ? c => {
+      setShowFanFollowDetail(false);
+      onNavigate('customers', c);
+    } : null,
+    onClose: () => setShowFanFollowDetail(false)
+  });
   return /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "card-title"
-  }, "📊 営業KPI"), periodChips, statGrid, rateGrid, marketSourceCard, unifiedRow, aiAnalysisBtn, referralDetailSheet, activityDetailSheet);
+  }, "📊 営業KPI"), periodChips, statGrid, rateGrid, marketSourceCard, unifiedRow, aiAnalysisBtn, referralDetailSheet, activityDetailSheet, fanFollowDetailSheet);
 }
 // ── 活動ログベースのKPIタイル（新規接触数・見込フォロー数・紹介依頼数・案件打診数・
 // 相談・問合せ数・アポ依頼数・アポ確定数・商談数・提案数・成約数）共通の内訳シート。
@@ -14351,6 +14371,71 @@ function NexusKpiActivityDetailSheet({
   }), /*#__PURE__*/React.createElement("div", {
     className: "drawer-title"
   }, label, "の内訳（", periodLabel, "）"), rows, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: {
+      marginTop: 12
+    },
+    onClick: onClose
+  }, "閉じる")));
+}
+// ── ファン化フォロー数タイルの内訳シート。顧客名・実施日・フォロー方法・フォロー内容・
+// 実施状況を一覧表示し、顧客ごとにNEXUS本体の顧客詳細画面へ遷移できるようにする
+// （onOpenCustomerが渡されている場合のみ「顧客詳細を見る」ボタンを出す）。
+function NexusFanFollowKpiDetailSheet({
+  events,
+  customers,
+  periodLabel,
+  onOpenCustomer,
+  onClose
+}) {
+  const resolveCustomer = ev => ev.customerId ? (customers || []).find(x => x.id === ev.customerId) : null;
+  const customerName = ev => {
+    const c = resolveCustomer(ev);
+    if (c) return nexusDisplayName(c);
+    if (ev.customerId) return '（削除済み顧客）';
+    return ev.customerNameText || '（顧客未登録）';
+  };
+  const list = events || [];
+  const rows = list.length === 0 ? /*#__PURE__*/React.createElement(EmptyState, {
+    icon: "📣",
+    text: `${periodLabel}のファン化フォロー実施はまだありません`
+  }) : list.map(ev => {
+    const c = resolveCustomer(ev);
+    return /*#__PURE__*/React.createElement("div", {
+      key: ev.id,
+      style: {
+        padding: '10px 0',
+        borderBottom: '1px solid var(--border)'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: { fontSize: 11.5, color: 'var(--text-sub)', flexShrink: 0 }
+    }, fmtDateFull(ev.occurredAt)), /*#__PURE__*/React.createElement("span", {
+      style: { fontSize: 14, fontWeight: 700 }
+    }, customerName(ev))), /*#__PURE__*/React.createElement("div", {
+      style: { fontSize: 12.5, color: 'var(--text-sub)', marginTop: 2 }
+    }, (NEXUS_FAN_CONTACT_METHOD_ICONS[ev.method] || '📝'), " ", ev.method, "　", ev.result), ev.memo && /*#__PURE__*/React.createElement("div", {
+      style: { fontSize: 12, color: 'var(--text-sub)', marginTop: 2, whiteSpace: 'pre-wrap' }
+    }, ev.memo), onOpenCustomer && c && /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      className: "btn btn-sm btn-outline",
+      style: { marginTop: 6, fontSize: 11.5 },
+      onClick: () => onOpenCustomer(c)
+    }, "顧客詳細を見る →"));
+  });
+  return /*#__PURE__*/React.createElement("div", {
+    className: "overlay",
+    onClick: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "drawer",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "drawer-handle"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "drawer-title"
+  }, "ファン化フォロー数の内訳（", periodLabel, "）"), rows, /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "btn btn-outline btn-full",
     style: {
@@ -14897,7 +14982,10 @@ function DashboardTab({
     sales: sales,
     customers: customers,
     opportunities: opportunities,
-    onOpenAIAnalysis: () => setShowAIAnalysis(true)
+    onOpenAIAnalysis: () => setShowAIAnalysis(true),
+    nexusFanCampaigns: nexusFanCampaigns,
+    nexusFanFollows: nexusFanFollows,
+    onNavigate: onNavigate
   }), nexusFanFollows && /*#__PURE__*/React.createElement(NexusFanTodayFollowCard, {
     follows: nexusFanFollows,
     activityLogs: activityLogs,
@@ -20985,6 +21073,59 @@ function nexusFanContactTimeline(record, campaignType) {
 // 一覧カード表示用：直近の接触（無ければ初回送付自体）。
 function nexusFanLatestContact(record, campaignType) {
   return nexusFanContactTimeline(record, campaignType)[0] || null;
+}
+// ── 営業KPI連動：ファン化フォローで「実際に実施した」接触だけを1件ずつ数える ──
+// 対象は、nexusFanContactTimeline（初回送付の仮想contact＋旧スカラー項目からの仮想contact
+// ＋contacts実データを、既存のdedupeロジックでマージ・重複排除した正規化済み一覧）を
+// そのまま使う。新しい集計の仕組みを別に作らず、記録一覧画面が実際に表示している
+// タイムラインと完全に同じデータを数えるため、画面の表示件数とKPIの件数が必ず一致する。
+//
+// 数える条件：
+// ① direction === 'outbound'（LINE送信・電話・メール・訪問・ハガキ等、FP側から実施した
+//    接触のみ）。direction === 'inbound'（既読・返信など、お客様側からの反応）は「フォロー
+//    実施」そのものではなく将来の「反応数」指標の対象であるため含めない。
+//    direction === 'mutual'（面談・会話など双方による接触）も、フォロー実施の結果として
+//    発生した別の工程（将来の「フォロー後の面談数」指標）であるため、ここでは含めない。
+// ② result が空、または「未対応」（まだ実施していない予定・下書き状態）ではないこと。
+//    「未対応」はNEXUS_FAN_CONTACT_RESULTSに含まれる正式な選択肢で、「実施予定だがまだ
+//    やっていない」ことを表すため、これだけを明示的に除外する。
+// ③ occurredAt（実施日）が指定期間内であること。
+//
+// 二重カウント防止：nexusFanContactTimelineの時点で、旧データ（readAt/repliedAt/
+// phoneFollowStatus）と新データ（contacts実データ）はnexusFanDedupeLegacyContactsにより
+// 重複排除済みのため、同じ出来事を二重に数えることはない。同じ記録・同じ接触を編集しても
+// 接触のidは変わらないため1件のまま、削除（contact.deletedAt／record.deletedAt）された
+// ものはnexusFanActiveFollows／nexusFanActiveContacts側で既に除外されている。
+// 集計値は常にfanFollows・campaignsの現在のデータから計算するだけで、別の件数カウンタを
+// どこにも保持しない（手動修正による不一致が原理的に起きない）。
+function nexusFanFollowCompletedEvents(fanFollows, campaigns, periodStart, periodEnd) {
+  const campaignById = {};
+  (campaigns || []).forEach(c => { campaignById[c.id] = c; });
+  const inPeriod = occurredAt => !!occurredAt && occurredAt >= periodStart && occurredAt <= periodEnd;
+  const events = [];
+  nexusFanActiveFollows(fanFollows).forEach(record => {
+    const campaign = campaignById[record.campaignId];
+    const campaignType = campaign ? campaign.campaignType : '';
+    nexusFanContactTimeline(record, campaignType).forEach(c => {
+      if (c.direction !== 'outbound') return;
+      if (!c.result || c.result === '未対応') return;
+      if (!inPeriod(c.occurredAt)) return;
+      events.push({
+        id: c.id,
+        recordId: record.id,
+        customerId: record.customerId || '',
+        customerNameText: record.customerNameText || '',
+        occurredAt: c.occurredAt,
+        method: c.method || 'その他',
+        result: c.result,
+        memo: c.memo || ''
+      });
+    });
+  });
+  return events.sort((a, b) => (b.occurredAt || '').localeCompare(a.occurredAt || ''));
+}
+function nexusFanFollowCompletedCount(fanFollows, campaigns, periodStart, periodEnd) {
+  return nexusFanFollowCompletedEvents(fanFollows, campaigns, periodStart, periodEnd).length;
 }
 // 接触方法別の件数（初回送付は含まない、正規化済みの以降の接触のみ）。旧データ・新データが
 // 混在していても、nexusFanNormalizedContactsの時点で重複が除かれているため二重計上されない。
