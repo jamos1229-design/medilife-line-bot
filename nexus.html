@@ -2226,6 +2226,18 @@ function nexusRiderPurposes(r) {
   if (Array.isArray(r.purposes)) return r.purposes;
   return r.purpose ? [r.purpose] : [];
 }
+// 【不具合調査】特約一覧の表示（ContractNotesList・印刷/PDF出力）は、どちらも
+// 「保障金額（amount）が入力されている特約のみ」を表示対象としてきた（本来は特約合算
+// 保険料のみ入力され金額欄が未入力のケース等を想定した絞り込みだったと見られる）。
+// しかし顧客詳細画面（CustomerDetail）の契約カードには、そもそも特約の表示処理自体が
+// 存在せず、編集画面で保険料・保険期間・払込期間等を登録しても通常の詳細画面では一切
+// 確認できない状態だった。この関数は「名称・保障金額・給付単位・保険料・保険期間・
+// 払込期間・次回更新・更新限度・目的のいずれか1つでも入力されている」特約を検出し、
+// 保障金額が未入力というだけで特約そのものが消えてしまわないようにする。
+function nexusRiderHasContent(rd) {
+  if (!rd) return false;
+  return !!((rd.name || '').trim() || (parseFloat(rd.amount) || 0) > 0 || (parseFloat(rd.premium) || 0) > 0 || (rd.termNote || '').trim() || (rd.paymentTermNote || '').trim() || (rd.nextRenewalTerm || '').trim() || (rd.renewalLimit || '').trim() || nexusRiderPurposes(rd).length > 0);
+}
 // 契約者本人が「被保険者」でない契約（例：契約者は本人だが被保険者は家族など）は、
 // 保障が本人にかかっているわけではないため、本人自身の保障集計からは除外する。
 function nexusOwnCoverageContracts(list, ownerName) {
@@ -10088,7 +10100,35 @@ function CustomerDetail({
           fontSize: 12,
           color: 'var(--text-sub)'
         }
-      }, "開始：", fmtDateFull(ct.periodicStart))))));
+      }, "開始：", fmtDateFull(ct.periodicStart)))), (() => {
+        // 【不具合修正】編集画面で登録した特約（名称・保障金額・給付単位・保険料・保険期間・
+        // 払込期間等）が、顧客詳細の通常画面にはこれまで一切表示されていなかった（この
+        // 契約カードのどこにも特約を読む処理が無かった）。契約一覧画面の補足欄・PDF出力には
+        // 「保障金額が入力されている特約のみ」という絞り込み付きで表示されていたが、通常の
+        // 契約詳細そのものには表示経路自体が存在しなかった。保障金額が未入力でも、保険料・
+        // 保険期間等の他の項目が登録されていれば消えないよう、nexusRiderHasContentで判定する。
+        const displayRiders = (ct.riders || []).filter(nexusRiderHasContent);
+        if (displayRiders.length === 0) return null;
+        return /*#__PURE__*/React.createElement("div", {
+          className: "info-item",
+          style: { gridColumn: '1/-1' }
+        }, /*#__PURE__*/React.createElement("div", {
+          className: "info-label"
+        }, "特約（", displayRiders.length, "件）"), displayRiders.map((rd, ri) => /*#__PURE__*/React.createElement("div", {
+          key: rd.id || ri,
+          style: {
+            marginTop: ri > 0 ? 8 : 4,
+            paddingTop: ri > 0 ? 8 : 0,
+            borderTop: ri > 0 ? '1px dashed var(--border)' : 'none'
+          }
+        }, /*#__PURE__*/React.createElement("div", {
+          style: { fontWeight: 700, fontSize: 13.5 }
+        }, rd.name || nexusRiderPurposes(rd).join('・') || `特約${ri + 1}`, nexusRiderPurposes(rd).length > 0 && /*#__PURE__*/React.createElement("span", {
+          style: { fontSize: 11, color: 'var(--text-sub)', marginLeft: 6, fontWeight: 400 }
+        }, "（", nexusRiderPurposes(rd).join('・'), "）")), /*#__PURE__*/React.createElement("div", {
+          style: { fontSize: 12.5, color: 'var(--text-sub)', marginTop: 2, display: 'flex', flexWrap: 'wrap', gap: '2px 10px' }
+        }, (parseFloat(rd.amount) || 0) > 0 && /*#__PURE__*/React.createElement("span", { key: "amt" }, "保障額：¥", Number(rd.amount).toLocaleString(), rd.amountUnit === '日額' ? '／日' : ''), (parseFloat(rd.premium) || 0) > 0 && /*#__PURE__*/React.createElement("span", { key: "prem" }, "保険料：¥", Number(rd.premium).toLocaleString()), (rd.termNote || '').trim() && /*#__PURE__*/React.createElement("span", { key: "term" }, "保険期間：", rd.termNote), (rd.paymentTermNote || '').trim() && /*#__PURE__*/React.createElement("span", { key: "payterm" }, "払込期間：", rd.paymentTermNote), (rd.nextRenewalTerm || '').trim() && /*#__PURE__*/React.createElement("span", { key: "renew" }, "次回更新：", rd.nextRenewalTerm), (rd.renewalLimit || '').trim() && /*#__PURE__*/React.createElement("span", { key: "limit" }, "更新限度：", rd.renewalLimit)))));
+      })()));
     }));
   })(), c.suspects && c.suspects.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "section-header"
