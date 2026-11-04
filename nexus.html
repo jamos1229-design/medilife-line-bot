@@ -2720,6 +2720,39 @@ function nexusContractApplicationMonth(contract) {
   const d = (contract.applicationDate || '').slice(0, 7);
   return d || null;
 }
+// ── 税込・税抜 表示改善 ──────────────────────────────────────
+// 【調査結果】AC（申込AC・成立AC・成立待ちAC）は、nexusComputeEstimatedAcYenで計算できる
+// 場合、分担後見込手数料の税抜金額（commission.estimate.amountExclTax、入力時に税込／税抜の
+// どちらで入力されたかに関わらずnexusDeriveAmountExclTaxで税抜に統一済み）を基準に算出して
+// いるため、常に税抜である。しかしacMethod未設定・見込手数料未入力など、計算できない
+// 旧データの契約は、既存のacAmount（本機能導入前の手入力・万円）にフォールバックしており、
+// この旧項目には税込・税抜の区別を保存する仕組みが無い（単なる数値のみ）。そのため、
+// AC集計の対象に旧手入力acAmountを使っている契約が1件でも含まれる場合、その合計の税区分は
+// 「確認できない」ため、推測せず「税区分未確認」と表示する。
+function nexusAcAmountUsesLegacyFallback(contract) {
+  if (nexusComputeEstimatedAcYen(contract) !== null) return false; // 計算済み＝税抜確定
+  const v = contract.acAmount;
+  return !(v === null || v === undefined || v === ''); // 旧手入力のみで金額が出ている
+}
+// 渡された契約行（{contract}を含む配列）のうち、AC金額が実際に集計対象となっている
+// （nexusContractAcAmountYenがnullでない）契約だけを見て、1件でも旧手入力acAmountに
+// フォールバックしていれば'税区分未確認'、全件が計算済み（税抜確定）なら'税抜'を返す。
+// 対象契約が0件の場合も、計算式自体は税抜ベースのため'税抜'とする。
+function nexusAcCohortTaxBasisLabel(rows) {
+  const contributing = (rows || []).filter(r => nexusContractAcAmountYen(r.contract) !== null);
+  if (contributing.length === 0) return '税抜';
+  return contributing.some(r => nexusAcAmountUsesLegacyFallback(r.contract)) ? '税区分未確認' : '税抜';
+}
+// 確定手数料合計（nexusComputeUnifiedMonthlyRevenueDashboard.confirmedCommissionTotal）は、
+// commission.confirmed.amountExclTaxが入力済みの契約だけを合計対象とし（旧手入力への
+// フォールパックが存在しない）、amountExclTaxは入力時の税込／税抜に関わらず必ず税抜へ
+// 変換済みの値のため、常に税抜である。
+const NEXUS_CONFIRMED_COMMISSION_TAX_LABEL = '税抜';
+// 商談中の見込AC（opportunities[].expectedRevenue）は、手数料のような税込／税抜の入力区分
+// （enteredAs）やamountExclTaxへの変換が一切存在しない、単純な手入力の金額項目である。
+// 営業担当者によって税込で入力しているか税抜で入力しているかはNEXUS側では判別できないため、
+// 推測せず「税区分未確認」と表示する。
+const NEXUS_PIPELINE_AC_TAX_LABEL = '税区分未確認';
 // AC金額を数値（万円）として取得する。最終統合改修：分担後見込手数料から計算できる場合は
 // それを優先し（指示書8：集計には原則、自分の分担後見込みACを使用する）、計算できない
 // 旧データ（acMethod未設定・estimate未入力等）は、既存のacAmount（手入力・万円）を保持して
@@ -2778,7 +2811,13 @@ function nexusComputeMonthlyAcDashboard(customers, yearMonth) {
     cancelledAcTotal: sumAc(cancelled),
     // 有効AC＝取消・不成立を除いた、成立待ち＋成立のAC（指示書4：有効ACを明確に区別する）。
     effectiveAcTotal: sumAc(awaitingDecision) + sumAc(approved),
-    acMissingCount
+    acMissingCount,
+    // 税込・税抜表示改善：申込AC／成立待ちAC／成立ACは、それぞれ集計対象となる契約の
+    // 組み合わせが異なる（申込AC＝コホート全件、成立待ちAC＝成立待ちのみ…）ため、
+    // 旧手入力acAmountへのフォールバックが混ざっているかどうかも別々に判定する。
+    applicationAcTaxBasisLabel: nexusAcCohortTaxBasisLabel(cohort),
+    awaitingDecisionAcTaxBasisLabel: nexusAcCohortTaxBasisLabel(awaitingDecision),
+    approvedAcTaxBasisLabel: nexusAcCohortTaxBasisLabel(approved)
   };
 }
 // 【不具合修正・統合】ホーム・契約・タスク画面でAC・売上の集計元が分かれていた問題に対応。
@@ -2866,7 +2905,15 @@ function nexusComputeUnifiedMonthlyRevenueDashboard(customers, opportunities, ye
     pipelineExpectedAcTotal,
     pipelineExpectedCount: dedupedOpportunities.length,
     pipelineMissingAmountCount,
-    pipelineExcludedCount
+    pipelineExcludedCount,
+    // 税込・税抜表示改善：対象契約の組み合わせはbase（nexusComputeMonthlyAcDashboard）と
+    // 完全に同じため、そのままこの関数の結果に引き継ぐ（二重計算しない）。確定手数料・
+    // 商談中の見込ACは対象の組み合わせに関わらず常に同じ区分のため固定文言を使う。
+    applicationAcTaxBasisLabel: base.applicationAcTaxBasisLabel,
+    awaitingDecisionAcTaxBasisLabel: base.awaitingDecisionAcTaxBasisLabel,
+    approvedAcTaxBasisLabel: base.approvedAcTaxBasisLabel,
+    confirmedCommissionTaxBasisLabel: NEXUS_CONFIRMED_COMMISSION_TAX_LABEL,
+    pipelineAcTaxBasisLabel: NEXUS_PIPELINE_AC_TAX_LABEL
   };
 }
 function ContractBlock({
@@ -5392,9 +5439,9 @@ function NexusContractManagementScreen({ customers, opportunities, sales, onOpen
     ),
     /*#__PURE__*/React.createElement("div", { style: { display: 'flex', flexWrap: 'wrap', gap: 10, overflowX: 'auto' } },
       acCell('今月の申込件数', `${dashboard.applicationCount}件`, '成立待ち・成立・不成立・取消のすべてを含む'),
-      acCell('今月の申込AC', acYen(dashboard.applicationAcTotal)),
-      acCell('成立待ちAC', acYen(dashboard.awaitingDecisionAcTotal), `${dashboard.awaitingDecisionCount}件`),
-      acCell('成立AC', acYen(dashboard.approvedAcTotal), `${dashboard.approvedCount}件`),
+      acCell('今月の申込AC', acYen(dashboard.applicationAcTotal), dashboard.applicationAcTaxBasisLabel),
+      acCell('成立待ちAC', acYen(dashboard.awaitingDecisionAcTotal), `${dashboard.awaitingDecisionCount}件・${dashboard.awaitingDecisionAcTaxBasisLabel}`),
+      acCell('成立AC', acYen(dashboard.approvedAcTotal), `${dashboard.approvedCount}件・${dashboard.approvedAcTaxBasisLabel}`),
       acCell('不成立AC', acYen(dashboard.declinedAcTotal), `${dashboard.declinedCount}件`),
       acCell('取消AC', acYen(dashboard.cancelledAcTotal), `${dashboard.cancelledCount}件`),
       acCell('AC未入力件数', `${dashboard.acMissingCount}件`, '0円ではなく未入力として別表示')
@@ -5410,11 +5457,11 @@ function NexusContractManagementScreen({ customers, opportunities, sales, onOpen
     /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, fontSize: 13, marginBottom: 8 } }, "💰 月間AC目標・契約実績（ホーム・タスクと共通集計）"),
     /*#__PURE__*/React.createElement("div", { style: { display: 'flex', flexWrap: 'wrap', gap: 10, overflowX: 'auto' } },
       acCell('月間AC目標', monthlyAcTarget > 0 ? fmtYenNum(monthlyAcTarget) : '未設定', 'タスク画面の「売上トラッカー」から設定できます'),
-      monthlyAcTarget > 0 ? acCell('申込AC達成率', `${applicationAcAchievementPct}%`, `申込AC ${fmtYenNum(unified.applicationAcYenTotal)}（取消・不成立を含むグロス）`) : null,
-      monthlyAcTarget > 0 ? acCell('成立AC達成率', `${approvedAcAchievementPct}%`, `成立AC ${fmtYenNum(unified.approvedAcYenTotal)}`) : null,
-      acCell('成立待ちAC', fmtYenNum(unified.awaitingDecisionAcYenTotal), `${unified.awaitingDecisionCount}件`),
-      acCell('商談中の見込AC', fmtYenNum(unified.pipelineExpectedAcTotal), `商談データ基準・${unified.pipelineExpectedCount}件${unified.pipelineMissingAmountCount > 0 ? `（うち金額未入力${unified.pipelineMissingAmountCount}件）` : ''}${unified.pipelineExcludedCount > 0 ? `（申込済みのため${unified.pipelineExcludedCount}件は二重計上を避けて除外）` : ''}`),
-      acCell('確定手数料合計', fmtYenNum(unified.confirmedCommissionTotal), `申込月基準・${unified.confirmedCommissionCount}件（代理店確定額入力済みのみ）`),
+      monthlyAcTarget > 0 ? acCell('申込AC達成率', `${applicationAcAchievementPct}%`, `申込AC ${fmtYenNum(unified.applicationAcYenTotal)}（${unified.applicationAcTaxBasisLabel}・取消・不成立を含むグロス）`) : null,
+      monthlyAcTarget > 0 ? acCell('成立AC達成率', `${approvedAcAchievementPct}%`, `成立AC ${fmtYenNum(unified.approvedAcYenTotal)}（${unified.approvedAcTaxBasisLabel}）`) : null,
+      acCell('成立待ちAC', fmtYenNum(unified.awaitingDecisionAcYenTotal), `${unified.awaitingDecisionCount}件・${unified.awaitingDecisionAcTaxBasisLabel}`),
+      acCell('商談中の見込AC', fmtYenNum(unified.pipelineExpectedAcTotal), `商談データ基準・${unified.pipelineExpectedCount}件${unified.pipelineMissingAmountCount > 0 ? `（うち金額未入力${unified.pipelineMissingAmountCount}件）` : ''}${unified.pipelineExcludedCount > 0 ? `（申込済みのため${unified.pipelineExcludedCount}件は二重計上を避けて除外）` : ''}・${unified.pipelineAcTaxBasisLabel}`),
+      acCell('確定手数料合計', fmtYenNum(unified.confirmedCommissionTotal), `申込月基準・${unified.confirmedCommissionCount}件（代理店確定額入力済みのみ）・${unified.confirmedCommissionTaxBasisLabel}`),
       acCell('実入金額合計', fmtYenNum(unified.actualPaidTotal), `実入金日基準・${unified.actualPaidCount}件（申込月とは別の対象期間）`)
     )
   );
@@ -14244,14 +14291,14 @@ function NexusSalesKpiCard({
     /*#__PURE__*/React.createElement("div", { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 } },
       kpiTile('① 月間AC目標', monthlyAcTarget > 0 ? `¥${monthlyAcTarget.toLocaleString()}` : '未設定', '「設定」から変更できます'),
       monthlyAcTarget > 0
-        ? kpiTile('② 申込AC達成率', `${applicationAcAchievementPct}%`, `¥${Math.round(unified.applicationAcYenTotal).toLocaleString()}（取消・不成立含む）`)
-        : kpiTile('② 申込AC', `¥${Math.round(unified.applicationAcYenTotal).toLocaleString()}`, '取消・不成立を含むグロス'),
+        ? kpiTile('② 申込AC達成率', `${applicationAcAchievementPct}%`, `¥${Math.round(unified.applicationAcYenTotal).toLocaleString()}（${unified.applicationAcTaxBasisLabel}・取消・不成立含む）`)
+        : kpiTile('② 申込AC', `¥${Math.round(unified.applicationAcYenTotal).toLocaleString()}`, `${unified.applicationAcTaxBasisLabel}・取消・不成立を含むグロス`),
       monthlyAcTarget > 0
-        ? kpiTile('③ 成立AC達成率', `${approvedAcAchievementPct}%`, `¥${Math.round(unified.approvedAcYenTotal).toLocaleString()}`)
-        : kpiTile('③ 成立AC', `¥${Math.round(unified.approvedAcYenTotal).toLocaleString()}`, `${unified.approvedCount}件`),
-      kpiTile('④ 成立待ちAC', `¥${Math.round(unified.awaitingDecisionAcYenTotal).toLocaleString()}`, `${unified.awaitingDecisionCount}件`),
-      kpiTile('⑤ 商談中の見込AC', `¥${Math.round(unified.pipelineExpectedAcTotal).toLocaleString()}`, `${unified.pipelineExpectedCount}件${unified.pipelineMissingAmountCount > 0 ? `・未入力${unified.pipelineMissingAmountCount}件` : ''}${unified.pipelineExcludedCount > 0 ? `・除外${unified.pipelineExcludedCount}件` : ''}`),
-      kpiTile('⑥ 確定手数料', `¥${Math.round(unified.confirmedCommissionTotal).toLocaleString()}`, `${unified.confirmedCommissionCount}件`),
+        ? kpiTile('③ 成立AC達成率', `${approvedAcAchievementPct}%`, `¥${Math.round(unified.approvedAcYenTotal).toLocaleString()}（${unified.approvedAcTaxBasisLabel}）`)
+        : kpiTile('③ 成立AC', `¥${Math.round(unified.approvedAcYenTotal).toLocaleString()}`, `${unified.approvedCount}件・${unified.approvedAcTaxBasisLabel}`),
+      kpiTile('④ 成立待ちAC', `¥${Math.round(unified.awaitingDecisionAcYenTotal).toLocaleString()}`, `${unified.awaitingDecisionCount}件・${unified.awaitingDecisionAcTaxBasisLabel}`),
+      kpiTile('⑤ 商談中の見込AC', `¥${Math.round(unified.pipelineExpectedAcTotal).toLocaleString()}`, `${unified.pipelineExpectedCount}件${unified.pipelineMissingAmountCount > 0 ? `・未入力${unified.pipelineMissingAmountCount}件` : ''}${unified.pipelineExcludedCount > 0 ? `・除外${unified.pipelineExcludedCount}件` : ''}・${unified.pipelineAcTaxBasisLabel}`),
+      kpiTile('⑥ 確定手数料', `¥${Math.round(unified.confirmedCommissionTotal).toLocaleString()}`, `${unified.confirmedCommissionCount}件・${unified.confirmedCommissionTaxBasisLabel}`),
       kpiTile('⑦ 実入金額', `¥${Math.round(unified.actualPaidTotal).toLocaleString()}`, `${unified.actualPaidCount}件（入金日基準）`)
     ),
     /*#__PURE__*/React.createElement("button", {
@@ -18353,7 +18400,7 @@ function SalesTracker({
     }
   }, "🎉")), /*#__PURE__*/React.createElement("div", {
     style: { fontSize: 10.5, color: 'var(--text-sub)', marginBottom: 6 }
-  }, `成立AC（契約データ基準・${unifiedYm}の申込分・${unified.approvedCount}件）で算出`, target > 0 && /*#__PURE__*/React.createElement("span", null, `　／　申込AC達成率：${applicationAcAchievementPct}%`), manualCurrent !== current && /*#__PURE__*/React.createElement("span", null, `　／　旧・手入力値：¥${fmt(manualCurrent)}`)), /*#__PURE__*/React.createElement("div", {
+  }, `成立AC（契約データ基準・${unifiedYm}の申込分・${unified.approvedCount}件・${unified.approvedAcTaxBasisLabel}）で算出`, target > 0 && /*#__PURE__*/React.createElement("span", null, `　／　申込AC達成率：${applicationAcAchievementPct}%`), manualCurrent !== current && /*#__PURE__*/React.createElement("span", null, `　／　旧・手入力値：¥${fmt(manualCurrent)}`)), /*#__PURE__*/React.createElement("div", {
     style: {
       background: 'rgba(0,0,0,0.08)',
       borderRadius: 6,
@@ -18421,8 +18468,8 @@ function SalesTracker({
   }, "未入力"))), /*#__PURE__*/React.createElement("div", {
     style: { marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(0,0,0,0.07)', fontSize: 11.5, color: 'var(--text-sub)' }
   },
-    /*#__PURE__*/React.createElement("div", null, `商談中の見込AC（商談データ基準・${unified.pipelineExpectedCount}件${unified.pipelineMissingAmountCount > 0 ? `・未入力${unified.pipelineMissingAmountCount}件` : ''}${unified.pipelineExcludedCount > 0 ? `・申込済み${unified.pipelineExcludedCount}件は二重計上防止で除外` : ''}）：¥${fmt(unified.pipelineExpectedAcTotal)}`),
-    /*#__PURE__*/React.createElement("div", null, `確定手数料（申込月基準・${unified.confirmedCommissionCount}件）：¥${fmt(unified.confirmedCommissionTotal)}`),
+    /*#__PURE__*/React.createElement("div", null, `商談中の見込AC（商談データ基準・${unified.pipelineExpectedCount}件${unified.pipelineMissingAmountCount > 0 ? `・未入力${unified.pipelineMissingAmountCount}件` : ''}${unified.pipelineExcludedCount > 0 ? `・申込済み${unified.pipelineExcludedCount}件は二重計上防止で除外` : ''}・${unified.pipelineAcTaxBasisLabel}）：¥${fmt(unified.pipelineExpectedAcTotal)}`),
+    /*#__PURE__*/React.createElement("div", null, `確定手数料（申込月基準・${unified.confirmedCommissionCount}件・${unified.confirmedCommissionTaxBasisLabel}）：¥${fmt(unified.confirmedCommissionTotal)}`),
     /*#__PURE__*/React.createElement("div", null, `実入金額合計（実入金日基準・${unified.actualPaidCount}件）：¥${fmt(unified.actualPaidTotal)}`)
   )), editing && /*#__PURE__*/React.createElement("div", {
     style: {
