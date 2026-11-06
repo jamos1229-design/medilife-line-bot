@@ -11967,6 +11967,58 @@ function NexusFanCampaignForm({ editing, onSave, onClose }) {
     onClick: save
   }, "保存"))));
 }
+// ── ファン化フォロー：④同じお客様との過去のやり取りを、キャンペーンを問わず日付順で確認する
+// ための読み取り専用シート。一覧では内容の冒頭だけ表示し、タップすると全文（やり取りの内容・
+// お客様の反応・対応したこと・次にすること・関連キャンペーン）を確認できる。保存データは
+// 一切変更しない（nexusFanCustomerCrossCampaignTimelineの結果をそのまま表示するだけ）。
+function NexusFanCustomerConversationHistorySheet({ customerId, customerName, follows, campaigns, onClose }) {
+  const [expandedId, setExpandedId] = useState(null);
+  const timeline = nexusFanCustomerCrossCampaignTimeline(customerId, follows, campaigns);
+  const row = c => {
+    const expanded = expandedId === c.id;
+    const methodLabel = nexusFanOtherLabel(c.method, c.methodOther) || c.method;
+    const icon = NEXUS_FAN_CONTACT_METHOD_ICONS[c.method] || '📝';
+    return React.createElement("div", {
+      key: `${c.recordId}-${c.id}`,
+      className: 'fan-history-row',
+      style: { border: '1px solid var(--border)', borderRadius: 10, marginBottom: 6, overflow: 'hidden', cursor: 'pointer' },
+      onClick: () => setExpandedId(k => k === c.id ? null : c.id)
+    }, React.createElement("div", {
+      style: { padding: '8px 10px' }
+    }, React.createElement("div", {
+      style: { display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }
+    }, React.createElement("span", {
+      style: { fontSize: 12.5, fontWeight: 700 }
+    }, `${icon} ${methodLabel}　${NEXUS_FAN_CONTACT_DIRECTION_LABELS[c.direction] || ''}`), React.createElement("span", {
+      style: { fontSize: 11.5, color: 'var(--text-sub)' }
+    }, c.occurredAt || '')), React.createElement("div", {
+      style: { fontSize: 11.5, color: 'var(--accent)', fontWeight: 700, marginTop: 2 }
+    }, "📣 ", c.campaignName), !expanded && c.memo && React.createElement("div", {
+      style: { fontSize: 11.5, color: 'var(--text-sub)', marginTop: 4 }
+    }, "💬 ", nexusFanConversationPreview(c.memo)),
+    expanded && React.createElement("div", {
+      style: { marginTop: 6, paddingTop: 6, borderTop: '1px dashed var(--border)' }
+    },
+      c.memo && React.createElement("div", { style: { fontSize: 12.5, marginBottom: 6, whiteSpace: 'pre-wrap' } }, React.createElement("div", { style: { fontWeight: 700, fontSize: 11, color: 'var(--text-sub)' } }, "やり取りの内容"), c.memo),
+      c.customerReaction && React.createElement("div", { style: { fontSize: 12.5, marginBottom: 6, whiteSpace: 'pre-wrap' } }, React.createElement("div", { style: { fontWeight: 700, fontSize: 11, color: 'var(--text-sub)' } }, "お客様の反応"), c.customerReaction),
+      c.actionTaken && React.createElement("div", { style: { fontSize: 12.5, marginBottom: 6, whiteSpace: 'pre-wrap' } }, React.createElement("div", { style: { fontWeight: 700, fontSize: 11, color: 'var(--text-sub)' } }, "対応したこと"), c.actionTaken),
+      c.nextStepsNote && React.createElement("div", { style: { fontSize: 12.5, whiteSpace: 'pre-wrap' } }, React.createElement("div", { style: { fontWeight: 700, fontSize: 11, color: 'var(--text-sub)' } }, "次にすること"), c.nextStepsNote),
+      !c.memo && !c.customerReaction && !c.actionTaken && !c.nextStepsNote && React.createElement("div", { style: { fontSize: 11.5, color: 'var(--text-sub)' } }, "（詳細な内容の記録はありません）")
+    )));
+  };
+  const body = timeline.length === 0 ? React.createElement(EmptyState, {
+    icon: "📜", text: "このお客様とのやり取りの履歴はまだありません"
+  }) : timeline.map(row);
+  return React.createElement("div", {
+    className: "overlay", onClick: onClose
+  }, React.createElement("div", {
+    className: "drawer", onClick: e => e.stopPropagation()
+  }, React.createElement("div", { className: "drawer-handle" }),
+    React.createElement("div", { className: "drawer-title" }, `過去のやり取り：${customerName || '（名前未入力）'}`),
+    body,
+    React.createElement("button", { type: "button", className: "btn btn-outline btn-full", style: { marginTop: 12 }, onClick: onClose }, "閉じる")
+  ));
+}
 // ── ファン化フォロー：1件の送信記録の追加・編集。既読／返信ありはワンタップで記録するが、
 // 相談以降（面談・提案・成約・紹介）はボタンを置かず常に自動判定（nexusFanFollowDownstreamStage）。
 // 「相談になった」は既存のNexusActivityFormをtype:'inquiry'で事前入力して開く橋渡しボタンで、
@@ -11985,6 +12037,11 @@ function NexusFanFollowRecordForm({
   setCustomers,
   tasks,
   setTasks,
+  // 【改修④】同じお客様の過去のやり取りを、キャンペーンを問わず振り返れるようにするための
+  // 追加プロップ（全キャンペーンのフォロー記録・キャンペーン名解決用）。既存の呼び出し元
+  // （campaignId/campaignType/campaign）はそのまま使い、この2つは追加専用。
+  follows,
+  campaigns,
   onSave,
   onQuickSave,
   onDelete,
@@ -12061,6 +12118,15 @@ function NexusFanFollowRecordForm({
   const [referralMemoInput, setReferralMemoInput] = useState('');
   const [expandedContactId, setExpandedContactId] = useState(null);
   const [referralRegisterFor, setReferralRegisterFor] = useState(null);
+  // 【改修】会話内容記録機能：やり取りの内容は常時表示、お客様の反応・対応したこと・次にすることは
+  // 「詳しく記録する」を開いた時だけ入力できるようにする（入力の手間を増やさないため）。
+  const [draftConversationContent, setDraftConversationContent] = useState('');
+  const [draftCustomerReaction, setDraftCustomerReaction] = useState('');
+  const [draftActionTaken, setDraftActionTaken] = useState('');
+  const [draftNextStepsNote, setDraftNextStepsNote] = useState('');
+  const [draftConversationDetailsOpen, setDraftConversationDetailsOpen] = useState(false);
+  // 【改修④】同じお客様の過去のやり取り（キャンペーンを問わず）を振り返るための履歴シート。
+  const [historySheetOpen, setHistorySheetOpen] = useState(false);
   const s = k => v => setForm(f => ({ ...f, [k]: v }));
   const si = k => e => s(k)(e.target.value);
   const relatedCustomer = (customers || []).find(c => c.id === form.customerId);
@@ -12090,6 +12156,11 @@ function NexusFanFollowRecordForm({
     setMeetingPurpose('');
     setReferralCountInput('');
     setReferralMemoInput('');
+    setDraftConversationContent('');
+    setDraftCustomerReaction('');
+    setDraftActionTaken('');
+    setDraftNextStepsNote('');
+    setDraftConversationDetailsOpen(false);
   };
   const commitContact = (resultValue, extra) => {
     if (!draftMethod) return;
@@ -12098,7 +12169,12 @@ function NexusFanFollowRecordForm({
       ...nexusFanContactBlank(), id: uid(), occurredAt: draftOccurredAt || todayStr(), direction: draftDirection,
       actionType: draftActionType, actionTypeOther: draftActionType === 'その他' ? draftActionTypeOther : '',
       method: draftMethod, methodOther: draftMethod === 'その他' ? draftMethodOther : '',
-      result: resultValue, createdAt: now, updatedAt: now, ...(extra || {})
+      result: resultValue,
+      // 【改修】やり取りの内容（常時入力）とお客様の反応・対応したこと・次にすること
+      // （「詳しく記録する」を開いた時だけ入力）を、この接触にそのまま保存する。
+      memo: draftConversationContent, customerReaction: draftCustomerReaction,
+      actionTaken: draftActionTaken, nextStepsNote: draftNextStepsNote,
+      createdAt: now, updatedAt: now, ...(extra || {})
     };
     persistContacts([...(form.contacts || []), contact]);
     resetDraft();
@@ -12249,6 +12325,7 @@ function NexusFanFollowRecordForm({
     const expanded = expandedContactId === c.id;
     return React.createElement("div", {
       key: c.id,
+      className: 'fan-contact-row',
       style: { border: '1px solid var(--border)', borderRadius: 10, marginBottom: 6, overflow: 'hidden' }
     }, React.createElement("div", {
       style: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', cursor: c.legacy ? 'default' : 'pointer' },
@@ -12259,7 +12336,12 @@ function NexusFanFollowRecordForm({
       style: { fontSize: 12.5, fontWeight: 700 }
     }, `${icon} ${methodLabel}${actionTypeLabel ? '・' + actionTypeLabel : ''}${c.legacy ? '（旧データ）' : ''}`), React.createElement("div", {
       style: { fontSize: 11.5, color: 'var(--text-sub)' }
-    }, `${c.occurredAt || ''}　${NEXUS_FAN_CONTACT_DIRECTION_LABELS[c.direction] || ''}　${c.result || ''}`)), !c.legacy && c.result === '紹介あり' && React.createElement("button", {
+    }, `${c.occurredAt || ''}　${NEXUS_FAN_CONTACT_DIRECTION_LABELS[c.direction] || ''}　${c.result || ''}`),
+    // 【改修④】一覧（collapsed状態）では、やり取りの内容の冒頭だけを表示する。タップして
+    // 展開すると全文（やり取りの内容・お客様の反応・対応したこと・次にすること）を確認できる。
+    !expanded && c.memo && React.createElement("div", {
+      style: { fontSize: 11.5, color: 'var(--text-sub)', marginTop: 2 }
+    }, "💬 ", nexusFanConversationPreview(c.memo))), !c.legacy && c.result === '紹介あり' && React.createElement("button", {
       type: "button",
       onClick: e => { e.stopPropagation(); setReferralRegisterFor(c.id); },
       style: { fontSize: 10.5, fontWeight: 700, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--accent)', color: 'var(--accent)', background: 'var(--accent-light)', flexShrink: 0, whiteSpace: 'nowrap' }
@@ -12277,13 +12359,46 @@ function NexusFanFollowRecordForm({
       className: `chip ${(c.topics || []).includes(t) ? 'active' : ''}`,
       style: { fontSize: 11 },
       onClick: () => toggleTopic(c, t)
-    }, t))), React.createElement("textarea", {
+    }, t))),
+    // 【改修】会話内容記録機能：やり取りの内容・お客様の反応・対応したこと・次にすることを
+    // それぞれ別の自由記入欄として編集できるようにする。すべて任意入力・保存後も編集可能。
+    React.createElement("div", { className: "form-group" }, React.createElement("label", {
+      className: "form-label", style: { fontSize: 11.5 }
+    }, "やり取りの内容（任意）"), React.createElement("textarea", {
       className: "form-textarea",
       style: { minHeight: 40, width: '100%' },
-      placeholder: "メモ（任意）",
+      placeholder: "何を伝えたか・話したか・どんな質問があったか",
       value: c.memo || '',
       onChange: e => updateContact(c.id, { memo: e.target.value })
-    }), React.createElement("button", {
+    })),
+    React.createElement("div", { className: "form-group" }, React.createElement("label", {
+      className: "form-label", style: { fontSize: 11.5 }
+    }, "お客様の反応（任意）"), React.createElement("textarea", {
+      className: "form-textarea",
+      style: { minHeight: 40, width: '100%' },
+      placeholder: "お客様が何と言っていたか・困っていること・興味を持っていたこと",
+      value: c.customerReaction || '',
+      onChange: e => updateContact(c.id, { customerReaction: e.target.value })
+    })),
+    React.createElement("div", { className: "form-group" }, React.createElement("label", {
+      className: "form-label", style: { fontSize: 11.5 }
+    }, "対応したこと（任意）"), React.createElement("textarea", {
+      className: "form-textarea",
+      style: { minHeight: 40, width: '100%' },
+      placeholder: "説明した内容・解決したこと・約束したこと",
+      value: c.actionTaken || '',
+      onChange: e => updateContact(c.id, { actionTaken: e.target.value })
+    })),
+    React.createElement("div", { className: "form-group" }, React.createElement("label", {
+      className: "form-label", style: { fontSize: 11.5 }
+    }, "次にすること（任意）"), React.createElement("textarea", {
+      className: "form-textarea",
+      style: { minHeight: 40, width: '100%' },
+      placeholder: "次回の連絡内容・確認すること・必要な対応",
+      value: c.nextStepsNote || '',
+      onChange: e => updateContact(c.id, { nextStepsNote: e.target.value })
+    })),
+    React.createElement("button", {
       type: "button",
       onClick: () => deleteContact(c.id),
       style: { marginTop: 6, fontSize: 11, color: 'var(--danger)', background: 'none', border: 'none', cursor: 'pointer' }
@@ -12352,12 +12467,77 @@ function NexusFanFollowRecordForm({
     style: { marginTop: 10 },
     onClick: () => setDetailsOpen(v => !v)
   }, detailsOpen ? "▲ 詳細項目を閉じる" : "▼ 送信文章・次回フォロー・キャンペーン固有の項目を開く");
+  // 【改修】会話内容記録機能：電話・LINE・SMS・メール・訪問・対面面談等、すべての連絡方法で
+  // 共通に使える「やり取りの内容」入力欄。通常はこれだけを表示し、「詳しく記録する」を開いた
+  // 時だけお客様の反応・対応したこと・次にすることを入力できるようにする（入力の手間を増やさない）。
+  const draftConversationInput = React.createElement("div", {
+    className: "form-group"
+  }, React.createElement("label", { className: "form-label" }, "やり取りの内容（任意）"), React.createElement("textarea", {
+    className: "form-textarea",
+    style: { minHeight: 50 },
+    placeholder: "何を伝えたか・何を話したか・どんな質問があったか",
+    value: draftConversationContent,
+    onChange: e => setDraftConversationContent(e.target.value)
+  }), React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-sm",
+    style: { marginTop: 6, fontSize: 11.5 },
+    onClick: () => setDraftConversationDetailsOpen(v => !v)
+  }, draftConversationDetailsOpen ? "▲ 詳しく記録するを閉じる" : "▼ 詳しく記録する（お客様の反応・対応したこと・次にすること）"),
+    draftConversationDetailsOpen && React.createElement("div", {
+      style: { marginTop: 8 }
+    },
+      React.createElement("div", { className: "form-group" }, React.createElement("label", {
+        className: "form-label", style: { fontSize: 11.5 }
+      }, "お客様の反応（任意）"), React.createElement("textarea", {
+        className: "form-textarea",
+        style: { minHeight: 40 },
+        placeholder: "お客様が何と言っていたか・困っていること・興味を持っていたこと",
+        value: draftCustomerReaction,
+        onChange: e => setDraftCustomerReaction(e.target.value)
+      })),
+      React.createElement("div", { className: "form-group" }, React.createElement("label", {
+        className: "form-label", style: { fontSize: 11.5 }
+      }, "対応したこと（任意）"), React.createElement("textarea", {
+        className: "form-textarea",
+        style: { minHeight: 40 },
+        placeholder: "説明した内容・解決したこと・約束したこと",
+        value: draftActionTaken,
+        onChange: e => setDraftActionTaken(e.target.value)
+      })),
+      React.createElement("div", { className: "form-group" }, React.createElement("label", {
+        className: "form-label", style: { fontSize: 11.5 }
+      }, "次にすること（任意）"), React.createElement("textarea", {
+        className: "form-textarea",
+        style: { minHeight: 40 },
+        placeholder: "次回の連絡内容・確認すること・必要な対応",
+        value: draftNextStepsNote,
+        onChange: e => setDraftNextStepsNote(e.target.value)
+      }))
+    ));
+  // 【改修④】同じお客様の過去のやり取り（キャンペーンを問わず）を振り返るボタン。顧客が
+  // 登録済み（customerId）の場合だけ表示する（手入力の名前だけでは他記録と確実に同一人物と
+  // 判定できないため）。
+  const historyButton = form.customerId && React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: { marginTop: 8 },
+    onClick: () => setHistorySheetOpen(true)
+  }, "📜 過去のやり取りを確認");
+  const historySheet = historySheetOpen && React.createElement(NexusFanCustomerConversationHistorySheet, {
+    customerId: form.customerId,
+    customerName: relatedCustomer ? nexusDisplayName(relatedCustomer) : (form.customerNameText || ''),
+    follows: follows,
+    campaigns: campaigns,
+    onClose: () => setHistorySheetOpen(false)
+  });
   const contactSection = React.createElement("div", {
     className: "form-group"
   }, React.createElement("label", { className: "form-label" }, "フォロー・接触記録"), draftDateInput,
     React.createElement("div", { className: "form-group" }, React.createElement("label", { className: "form-label" }, "今回したこと（任意）"), actionTypeChips, actionTypeOtherInput),
+    draftConversationInput,
     React.createElement("div", { className: "form-group" }, React.createElement("label", { className: "form-label" }, "連絡方法・対応状況"), directionChips, contactMethodChips, methodOtherInput, contactResultChips),
-    pendingMeetingFields, pendingReferralFields, timeline.length > 0 && React.createElement("div", {
+    pendingMeetingFields, pendingReferralFields, historyButton, historySheet, timeline.length > 0 && React.createElement("div", {
     style: { marginTop: 10 }
   }, timeline.map(renderTimelineItem)));
   // 紹介があった場合の顧客登録（既存のCustomerForm・紹介管理（referredBy）をそのまま再利用。
@@ -12654,6 +12834,9 @@ function NexusFanFollowRecordList({
   campaignId,
   campaignType,
   campaign,
+  // 【改修④】同じお客様の過去のやり取り（キャンペーンを問わず）を振り返るため、
+  // NexusFanFollowRecordFormへ全キャンペーンの一覧をそのまま橋渡しする追加プロップ。
+  campaigns,
   filterRecordIds,
   hideAddButton,
   emptyText,
@@ -12792,6 +12975,8 @@ function NexusFanFollowRecordList({
     campaignId: campaignId,
     campaignType: campaignType,
     campaign: campaign,
+    follows: follows,
+    campaigns: campaigns,
     customers: customers,
     activityLogs: activityLogs,
     opportunities: opportunities,
@@ -12809,6 +12994,8 @@ function NexusFanFollowRecordList({
     campaignId: campaignId,
     campaignType: campaignType,
     campaign: campaign,
+    follows: follows,
+    campaigns: campaigns,
     customers: customers,
     activityLogs: activityLogs,
     opportunities: opportunities,
@@ -13187,6 +13374,7 @@ function NexusFanFollowScreen({
     campaignId: selectedCampaign.id,
     campaignType: selectedCampaign.campaignType,
     campaign: selectedCampaign,
+    campaigns: campaigns,
     filterRecordIds: todayList.map(r => r.record.id),
     hideAddButton: true,
     emptyText: "今日フォローする人はいません",
@@ -13206,6 +13394,7 @@ function NexusFanFollowScreen({
     campaignId: selectedCampaign.id,
     campaignType: selectedCampaign.campaignType,
     campaign: selectedCampaign,
+    campaigns: campaigns,
     customers: customers,
     activityLogs: activityLogs,
     setActivityLogs: setActivityLogs,
@@ -14781,7 +14970,13 @@ function NexusFanFollowKpiDetailSheet({
       style: { fontSize: 12.5, color: 'var(--text-sub)', marginTop: 2 }
     }, (NEXUS_FAN_CONTACT_METHOD_ICONS[ev.method] || '📝'), " ", ev.method, ev.actionType && `（${ev.actionType}）`, "　", ev.result), ev.memo && /*#__PURE__*/React.createElement("div", {
       style: { fontSize: 12, color: 'var(--text-sub)', marginTop: 2, whiteSpace: 'pre-wrap' }
-    }, ev.memo), onOpenCustomer && c && /*#__PURE__*/React.createElement("button", {
+    }, "💬 ", ev.memo), ev.customerReaction && /*#__PURE__*/React.createElement("div", {
+      style: { fontSize: 12, color: 'var(--text-sub)', marginTop: 2, whiteSpace: 'pre-wrap' }
+    }, "😊 ", ev.customerReaction), ev.actionTaken && /*#__PURE__*/React.createElement("div", {
+      style: { fontSize: 12, color: 'var(--text-sub)', marginTop: 2, whiteSpace: 'pre-wrap' }
+    }, "✅ ", ev.actionTaken), ev.nextStepsNote && /*#__PURE__*/React.createElement("div", {
+      style: { fontSize: 12, color: 'var(--text-sub)', marginTop: 2, whiteSpace: 'pre-wrap' }
+    }, "⏭ ", ev.nextStepsNote), onOpenCustomer && c && /*#__PURE__*/React.createElement("button", {
       type: "button",
       className: "btn btn-sm btn-outline",
       style: { marginTop: 6, fontSize: 11.5 },
@@ -21354,9 +21549,24 @@ const NEXUS_FAN_ACTION_TYPES = ['案内・情報提供', '近況確認', 'お礼
 function nexusFanContactBlank() {
   return {
     id: '', occurredAt: '', direction: 'outbound', actionType: '', actionTypeOther: '', method: '', methodOther: '', result: '',
-    topics: [], memo: '', meetingAt: '', meetingMode: '', meetingPurpose: '', referralCount: '', referralMemo: '', referredCustomerIds: [],
+    topics: [],
+    // 【改修】1回のやり取り（1 contact）について、やり取りの内容・お客様の反応・対応したこと・
+    // 次にすることを自由記入で残せるようにする。memoは元から「1回の接触についての自由メモ」
+    // として存在していたフィールドのため、新しいキーを追加せずそのまま「やり取りの内容」として
+    // 再利用する（過去に保存されたmemoの内容も、そのまま「やり取りの内容」として表示・編集できる）。
+    memo: '', customerReaction: '', actionTaken: '', nextStepsNote: '',
+    meetingAt: '', meetingMode: '', meetingPurpose: '', referralCount: '', referralMemo: '', referredCustomerIds: [],
     customFieldValues: {}, createdAt: '', updatedAt: '', deletedAt: ''
   };
+}
+// 一覧（履歴）では内容の冒頭だけを表示し、タップした時だけ全文を見せるための共通ヘルパー。
+// 保存データ自体は一切変更しない、表示専用の切り詰め処理。
+function nexusFanConversationPreview(text, maxLen) {
+  const t = (text || '').trim();
+  if (!t) return '';
+  const firstLine = t.split('\n')[0];
+  const n = maxLen || 28;
+  return firstLine.length > n ? firstLine.slice(0, n) + '…' : firstLine;
 }
 // 【改修】選択肢に「その他」を選んだだけで具体的な内容が分からなくなる状態を防ぐための
 // 共通ヘルパー。「その他」が選ばれている時だけ、対応する自由記入欄の値を表示用に補って返す
@@ -21498,6 +21708,28 @@ function nexusFanContactTimeline(record, campaignType) {
 function nexusFanLatestContact(record, campaignType) {
   return nexusFanContactTimeline(record, campaignType)[0] || null;
 }
+// ── ④同じお客様との過去のやり取りを、キャンペーンを問わず日付順で振り返れるようにする ──
+// 1人の顧客が複数キャンペーンの対象になっていることがあるため（例：note記事送信キャンペーンと
+// 生命保険料控除案内キャンペーンの両方の対象になっている等）、現在開いている記録（1キャンペーン分）
+// だけでなく、この顧客が関わる全キャンペーンの接触履歴をまとめて日付順に確認できるようにする。
+// 既存のnexusFanContactTimeline（初回送付＋旧データ＋contacts実データの正規化・重複排除済み一覧）
+// をキャンペーンごとに呼び出して結果をマージするだけで、新しい集計ロジックは作らない（保存データの
+// 読み取りのみで、この関数自体は何も書き込まない）。
+function nexusFanCustomerCrossCampaignTimeline(customerId, follows, campaigns) {
+  if (!customerId) return [];
+  const campaignById = {};
+  (campaigns || []).forEach(c => { campaignById[c.id] = c; });
+  const records = nexusFanActiveFollows(follows).filter(f => f.customerId === customerId);
+  const out = [];
+  records.forEach(record => {
+    const campaign = campaignById[record.campaignId];
+    const campaignType = campaign ? campaign.campaignType : '';
+    nexusFanContactTimeline(record, campaignType).forEach(c => {
+      out.push({ ...c, recordId: record.id, campaignId: record.campaignId, campaignName: campaign ? campaign.name : '（削除済みキャンペーン）' });
+    });
+  });
+  return out.sort((a, b) => (b.occurredAt || '').localeCompare(a.occurredAt || ''));
+}
 // ── 営業KPI連動：ファン化フォローで「実際に実施した」接触だけを1件ずつ数える ──
 // 対象は、nexusFanContactTimeline（初回送付の仮想contact＋旧スカラー項目からの仮想contact
 // ＋contacts実データを、既存のdedupeロジックでマージ・重複排除した正規化済み一覧）を
@@ -21546,7 +21778,10 @@ function nexusFanFollowCompletedEvents(fanFollows, campaigns, periodStart, perio
         method: nexusFanOtherLabel(c.method, c.methodOther) || 'その他',
         actionType: c.actionType ? nexusFanOtherLabel(c.actionType, c.actionTypeOther) : '',
         result: c.result,
-        memo: c.memo || ''
+        memo: c.memo || '',
+        customerReaction: c.customerReaction || '',
+        actionTaken: c.actionTaken || '',
+        nextStepsNote: c.nextStepsNote || ''
       });
     });
   });
