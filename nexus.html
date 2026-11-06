@@ -11785,18 +11785,74 @@ function NexusOpportunityEditSheet({
 }
 // ── ファン化フォロー：キャンペーンの追加・編集（.overlay/.drawerパターン） ──
 function NexusFanCampaignForm({ editing, onSave, onClose }) {
-  const blank = { id: '', name: '', startDate: todayStr(), endDate: '', targetCount: '', purpose: '', memo: '', status: '進行中', createdAt: '', updatedAt: '' };
+  // status初期値は既存通り「進行中」のまま維持する（既存キャンペーンの編集時はeditingの
+  // statusがそのまま使われるため、既存データには影響しない）。「下書き」は企画段階の
+  // キャンペーンを明示的に選んだ時だけ使う分類として追加している。
+  const blank = { id: '', name: '', startDate: todayStr(), endDate: '', targetCount: '', purpose: '', memo: '', status: '進行中', customFields: [], customFieldDefaults: {}, createdAt: '', updatedAt: '' };
   const [form, setForm] = useState(() => ({ ...blank, ...(editing || {}) }));
   const s = k => v => setForm(f => ({ ...f, [k]: v }));
   const si = k => e => s(k)(e.target.value);
+  // ── カスタム項目（customFields）の追加・編集・削除 ──
+  const customFields = form.customFields || [];
+  const addCustomField = () => s('customFields')([...customFields, nexusFanCustomFieldBlank()]);
+  const updateCustomField = (key, patch) => s('customFields')(customFields.map(f => f.key === key ? { ...f, ...patch } : f));
+  const removeCustomField = key => {
+    s('customFields')(customFields.filter(f => f.key !== key));
+    // 項目を削除しても、既存の記録に保存済みの値自体は消さない（customFieldDefaultsの
+    // キーだけ整理する。記録側のcustomFieldValuesは記録データなので一切触れない）。
+    const nextDefaults = { ...(form.customFieldDefaults || {}) };
+    delete nextDefaults[key];
+    s('customFieldDefaults')(nextDefaults);
+  };
+  const updateCustomFieldDefault = (key, value) => s('customFieldDefaults')({ ...(form.customFieldDefaults || {}), [key]: value });
+  const customFieldsEditor = React.createElement("div", {
+    className: "form-group"
+  }, React.createElement("label", { className: "form-label" }, "このキャンペーン専用の項目（任意）"), React.createElement("div", {
+    style: { fontSize: 11, color: 'var(--text-sub)', marginBottom: 6 }
+  }, "記事タイトル・URL以外に、このキャンペーンだけで使う項目を自由に追加できます（例：案内方法、問い合わせ内容）。プログラムの修正は不要です。"),
+    customFields.map(f => React.createElement("div", {
+      key: f.key,
+      style: { border: '1px solid var(--border)', borderRadius: 8, padding: 8, marginBottom: 6 }
+    }, React.createElement("div", { style: { display: 'flex', gap: 6, marginBottom: 6 } },
+      React.createElement("input", {
+        className: "form-input", style: { flex: 1 }, value: f.label, placeholder: "項目名（例：案内方法）",
+        onChange: e => updateCustomField(f.key, { label: e.target.value })
+      }),
+      React.createElement("button", {
+        type: "button", onClick: () => removeCustomField(f.key),
+        style: { background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', fontSize: 16, padding: '0 6px' }
+      }, "×")
+    ), React.createElement("select", {
+      className: "form-select", value: f.type, onChange: e => updateCustomField(f.key, { type: e.target.value })
+    }, NEXUS_FAN_CUSTOM_FIELD_TYPES.map(t => React.createElement("option", { key: t.key, value: t.key }, t.label))),
+    // 同じ案内文・URLを複数のお客様に送る場合に備え、既定値（再利用する内容）をここで登録できる。
+    React.createElement("div", { style: { marginTop: 6 } },
+      React.createElement("label", { className: "form-label", style: { fontSize: 11 } }, "既定値（任意・新しい記録を追加した時にあらかじめ入力されます）"),
+      f.type === 'textarea' ? React.createElement("textarea", {
+        className: "form-textarea", style: { minHeight: 44 }, value: (form.customFieldDefaults || {})[f.key] || '',
+        onChange: e => updateCustomFieldDefault(f.key, e.target.value)
+      }) : React.createElement("input", {
+        className: "form-input", type: f.type === 'date' ? 'date' : 'text',
+        value: (form.customFieldDefaults || {})[f.key] || '',
+        onChange: e => updateCustomFieldDefault(f.key, e.target.value)
+      })
+    ))),
+    React.createElement("button", {
+      type: "button", className: "btn btn-outline", style: { fontSize: 12, padding: '8px 12px' }, onClick: addCustomField
+    }, "＋ 項目を追加")
+  );
   const save = () => {
     if (!form.name.trim()) return;
     const now = new Date().toISOString();
+    // 項目名を入力しないまま残った空のカスタム項目は保存しない（記録側の入力画面に
+    // 無意味な空欄が並ぶことを防ぐ）。
+    const cleanedFields = (form.customFields || []).filter(f => (f.label || '').trim());
     onSave({
       ...form,
       id: form.id || uid(),
       name: form.name.trim(),
       targetCount: Number(form.targetCount) || 0,
+      customFields: cleanedFields,
       createdAt: form.createdAt || now,
       updatedAt: now
     });
@@ -11895,7 +11951,7 @@ function NexusFanCampaignForm({ editing, onSave, onClose }) {
     value: form.memo,
     placeholder: "例：1日20人×5日間で送信予定",
     onChange: si('memo')
-  })), React.createElement("div", {
+  })), customFieldsEditor, React.createElement("div", {
     className: "form-group"
   }, React.createElement("label", {
     className: "form-label"
@@ -11920,6 +11976,7 @@ function NexusFanFollowRecordForm({
   editing,
   campaignId,
   campaignType,
+  campaign,
   customers,
   activityLogs,
   opportunities,
@@ -11939,12 +11996,21 @@ function NexusFanFollowRecordForm({
     customerId: '',
     customerNameText: '',
     attribute: '',
-    sentDate: todayStr(),
+    attributeOther: '',
+    // 【改修】新規記録ではsentDateを自動で今日の日付にしない（空欄のまま）。これまでは
+    // blankの時点で常に本日の日付が入っており、新しいフォロー記録を1件も追加しなくても
+    // 「送信済み」の仮想接触（nexusFanInitialSendVirtualContact）が自動生成されてしまって
+    // いた。以後の活動はすべてcontacts配列への実際の記録で表すため、sentDateは「初回送信日
+    // （記事・ハガキ等、既存の専用項目を使った場合のみ）」としてのみ残す。
+    sentDate: '',
     articleTitle: '',
     articleUrl: '',
     sendMethod: '',
     messageText: '',
     memo: '',
+    // キャンペーンごとのカスタム項目（campaign.customFields）の値。新規作成時は
+    // キャンペーン側の既定値（customFieldDefaults）で初期化する（nexusFanApplyCustomFieldDefaults）。
+    customFieldValues: {},
     // 旧データ（電話フォロー専用設計）：readAt／repliedAt／phoneFollowStatus／phoneFollowDateは
     // 削除せず残すが、この改修以降、新しい記録UIは二度とこれらへ書き込まない。以後の接触は
     // すべてcontacts配列（1 contact = 1回の接触）に記録する。表示・集計時はnexusFanNormalizedContacts
@@ -11962,18 +12028,31 @@ function NexusFanFollowRecordForm({
     relatedActivityLogId: '',
     nextFollowDate: '',
     nextFollowMethod: '',
+    nextFollowMethodOther: '',
     nextFollowAction: '',
     noFollowNeeded: false,
     createdAt: '',
     updatedAt: '',
     deletedAt: ''
   };
-  const [form, setForm] = useState(() => ({ ...blank, ...(editing || {}) }));
+  const [form, setForm] = useState(() => {
+    const base = { ...blank, ...(editing || {}) };
+    // 【改修④】新規作成時（editingが無い）だけ、キャンペーン側の既定値（customFieldDefaults）を
+    // 差し込む。既存記録の編集時は、保存済みの値をそのまま使う（上書きしない）。
+    if (!editing) base.customFieldValues = nexusFanApplyCustomFieldDefaults(campaign, base.customFieldValues);
+    return base;
+  });
   const [bridgeOpen, setBridgeOpen] = useState(false);
   // フォロー・接触記録の入力途中状態（method→resultの2タップで記録。面談予定／紹介ありの
   // 時だけ、記録前に最小限の追加項目を入力できるようにする）。
   const [draftDirection, setDraftDirection] = useState('outbound');
   const [draftMethod, setDraftMethod] = useState('');
+  const [draftMethodOther, setDraftMethodOther] = useState('');
+  // 【改修②】今回したこと（actionType）の入力途中状態。
+  const [draftActionType, setDraftActionType] = useState('');
+  const [draftActionTypeOther, setDraftActionTypeOther] = useState('');
+  // 【改修②】実施日の入力途中状態（既定は本日、後から記録する場合は変更できる）。
+  const [draftOccurredAt, setDraftOccurredAt] = useState(todayStr());
   const [pendingResult, setPendingResult] = useState('');
   const [meetingAt, setMeetingAt] = useState('');
   const [meetingMode, setMeetingMode] = useState('');
@@ -12000,6 +12079,10 @@ function NexusFanFollowRecordForm({
   };
   const resetDraft = () => {
     setDraftMethod('');
+    setDraftMethodOther('');
+    setDraftActionType('');
+    setDraftActionTypeOther('');
+    setDraftOccurredAt(todayStr());
     setDraftDirection('outbound');
     setPendingResult('');
     setMeetingAt('');
@@ -12011,7 +12094,12 @@ function NexusFanFollowRecordForm({
   const commitContact = (resultValue, extra) => {
     if (!draftMethod) return;
     const now = new Date().toISOString();
-    const contact = { ...nexusFanContactBlank(), id: uid(), occurredAt: todayStr(), direction: draftDirection, method: draftMethod, result: resultValue, createdAt: now, updatedAt: now, ...(extra || {}) };
+    const contact = {
+      ...nexusFanContactBlank(), id: uid(), occurredAt: draftOccurredAt || todayStr(), direction: draftDirection,
+      actionType: draftActionType, actionTypeOther: draftActionType === 'その他' ? draftActionTypeOther : '',
+      method: draftMethod, methodOther: draftMethod === 'その他' ? draftMethodOther : '',
+      result: resultValue, createdAt: now, updatedAt: now, ...(extra || {})
+    };
     persistContacts([...(form.contacts || []), contact]);
     resetDraft();
   };
@@ -12152,6 +12240,11 @@ function NexusFanFollowRecordForm({
     onClick: confirmPendingResult
   }, "記録する"));
   const renderTimelineItem = c => {
+    // 【改修③】「その他」が選ばれている場合は、具体的な内容（methodOther／actionTypeOther）を
+    // 併記して表示する（nexusFanOtherLabel）。旧データ（これらの項目が無い接触）は
+    // そのまま選択肢名のみ表示される。
+    const methodLabel = nexusFanOtherLabel(c.method, c.methodOther) || c.method;
+    const actionTypeLabel = c.actionType ? nexusFanOtherLabel(c.actionType, c.actionTypeOther) : '';
     const icon = NEXUS_FAN_CONTACT_METHOD_ICONS[c.method] || '📝';
     const expanded = expandedContactId === c.id;
     return React.createElement("div", {
@@ -12164,7 +12257,7 @@ function NexusFanFollowRecordForm({
       style: { flex: 1, minWidth: 0 }
     }, React.createElement("div", {
       style: { fontSize: 12.5, fontWeight: 700 }
-    }, `${icon} ${c.method}${c.legacy ? '（旧データ）' : ''}`), React.createElement("div", {
+    }, `${icon} ${methodLabel}${actionTypeLabel ? '・' + actionTypeLabel : ''}${c.legacy ? '（旧データ）' : ''}`), React.createElement("div", {
       style: { fontSize: 11.5, color: 'var(--text-sub)' }
     }, `${c.occurredAt || ''}　${NEXUS_FAN_CONTACT_DIRECTION_LABELS[c.direction] || ''}　${c.result || ''}`)), !c.legacy && c.result === '紹介あり' && React.createElement("button", {
       type: "button",
@@ -12196,9 +12289,75 @@ function NexusFanFollowRecordForm({
       style: { marginTop: 6, fontSize: 11, color: 'var(--danger)', background: 'none', border: 'none', cursor: 'pointer' }
     }, "削除")));
   };
+  // 【改修⑤】入力画面を「最初に表示する項目（顧客・実施日・今回したこと・連絡方法・
+  // 対応状況）」と「必要なときだけ開く項目（送信文章・詳細メモ・次回フォロー・
+  // キャンペーン固有の情報）」に分ける。同じ情報を二重入力させないよう、折りたたみ内の
+  // 項目も既存のform/contacts系の値をそのまま使う（新しい保存先は作らない）。
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  // 【改修③】「その他」を選んだだけで内容が分からなくなる状態を防ぐ、属性の自由記入欄。
+  const attributeOtherInput = form.attribute === 'その他' && React.createElement("input", {
+    className: "form-input", style: { marginTop: 6 }, value: form.attributeOther || '',
+    placeholder: "具体的な属性を入力", onChange: si('attributeOther')
+  });
+  // 【改修③】次回フォロー方法の自由記入欄。
+  const nextFollowMethodOtherInput = form.nextFollowMethod === 'その他' && React.createElement("input", {
+    className: "form-input", style: { marginTop: 6 }, value: form.nextFollowMethodOther || '',
+    placeholder: "具体的な方法を入力", onChange: si('nextFollowMethodOther')
+  });
+  // 【改修②③】今回したこと（actionType）。方法・結果とは独立した軸として、接触を記録する
+  // 直前に選ぶ（選んだ値はcommitContactでcontactに保存される）。
+  const actionTypeChips = React.createElement("div", {
+    style: { display: 'flex', flexWrap: 'wrap', gap: 8 }
+  }, NEXUS_FAN_ACTION_TYPES.map(a => React.createElement("button", {
+    key: a, type: "button", className: `chip ${draftActionType === a ? 'active' : ''}`,
+    onClick: () => setDraftActionType(draftActionType === a ? '' : a)
+  }, a)));
+  const actionTypeOtherInput = draftActionType === 'その他' && React.createElement("input", {
+    className: "form-input", style: { marginTop: 6 }, value: draftActionTypeOther,
+    placeholder: "具体的な内容を入力", onChange: e => setDraftActionTypeOther(e.target.value)
+  });
+  const methodOtherInput = draftMethod === 'その他' && React.createElement("input", {
+    className: "form-input", style: { marginTop: 6 }, value: draftMethodOther,
+    placeholder: "具体的な方法を入力", onChange: e => setDraftMethodOther(e.target.value)
+  });
+  // 【改修②】実施日（この接触をいつ行ったか）。従来は常に本日固定だったが、後から記録する
+  // 場合に備えて編集できるようにする。
+  const draftDateInput = React.createElement("div", {
+    className: "form-group"
+  }, React.createElement("label", { className: "form-label" }, "実施日"), React.createElement("input", {
+    type: "date", className: "form-input", value: draftOccurredAt,
+    onChange: e => setDraftOccurredAt(e.target.value)
+  }));
+  // 【改修④】キャンペーンごとのカスタム項目（campaign.customFields）。記事タイトル・URL等の
+  // 既存専用項目とは別に、プログラム修正なしで増やせる項目をここに表示する。
+  const customFields = nexusFanCampaignCustomFields(campaign);
+  const customFieldsSection = customFields.length > 0 && React.createElement(React.Fragment, null,
+    customFields.map(f => React.createElement("div", {
+      key: f.key, className: "form-group"
+    }, React.createElement("label", { className: "form-label" }, f.label),
+      f.type === 'textarea' ? React.createElement("textarea", {
+        className: "form-textarea", style: { resize: 'vertical', minHeight: 50 },
+        value: (form.customFieldValues || {})[f.key] || '',
+        onChange: e => setForm(cur => ({ ...cur, customFieldValues: { ...(cur.customFieldValues || {}), [f.key]: e.target.value } }))
+      }) : React.createElement("input", {
+        className: "form-input", type: f.type === 'date' ? 'date' : 'text',
+        value: (form.customFieldValues || {})[f.key] || '',
+        onChange: e => setForm(cur => ({ ...cur, customFieldValues: { ...(cur.customFieldValues || {}), [f.key]: e.target.value } }))
+      })
+    ))
+  );
+  const detailsToggle = React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: { marginTop: 10 },
+    onClick: () => setDetailsOpen(v => !v)
+  }, detailsOpen ? "▲ 詳細項目を閉じる" : "▼ 送信文章・次回フォロー・キャンペーン固有の項目を開く");
   const contactSection = React.createElement("div", {
     className: "form-group"
-  }, React.createElement("label", { className: "form-label" }, "フォロー・接触記録"), directionChips, contactMethodChips, contactResultChips, pendingMeetingFields, pendingReferralFields, timeline.length > 0 && React.createElement("div", {
+  }, React.createElement("label", { className: "form-label" }, "フォロー・接触記録"), draftDateInput,
+    React.createElement("div", { className: "form-group" }, React.createElement("label", { className: "form-label" }, "今回したこと（任意）"), actionTypeChips, actionTypeOtherInput),
+    React.createElement("div", { className: "form-group" }, React.createElement("label", { className: "form-label" }, "連絡方法・対応状況"), directionChips, contactMethodChips, methodOtherInput, contactResultChips),
+    pendingMeetingFields, pendingReferralFields, timeline.length > 0 && React.createElement("div", {
     style: { marginTop: 10 }
   }, timeline.map(renderTimelineItem)));
   // 紹介があった場合の顧客登録（既存のCustomerForm・紹介管理（referredBy）をそのまま再利用。
@@ -12289,6 +12448,42 @@ function NexusFanFollowRecordForm({
     className: `chip ${form.noFollowNeeded ? 'active' : ''}`,
     onClick: () => s('noFollowNeeded')(!form.noFollowNeeded)
   }, form.noFollowNeeded ? "✓ フォロー不要" : "フォロー不要にする");
+  // 【改修②】「キャンペーン固有の情報」（記事タイトル・URL・送信方法・新しいcustomFields）を
+  // まとめた折りたたみ用ブロック。
+  const campaignSpecificBlock = React.createElement(React.Fragment, null,
+    React.createElement("div", {
+      className: "form-group"
+    }, React.createElement("label", {
+      className: "form-label"
+    }, typeConfig.sentDateLabel), React.createElement("input", {
+      type: "date",
+      className: "form-input",
+      value: form.sentDate,
+      onChange: si('sentDate')
+    })), typeConfig.showArticleFields && React.createElement(React.Fragment, null, React.createElement("div", {
+      className: "form-group"
+    }, React.createElement("label", {
+      className: "form-label"
+    }, "記事タイトル"), React.createElement("input", {
+      className: "form-input",
+      value: form.articleTitle,
+      placeholder: "例：医療保険の請求忘れにご注意",
+      onChange: si('articleTitle')
+    })), React.createElement("div", {
+      className: "form-group"
+    }, React.createElement("label", {
+      className: "form-label"
+    }, "記事URL（任意）"), React.createElement("input", {
+      className: "form-input",
+      value: form.articleUrl,
+      placeholder: "https://...",
+      onChange: si('articleUrl')
+    }))), React.createElement("div", {
+      className: "form-group"
+    }, React.createElement("label", {
+      className: "form-label"
+    }, "送信方法"), methodChips), customFieldsSection
+  );
   return React.createElement("div", {
     className: "overlay",
     onClick: onClose
@@ -12299,7 +12494,7 @@ function NexusFanFollowRecordForm({
     className: "drawer-handle"
   }), React.createElement("div", {
     className: "drawer-title"
-  }, editing ? `${typeConfig.firstActionLabel}の記録を編集` : `${typeConfig.firstActionLabel}を記録`), React.createElement(CustomerSelect, {
+  }, editing ? "フォロー記録を編集" : "フォロー記録を追加"), React.createElement(CustomerSelect, {
     label: "顧客（登録済みの方はこちらから選択）",
     value: form.customerId,
     onChange: v => setForm(f => ({ ...f, customerId: v, customerNameText: v ? '' : f.customerNameText })),
@@ -12320,38 +12515,17 @@ function NexusFanFollowRecordForm({
     className: "form-group"
   }, React.createElement("label", {
     className: "form-label"
-  }, "属性"), attributeChips), React.createElement("div", {
-    className: "form-group"
-  }, React.createElement("label", {
-    className: "form-label"
-  }, typeConfig.sentDateLabel), React.createElement("input", {
-    type: "date",
-    className: "form-input",
-    value: form.sentDate,
-    onChange: si('sentDate')
-  })), typeConfig.showArticleFields && React.createElement(React.Fragment, null, React.createElement("div", {
-    className: "form-group"
-  }, React.createElement("label", {
-    className: "form-label"
-  }, "記事タイトル"), React.createElement("input", {
-    className: "form-input",
-    value: form.articleTitle,
-    placeholder: "例：医療保険の請求忘れにご注意",
-    onChange: si('articleTitle')
-  })), React.createElement("div", {
-    className: "form-group"
-  }, React.createElement("label", {
-    className: "form-label"
-  }, "記事URL（任意）"), React.createElement("input", {
-    className: "form-input",
-    value: form.articleUrl,
-    placeholder: "https://...",
-    onChange: si('articleUrl')
-  }))), React.createElement("div", {
-    className: "form-group"
-  }, React.createElement("label", {
-    className: "form-label"
-  }, "送信方法"), methodChips), React.createElement("div", {
+  }, "属性"), attributeChips, attributeOtherInput),
+  // 【改修⑤】最初に表示する項目はここまで（顧客・実施日・今回したこと・連絡方法・対応状況）。
+  // contactSectionが実施日・今回したこと・連絡方法・対応状況・記録済みの履歴をまとめて持つ。
+  contactSection, React.createElement("div", {
+    style: { marginTop: 12 }
+  }, consultSection), downstreamSection, bridgeDrawer, referralRegisterSheet,
+  // 【改修⑤】ここから「必要なときだけ開く項目」（送信文章・詳細メモ・次回フォロー・
+  // キャンペーン固有の情報）。
+  detailsToggle, detailsOpen && React.createElement("div", {
+    style: { marginTop: 10, paddingTop: 10, borderTop: '1px dashed var(--border)' }
+  }, campaignSpecificBlock, React.createElement("div", {
     className: "form-group",
     style: { marginTop: 10 }
   }, React.createElement("label", {
@@ -12370,9 +12544,7 @@ function NexusFanFollowRecordForm({
     style: { resize: 'vertical', minHeight: 50 },
     value: form.memo,
     onChange: si('memo')
-  })), contactSection, React.createElement("div", {
-    style: { marginTop: 12 }
-  }, consultSection), downstreamSection, bridgeDrawer, referralRegisterSheet, React.createElement("div", {
+  })), React.createElement("div", {
     className: "form-group",
     style: { marginTop: 12 }
   }, React.createElement("label", {
@@ -12411,7 +12583,7 @@ function NexusFanFollowRecordForm({
     className: `chip ${form.nextFollowMethod === m ? 'active' : ''}`,
     style: { fontSize: 11.5 },
     onClick: () => s('nextFollowMethod')(form.nextFollowMethod === m ? '' : m)
-  }, m)))), React.createElement("div", {
+  }, m))), nextFollowMethodOtherInput), React.createElement("div", {
     className: "form-group"
   }, React.createElement("label", {
     className: "form-label"
@@ -12420,7 +12592,7 @@ function NexusFanFollowRecordForm({
     value: form.nextFollowAction,
     placeholder: typeConfig.nextActionPlaceholder,
     onChange: si('nextFollowAction')
-  })), noFollowChip, React.createElement("div", {
+  })), noFollowChip), React.createElement("div", {
     style: { display: 'flex', gap: 8, marginTop: 12 }
   }, React.createElement("button", {
     type: "button",
@@ -12481,6 +12653,7 @@ function NexusFanFollowRecordList({
   setFollows,
   campaignId,
   campaignType,
+  campaign,
   filterRecordIds,
   hideAddButton,
   emptyText,
@@ -12618,6 +12791,7 @@ function NexusFanFollowRecordList({
     editing: editingRecord,
     campaignId: campaignId,
     campaignType: campaignType,
+    campaign: campaign,
     customers: customers,
     activityLogs: activityLogs,
     opportunities: opportunities,
@@ -12634,6 +12808,7 @@ function NexusFanFollowRecordList({
   const addSheet = adding && React.createElement(NexusFanFollowRecordForm, {
     campaignId: campaignId,
     campaignType: campaignType,
+    campaign: campaign,
     customers: customers,
     activityLogs: activityLogs,
     opportunities: opportunities,
@@ -12724,16 +12899,92 @@ function NexusFanBulkSentDateSheet({ records, campaignType, onApply, onClose }) 
 }
 // ── ファン化フォロー：キャンペーン別ダッシュボード（KPIタイル＋送信→返信→相談→面談→提案→成約の
 // ファネル＋記事別・属性別の内訳）。既存のNexusSalesKpiCardのstat-grid/section-headerパターンを踏襲。 ──
-function NexusFanCampaignDashboardPanel({ campaign, follows, activityLogs, customers, tasks }) {
+// ── ファン化フォロー：⑧ダッシュボードの数字をタップした時の内訳（対象のお客様一覧）。
+// 渡されたrecords（{record, note}の配列）をそのまま一覧表示するだけの、読み取り専用シート。
+// 集計はnexusFanBuildRecordsWithStage等の実データから出した一覧をそのまま渡すため、
+// 画面に出ている件数とこの内訳の件数は必ず一致する（推測で補わない）。
+function NexusFanMetricDrilldownSheet({ title, rows, customers, onNavigate, onClose }) {
+  const resolveCustomer = r => r.record.customerId ? (customers || []).find(x => x.id === r.record.customerId) : null;
+  const nameOf = r => {
+    const c = resolveCustomer(r);
+    if (c) return nexusDisplayName(c);
+    if (r.record.customerId) return '（削除済み顧客）';
+    return r.record.customerNameText || '（顧客未登録）';
+  };
+  const body = (rows || []).length === 0 ? React.createElement(EmptyState, {
+    icon: "📋", text: "該当するお客様はいません"
+  }) : rows.map(r => {
+    const c = resolveCustomer(r);
+    return React.createElement("div", {
+      key: r.record.id, style: { padding: '10px 0', borderBottom: '1px solid var(--border)' }
+    }, React.createElement("div", { style: { fontWeight: 700, fontSize: 14 } }, nameOf(r)),
+      r.note && React.createElement("div", { style: { fontSize: 12, color: 'var(--text-sub)', marginTop: 2 } }, r.note),
+      onNavigate && c && React.createElement("button", {
+        type: "button", className: "btn btn-sm btn-outline", style: { marginTop: 6, fontSize: 11.5 },
+        onClick: () => { onNavigate('customers', c); onClose(); }
+      }, "顧客詳細を見る →")
+    );
+  });
+  return React.createElement("div", {
+    className: "overlay", onClick: onClose
+  }, React.createElement("div", {
+    className: "drawer", onClick: e => e.stopPropagation()
+  }, React.createElement("div", { className: "drawer-handle" }),
+    React.createElement("div", { className: "drawer-title" }, title, "（", (rows || []).length, "人）"),
+    body,
+    React.createElement("button", { type: "button", className: "btn btn-outline btn-full", style: { marginTop: 12 }, onClick: onClose }, "閉じる")
+  ));
+}
+function NexusFanCampaignDashboardPanel({ campaign, follows, activityLogs, customers, tasks, onNavigate }) {
   const scopedFollows = (follows || []).filter(f => f.campaignId === campaign.id);
   const dash = nexusFanCampaignDashboard(campaign.id, follows, activityLogs, customers, tasks);
+  // 【改修⑧】ダッシュボードの数字と内訳（お客様一覧）を必ず一致させるため、dashと同じ
+  // nexusFanBuildRecordsWithStageの結果をそのまま使って、各指標の対象レコードを求める。
+  const recordsWithStage = nexusFanBuildRecordsWithStage(follows, activityLogs, customers, tasks).filter(r => r.record.campaignId === campaign.id);
+  // 未案内人数：対象人数（targetCount）が未設定の場合は算出根拠が無いため「不明」のまま
+  // （0人・推測値を表示しない）。
+  const notYetGuidedCount = campaign.targetCount > 0 ? Math.max(campaign.targetCount - dash.sent, 0) : null;
+  // 問い合わせ人数：接触結果（result）に「問い合わせあり」が付いている記録。
+  const inquiryRows = recordsWithStage.filter(r => nexusFanNormalizedContacts(r.record).some(c => c.result === '問い合わせあり'));
+  // 次回フォロー予定人数：フォロー不要・既に成約済みを除いた、次回フォロー日が入力済みの記録
+  // （既存の「今日フォローする人」＝nexusFanTodayFollowListと同じ条件から、当日以降という
+  // 条件だけを外したもの）。
+  const upcomingFollowRows = recordsWithStage.filter(r => !r.record.noFollowNeeded && !r.stage.closedAt && r.record.nextFollowDate);
+  const repliedRows = recordsWithStage.filter(r => nexusFanNormalizedContacts(r.record).some(c => c.result === '返信あり'));
+  const consultedRows = recordsWithStage.filter(r => r.stage.consultedAt);
+  const metRows = recordsWithStage.filter(r => r.stage.metAt);
+  const closedRows = recordsWithStage.filter(r => r.stage.closedAt);
+  const confirmedRevenueRows = recordsWithStage.filter(r => (r.stage.confirmedRevenue || 0) > 0);
+  const [drilldown, setDrilldown] = useState(null); // { title, rows } | null
   const fmtRate = r => r === null ? '—' : `${Math.round(r * 100)}%`;
-  const tile = (label, value) => React.createElement("div", {
+  const tile = (label, value, onClick) => React.createElement("div", {
     key: label,
-    className: "stat-card"
+    className: "stat-card",
+    onClick,
+    style: onClick ? { cursor: 'pointer' } : undefined
   }, React.createElement("div", { className: "stat-num" }, value), React.createElement("div", { className: "stat-label" }, label));
-  const tiles = [tile('目標人数', campaign.targetCount || '—'), tile('送信済', campaign.targetCount ? `${dash.sent}/${campaign.targetCount}` : dash.sent), tile('既読', dash.read), tile('返信', dash.replied), tile('返信率', fmtRate(dash.replyRate)), tile('相談', dash.consulted), tile('相談化率', fmtRate(dash.consultRate)), tile('面談', dash.met), tile('提案', dash.proposed), tile('成約', dash.closed), tile('見込売上', `${dash.expectedRevenue.toLocaleString()}円`), tile('確定売上', `${dash.confirmedRevenue.toLocaleString()}円`)];
+  const openDrill = (title, rows, noteFn) => () => setDrilldown({ title, rows: rows.map(r => ({ record: r.record, note: noteFn ? noteFn(r) : '' })) });
+  const tiles = [
+    tile('対象人数', campaign.targetCount || '—'),
+    tile('案内済み人数', campaign.targetCount ? `${dash.sent}/${campaign.targetCount}` : dash.sent, openDrill('案内済み人数', recordsWithStage)),
+    tile('未案内人数', notYetGuidedCount === null ? '不明（対象人数未設定）' : notYetGuidedCount),
+    tile('既読', dash.read),
+    tile('返信人数', dash.replied, openDrill('返信人数', repliedRows)),
+    tile('返信率', fmtRate(dash.replyRate)),
+    tile('問い合わせ人数', inquiryRows.length, openDrill('問い合わせ人数', inquiryRows)),
+    tile('相談につながった人数', dash.consulted, openDrill('相談につながった人数', consultedRows)),
+    tile('相談化率', fmtRate(dash.consultRate)),
+    tile('面談につながった人数', dash.met, openDrill('面談につながった人数', metRows)),
+    tile('提案', dash.proposed),
+    tile('成約人数', dash.closed, openDrill('成約人数', closedRows)),
+    tile('確認できた売上', `${dash.confirmedRevenue.toLocaleString()}円`, openDrill('確認できた売上がある記録', confirmedRevenueRows, r => `確定売上：${(r.stage.confirmedRevenue || 0).toLocaleString()}円`)),
+    tile('見込売上', `${dash.expectedRevenue.toLocaleString()}円`),
+    tile('次回フォロー予定人数', upcomingFollowRows.length, openDrill('次回フォロー予定人数', upcomingFollowRows, r => `次回：${r.record.nextFollowDate}${r.record.nextFollowMethod ? '　' + r.record.nextFollowMethod : ''}`))
+  ];
   const statGrid = React.createElement("div", { className: "stat-grid" }, tiles);
+  const drilldownSheet = drilldown && React.createElement(NexusFanMetricDrilldownSheet, {
+    title: drilldown.title, rows: drilldown.rows, customers: customers, onNavigate: onNavigate, onClose: () => setDrilldown(null)
+  });
   const funnelStages = [['送信', dash.sent], ['返信', dash.replied], ['相談', dash.consulted], ['面談', dash.met], ['提案', dash.proposed], ['成約', dash.closed]];
   const funnelMax = Math.max(1, dash.sent);
   const funnelRows = funnelStages.map(([label, value]) => React.createElement("div", {
@@ -12774,10 +13025,86 @@ function NexusFanCampaignDashboardPanel({ campaign, follows, activityLogs, custo
   }, React.createElement("div", { className: "section-header" }, "接触方法別の件数"), React.createElement("div", {
     style: { display: 'flex', flexWrap: 'wrap', gap: '4px 10px', fontSize: 11.5, color: 'var(--text-sub)' }
   }, methodRows.map(r => React.createElement("span", { key: r.method }, `${NEXUS_FAN_CONTACT_METHOD_ICONS[r.method] || ''} ${r.method} ${r.count}`))));
-  return React.createElement(React.Fragment, null, statGrid, funnelCard, articleSection, attributeSection, methodSection);
+  return React.createElement(React.Fragment, null, statGrid, funnelCard, articleSection, attributeSection, methodSection, drilldownSheet);
 }
 // ── ファン化フォロー：最上位の全画面。キャンペーン選択＋ダッシュボード／今日のフォロー／記録一覧の
 // タブ切替＋キャンペーン追加。NexusAIAnalysisScreenと同じ.full-screen/.full-headerパターン。 ──
+// ── ファン化フォロー：①キャンペーン選択（プルダウン＋検索＋状態分類） ──
+// 横スクロール式のチップ選択だと、キャンペーンが増えるほど目的のキャンペーンを探しにくく
+// なる（指示書①）。ボタン1つで一覧（検索・状態フィルタ付き）を開く方式に変更し、
+// キャンペーンが100件以上になっても操作しやすくする。通常は「進行中」だけを表示し、
+// 完了・下書き・一時停止・過去のキャンペーンも、状態フィルタを切り替えれば検索できる。
+// 記録・集計（follows・各種ダッシュボード関数）はcampaignId単位でそのまま維持されるため、
+// この選択UIを変更しても既存の集計には一切影響しない。
+function NexusFanCampaignPicker({
+  campaigns, selectedCampaign, open, onOpen, onClose,
+  search, onSearchChange, statusFilter, onStatusFilterChange, onSelect, onAddNew
+}) {
+  const STATUS_FILTERS = ['進行中', '下書き', '終了', '一時停止', 'すべて'];
+  const q = (search || '').trim().toLowerCase();
+  const filtered = (campaigns || []).filter(c => {
+    if (statusFilter !== 'すべて' && (c.status || '進行中') !== statusFilter) return false;
+    if (q && !(c.name || '').toLowerCase().includes(q)) return false;
+    return true;
+  });
+  const triggerButton = React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', textAlign: 'left' },
+    onClick: onOpen
+  }, React.createElement("span", { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+    selectedCampaign ? `📣 ${selectedCampaign.name}` : '（キャンペーン未選択）'
+  ), React.createElement("span", { style: { flexShrink: 0, marginLeft: 8, color: 'var(--text-sub)' } }, "▼"));
+  if (!open) return triggerButton;
+  const overlay = React.createElement("div", {
+    className: "overlay", onClick: onClose
+  }, React.createElement("div", {
+    className: "drawer", onClick: e => e.stopPropagation(), style: { maxHeight: '85vh', display: 'flex', flexDirection: 'column' }
+  },
+    React.createElement("div", { className: "drawer-handle" }),
+    React.createElement("div", { className: "drawer-title" }, "キャンペーンを選択"),
+    React.createElement("div", { className: "search-wrap" },
+      React.createElement("span", null, "🔍"),
+      React.createElement("input", {
+        className: "search-input", placeholder: "キャンペーン名で検索", value: search,
+        onChange: e => onSearchChange(e.target.value)
+      })
+    ),
+    React.createElement("div", { className: "filter-chips", style: { marginTop: 8 } },
+      STATUS_FILTERS.map(st => React.createElement("button", {
+        key: st, type: "button", className: `chip ${statusFilter === st ? 'active' : ''}`,
+        onClick: () => onStatusFilterChange(st)
+      }, st))
+    ),
+    React.createElement("button", {
+      type: "button", className: "btn btn-primary btn-full", style: { marginTop: 10 }, onClick: onAddNew
+    }, "＋ 新しいキャンペーンを追加"),
+    React.createElement("div", { style: { marginTop: 10, overflowY: 'auto', flex: 1 } },
+      filtered.length === 0 ? React.createElement(EmptyState, {
+        icon: "🔍", text: q ? "該当するキャンペーンが見つかりません" : `「${statusFilter}」のキャンペーンはありません`
+      }) : filtered.map(c => React.createElement("button", {
+        key: c.id, type: "button",
+        className: "card", style: {
+          width: '100%', textAlign: 'left', marginBottom: 8, cursor: 'pointer',
+          border: selectedCampaign && selectedCampaign.id === c.id ? '1.5px solid var(--accent)' : undefined
+        },
+        onClick: () => onSelect(c.id)
+      }, React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 } },
+        React.createElement("div", { style: { fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, c.name),
+        React.createElement("span", {
+          style: { flexShrink: 0, fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 6, background: 'var(--accent-light)', color: 'var(--accent)' }
+        }, c.status || '進行中')
+      ), (c.purpose || c.startDate) && React.createElement("div", {
+        style: { fontSize: 11.5, color: 'var(--text-sub)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
+      }, [c.startDate, c.purpose].filter(Boolean).join('　')))
+      )
+    ),
+    React.createElement("button", {
+      type: "button", className: "btn btn-outline btn-full", style: { marginTop: 10 }, onClick: onClose
+    }, "閉じる")
+  ));
+  return React.createElement(React.Fragment, null, triggerButton, overlay);
+}
 function NexusFanFollowScreen({
   campaigns,
   setCampaigns,
@@ -12791,6 +13118,7 @@ function NexusFanFollowScreen({
   setOpportunities,
   tasks,
   setTasks,
+  onNavigate,
   onClose
 }) {
   const [selectedCampaignId, setSelectedCampaignId] = useState(() => (campaigns && campaigns[0] && campaigns[0].id) || '');
@@ -12804,22 +13132,6 @@ function NexusFanFollowScreen({
     if (!selectedCampaignId && campaigns && campaigns.length > 0) setSelectedCampaignId(campaigns[0].id);
   }, [campaigns && campaigns.length]);
   const selectedCampaign = (campaigns || []).find(c => c.id === selectedCampaignId);
-  // キャンペーンが増えても横スクロールだけで操作できるようにする。右端で次のキャンペーン名が
-  // 中途半端に見切れて「壊れている」ように見えないよう、スクロール可能な時だけ右端にヒントのフェードを
-  // 出し、選択中のキャンペーンのチップは常に全体が見える位置まで自動スクロールする。
-  const campaignPickerRef = React.useRef(null);
-  const [campaignPickerScrollable, setCampaignPickerScrollable] = useState(false);
-  React.useEffect(() => {
-    const el = campaignPickerRef.current;
-    if (!el) { setCampaignPickerScrollable(false); return; }
-    setCampaignPickerScrollable(el.scrollWidth > el.clientWidth + 1);
-  }, [campaigns && campaigns.length]);
-  React.useEffect(() => {
-    const el = campaignPickerRef.current;
-    if (!el) return;
-    const active = el.querySelector('button.active');
-    if (active && active.scrollIntoView) active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-  }, [selectedCampaignId]);
   const saveCampaign = c => {
     setCampaigns(prev => {
       const idx = prev.findIndex(x => x.id === c.id);
@@ -12827,24 +13139,25 @@ function NexusFanFollowScreen({
     });
     setSelectedCampaignId(c.id);
   };
-  const campaignPicker = campaigns && campaigns.length > 0 && React.createElement("div", {
-    style: { position: 'relative' }
-  }, React.createElement("div", {
-    ref: campaignPickerRef,
-    style: { display: 'flex', gap: 8, overflowX: 'auto', padding: '0 0 4px' }
-  }, campaigns.map(c => React.createElement("button", {
-    key: c.id,
-    type: "button",
-    className: `chip ${selectedCampaignId === c.id ? 'active' : ''}`,
-    style: { flexShrink: 0 },
-    onClick: () => setSelectedCampaignId(c.id)
-  }, c.name))), campaignPickerScrollable && React.createElement("div", {
-    "aria-hidden": "true",
-    style: {
-      position: 'absolute', top: 0, right: 0, bottom: 4, width: 28, pointerEvents: 'none',
-      background: 'linear-gradient(to right, transparent, var(--bg, #F2F2F7))'
-    }
-  }));
+  // 【改修】①横スクロール式のチップ選択を廃止し、プルダウン（タップで一覧を開く）方式へ
+  // 変更。検索・状態（進行中／下書き／終了／一時停止／すべて）で絞り込める、キャンペーンが
+  // 100件になっても操作しやすいリスト形式にする。通常は「進行中」だけを表示する。
+  const [campaignPickerOpen, setCampaignPickerOpen] = useState(false);
+  const [campaignSearch, setCampaignSearch] = useState('');
+  const [campaignStatusFilter, setCampaignStatusFilter] = useState('進行中');
+  const campaignPicker = React.createElement(NexusFanCampaignPicker, {
+    campaigns: campaigns || [],
+    selectedCampaign: selectedCampaign,
+    open: campaignPickerOpen,
+    onOpen: () => setCampaignPickerOpen(true),
+    onClose: () => setCampaignPickerOpen(false),
+    search: campaignSearch,
+    onSearchChange: setCampaignSearch,
+    statusFilter: campaignStatusFilter,
+    onStatusFilterChange: setCampaignStatusFilter,
+    onSelect: id => { setSelectedCampaignId(id); setCampaignPickerOpen(false); },
+    onAddNew: () => { setCampaignPickerOpen(false); setCampaignFormOpen(true); }
+  });
   const emptyState = (!campaigns || campaigns.length === 0) && React.createElement(EmptyState, {
     icon: "📣",
     text: "まだキャンペーンがありません。まず「＋キャンペーンを追加」から作成してください。"
@@ -12865,13 +13178,15 @@ function NexusFanFollowScreen({
     follows: follows,
     activityLogs: activityLogs,
     customers: customers,
-    tasks: tasks
+    tasks: tasks,
+    onNavigate: onNavigate
   });
   const todayView = tab === 'today' && selectedCampaign && React.createElement(NexusFanFollowRecordList, {
     follows: follows,
     setFollows: setFollows,
     campaignId: selectedCampaign.id,
     campaignType: selectedCampaign.campaignType,
+    campaign: selectedCampaign,
     filterRecordIds: todayList.map(r => r.record.id),
     hideAddButton: true,
     emptyText: "今日フォローする人はいません",
@@ -12890,6 +13205,7 @@ function NexusFanFollowScreen({
     setFollows: setFollows,
     campaignId: selectedCampaign.id,
     campaignType: selectedCampaign.campaignType,
+    campaign: selectedCampaign,
     customers: customers,
     activityLogs: activityLogs,
     setActivityLogs: setActivityLogs,
@@ -12934,7 +13250,7 @@ function NexusFanFollowScreen({
     style: { flex: 1, fontSize: 16, fontWeight: 700 }
   }, "📣 ファン化フォロー")), React.createElement("div", {
     style: { padding: 16 }
-  }, campaignPicker, selectedCampaign && React.createElement("button", {
+  }, campaigns && campaigns.length > 0 && campaignPicker, selectedCampaign && React.createElement("button", {
     type: "button",
     className: "btn btn-outline btn-full",
     style: { marginTop: 8 },
@@ -14463,7 +14779,7 @@ function NexusFanFollowKpiDetailSheet({
       style: { fontSize: 14, fontWeight: 700 }
     }, customerName(ev))), /*#__PURE__*/React.createElement("div", {
       style: { fontSize: 12.5, color: 'var(--text-sub)', marginTop: 2 }
-    }, (NEXUS_FAN_CONTACT_METHOD_ICONS[ev.method] || '📝'), " ", ev.method, "　", ev.result), ev.memo && /*#__PURE__*/React.createElement("div", {
+    }, (NEXUS_FAN_CONTACT_METHOD_ICONS[ev.method] || '📝'), " ", ev.method, ev.actionType && `（${ev.actionType}）`, "　", ev.result), ev.memo && /*#__PURE__*/React.createElement("div", {
       style: { fontSize: 12, color: 'var(--text-sub)', marginTop: 2, whiteSpace: 'pre-wrap' }
     }, ev.memo), onOpenCustomer && c && /*#__PURE__*/React.createElement("button", {
       type: "button",
@@ -15060,6 +15376,7 @@ function DashboardTab({
     setOpportunities: setOpportunities,
     tasks: tasks,
     setTasks: setTasks,
+    onNavigate: onNavigate,
     onClose: () => setShowFanFollow(false)
   });
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(MissionBanner, {
@@ -20999,7 +21316,11 @@ function nexusMarketSourceBreakdown(activityLogs, periodStart, periodEnd) {
 // 既存NEXUSの仕組みにそのまま橋渡しする（二重登録・二重集計を避けるための設計は各関数のコメント参照）。
 const NEXUS_FAN_ATTRIBUTES = ['既契約者', '過去相談者', '見込客', '知人', '元同僚', '紹介者', 'その他'];
 const NEXUS_FAN_SEND_METHODS = ['LINE', 'SMS', 'Messenger', 'Instagram', 'Threads', 'メール', 'その他'];
-const NEXUS_FAN_CAMPAIGN_STATUSES = ['進行中', '終了', '一時停止'];
+// 【改修】キャンペーン分類に「下書き」を追加（企画中でまだ稼働していないキャンペーンを、
+// 進行中のキャンペーンと混ぜずに管理できるようにする）。既存データのstatus値（'進行中'／
+// '終了'／'一時停止'）はそのまま読み書きでき、既存キャンペーンの分類は一切変わらない
+// （新しい値を追加しただけで、既存の値を変更・削除していないため）。
+const NEXUS_FAN_CAMPAIGN_STATUSES = ['下書き', '進行中', '終了', '一時停止'];
 // 電話フォローの状況。空文字列（未選択）は「記録なし／未確認」を表し、'未実施'（確認した結果
 // まだ電話していない、という明示的な状態）とは区別する。'電話した'/'不通'/'折返し待ち'は
 // いずれも実際に電話を試みた記録のため、phoneFollowDateに実施日を保存する。
@@ -21008,19 +21329,43 @@ const NEXUS_FAN_PHONE_FOLLOW_STATUSES = ['未実施', '電話した', '不通', 
 // オンライン面談・対面面談・ハガキ・手紙等、複数の方法を時系列で何回でも記録できるようにする）。
 // 「1 contact = 1回の接触」。方法(method)・誰から(direction)・結果(result)を別項目として持ち、
 // 「LINEを送った」と「LINEの返信があった」を別の接触として区別する。
-const NEXUS_FAN_CONTACT_METHODS = ['LINE', '電話', 'SMS', 'メール', '訪問', 'オンライン面談', '対面面談', 'ハガキ', '手紙', 'その他'];
-const NEXUS_FAN_CONTACT_METHOD_ICONS = { 'LINE': '💬', '電話': '📞', 'SMS': '📱', 'メール': '📧', '訪問': '🏠', 'オンライン面談': '🎥', '対面面談': '🤝', 'ハガキ': '📮', '手紙': '✉️', 'その他': '📝' };
+// 【改修】Messenger・Instagram・Threadsを追加（これまでキャンペーン全体の「送信方法」
+// （NEXUS_FAN_SEND_METHODS）にはあったが、1回ごとの接触記録の方法一覧には無かった）。
+const NEXUS_FAN_CONTACT_METHODS = ['LINE', '電話', 'SMS', 'メール', 'Messenger', 'Instagram', 'Threads', '訪問', 'オンライン面談', '対面面談', 'ハガキ', '手紙', 'その他'];
+const NEXUS_FAN_CONTACT_METHOD_ICONS = { 'LINE': '💬', '電話': '📞', 'SMS': '📱', 'メール': '📧', 'Messenger': '💬', 'Instagram': '📷', 'Threads': '🧵', '訪問': '🏠', 'オンライン面談': '🎥', '対面面談': '🤝', 'ハガキ': '📮', '手紙': '✉️', 'その他': '📝' };
 // outbound＝こちらから、inbound＝お客様から、mutual＝面談・会話等、双方による接触。
 const NEXUS_FAN_CONTACT_DIRECTIONS = ['outbound', 'inbound', 'mutual'];
 const NEXUS_FAN_CONTACT_DIRECTION_LABELS = { outbound: 'こちらから', inbound: 'お客様から', mutual: '双方' };
+// 【改修】「問い合わせあり」を追加（お客様から自発的な質問・問い合わせが来た、という
+// 「相談になった」ほど明確ではない反応を記録できるようにする。ダッシュボードの
+// 「問い合わせ人数」はこの結果が付いた接触で判定する）。既存の値は削除・変更していない。
 // 結果は「状態」のみとし、方法・誰からの情報を含めない（例：「LINE返信」ではなく「返信あり」）。
-const NEXUS_FAN_CONTACT_RESULTS = ['未対応', '送信済み', '連絡済み', '不通', '未読', '既読', '返信あり', '折返し待ち', '返事待ち', '会話できた', '相談になった', '面談予定', '面談実施', '今回は見送り', '連絡不要', '特に相談なし', '紹介あり', 'その他'];
+const NEXUS_FAN_CONTACT_RESULTS = ['未対応', '送信済み', '連絡済み', '不通', '未読', '既読', '返信あり', '問い合わせあり', '折返し待ち', '返事待ち', '会話できた', '相談になった', '面談予定', '面談実施', '今回は見送り', '連絡不要', '特に相談なし', '紹介あり', 'その他'];
 // 相談にならなかった接触も関係維持として価値があるため、「失敗」のニュアンスを持たせない
 // 中立的な結果（今回は見送り／連絡不要／特に相談なし等）も対等な選択肢として用意する。
 const NEXUS_FAN_CONTACT_TOPICS = ['近況確認', '結婚', '出産', '子ども', '進学', '転職', '住宅購入', '住宅ローン', '独立', '法人設立', '介護', '相続', '保険見直し', '保険金請求', '給付金請求', '住所変更', '名義変更', '資産形成', '税金', '雑談', 'その他'];
 const NEXUS_FAN_MEETING_MODES = ['オンライン', '対面'];
+// 【改修】「今回したこと」を新設。これまでは「方法（LINE・電話等）」と「結果（送信済み・
+// 既読等）」しか無く、同じ送信でも「案内なのか」「近況確認なのか」「お礼なのか」を区別
+// できなかった。目的・アクション種別は方法とは独立した別軸のため、新しい項目として追加する
+// （既存のmethod・resultはそのまま。actionTypeは任意項目で、未入力の既存データはそのまま
+// 「未設定」として扱う）。
+const NEXUS_FAN_ACTION_TYPES = ['案内・情報提供', '近況確認', 'お礼・感謝', '相談・問い合わせ対応', 'その他'];
 function nexusFanContactBlank() {
-  return { id: '', occurredAt: '', direction: 'outbound', method: '', result: '', topics: [], memo: '', meetingAt: '', meetingMode: '', meetingPurpose: '', referralCount: '', referralMemo: '', referredCustomerIds: [], createdAt: '', updatedAt: '', deletedAt: '' };
+  return {
+    id: '', occurredAt: '', direction: 'outbound', actionType: '', actionTypeOther: '', method: '', methodOther: '', result: '',
+    topics: [], memo: '', meetingAt: '', meetingMode: '', meetingPurpose: '', referralCount: '', referralMemo: '', referredCustomerIds: [],
+    customFieldValues: {}, createdAt: '', updatedAt: '', deletedAt: ''
+  };
+}
+// 【改修】選択肢に「その他」を選んだだけで具体的な内容が分からなくなる状態を防ぐための
+// 共通ヘルパー。「その他」が選ばれている時だけ、対応する自由記入欄の値を表示用に補って返す
+// （例：「その他（オンラインサロン）」）。値が無い場合は選択肢名だけを返す（読み取り専用、
+// 保存データは変更しない）。
+function nexusFanOtherLabel(selected, otherText) {
+  if (!selected) return '';
+  if (selected !== 'その他' || !(otherText || '').trim()) return selected;
+  return `その他（${otherText.trim()}）`;
 }
 // キャンペーン種類：記録する最初のアクション・表示名をキャンペーンごとに変えるための項目。
 // 既存キャンペーンにはこの項目が存在しない（undefined）ため、空文字列＝「未設定」のまま扱い、
@@ -21034,6 +21379,38 @@ const NEXUS_FAN_CAMPAIGN_TYPE_CONFIG = {
 };
 // 未設定（既存キャンペーン・従来データ）は、これまでと完全に同じ「記事」前提の表示のまま動かす。
 const nexusFanCampaignTypeConfig = campaignType => NEXUS_FAN_CAMPAIGN_TYPE_CONFIG[campaignType] || NEXUS_FAN_CAMPAIGN_TYPE_CONFIG['記事'];
+// ── キャンペーン別カスタム項目（新規追加） ──────────────────────────
+// 「生命保険料控除案内」「ソニー生命マイページ停止案内」等、記事・ハガキ以外の新しい
+// キャンペーンを追加するたびにプログラムを修正しなくて済むよう、キャンペーンごとに
+// 必要な入力項目（campaign.customFields）をデータとして持たせる（コード側は項目の
+// 「型」だけを知っていればよく、項目そのものの追加・削除はキャンペーン編集画面から行える）。
+// 記事（note等）・ハガキの既存2種類は、これまで通りNEXUS_FAN_CAMPAIGN_TYPE_CONFIGの
+// 専用項目（記事タイトル・URL等）で動作し続ける。customFieldsはそれに「追加」される
+// 任意の項目であり、既存の専用項目を置き換えるものではない。
+const NEXUS_FAN_CUSTOM_FIELD_TYPES = [
+  { key: 'text', label: '1行テキスト（例：案内方法、反応の要約）' },
+  { key: 'textarea', label: '複数行テキスト（例：案内内容、問い合わせ内容）' },
+  { key: 'date', label: '日付（例：案内日、発送日）' }
+];
+function nexusFanCustomFieldBlank() {
+  return { key: uid(), label: '', type: 'text' };
+}
+// キャンペーンのcustomFields定義（無ければ空配列）。
+function nexusFanCampaignCustomFields(campaign) {
+  return (campaign && campaign.customFields) || [];
+}
+// 新規フォロー記録を作る際、キャンペーン側に登録済みの「再利用できる内容」
+// （customFieldDefaults）を初期値として差し込む。既存の記録の値（上書きしない）や、
+// キャンペーン側に該当項目の既定値が無い場合は空欄のままにする（推測で埋めない）。
+function nexusFanApplyCustomFieldDefaults(campaign, existingValues) {
+  const fields = nexusFanCampaignCustomFields(campaign);
+  const defaults = (campaign && campaign.customFieldDefaults) || {};
+  const out = { ...(existingValues || {}) };
+  fields.forEach(f => {
+    if (out[f.key] === undefined && defaults[f.key] !== undefined) out[f.key] = defaults[f.key];
+  });
+  return out;
+}
 // 複数キャンペーンの合計件数を表示する際のラベル（ハガキ→発送、記事→送信）。
 // 対象キャンペーンの種類が1種類に揃っていればそのラベル、混在・不明の場合は両方の意味を明示した
 // 「送信/発送」とし、ハガキ発送分を「記事送信」であるかのように見せない（件数自体は一切変更しない）。
@@ -21163,7 +21540,11 @@ function nexusFanFollowCompletedEvents(fanFollows, campaigns, periodStart, perio
         customerId: record.customerId || '',
         customerNameText: record.customerNameText || '',
         occurredAt: c.occurredAt,
-        method: c.method || 'その他',
+        // 【改修】「その他」が選ばれている接触は、具体的な内容（methodOther）を
+        // 併記した表示用文字列にする（nexusFanOtherLabel）。旧データ（methodOther
+        // が無い接触）はそのまま選択肢名のみ表示される。
+        method: nexusFanOtherLabel(c.method, c.methodOther) || 'その他',
+        actionType: c.actionType ? nexusFanOtherLabel(c.actionType, c.actionTypeOther) : '',
         result: c.result,
         memo: c.memo || ''
       });
