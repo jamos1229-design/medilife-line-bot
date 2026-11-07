@@ -40758,6 +40758,13 @@ function NexusPlanningSection({
     const a = nexusResolveMemberAge(k, customers);
     return `${nexusChildDisplayName(k, customers) || '子'}${a !== null ? `（${a}歳）` : ''}`;
   }).join('、') : '未登録';
+  // 【不具合修正】子ども（連携済みの実在顧客のみ）の既契約・金融資産を、配偶者と同じく
+  // 夫婦合算・印刷資料に含める。氏名・年齢のみ登録された子（独立した顧客レコードが無い）は
+  // 契約・資産そのものが存在しないため対象外（nexusChildDisplayNameと同じ判定：linkedCustomerId
+  // が実在のcustomersレコードに解決できる場合のみ）。
+  const linkedChildCustomers = kids
+    .map(k => ({ kid: k, childCustomer: k.linkedCustomerId ? customers.find(x => x.id === k.linkedCustomerId) : null }))
+    .filter(e => !!e.childCustomer);
   // ── 教育資金プランニング：子供ごとに進学段階の費用を試算 ──
   const educationPlans = lp.education || {};
   const kidsWithEducation = kids.map(k => {
@@ -40887,11 +40894,27 @@ function NexusPlanningSection({
   // ── 夫婦合算（資料の対象で選べる）── 配偶者が顧客連携済みの場合のみ計算
   const spouseContracts = linkedSpouseCustomer ? linkedSpouseCustomer.contracts || [] : [];
   const spousePortfolioInputs = linkedSpouseCustomer && linkedSpouseCustomer.lp && linkedSpouseCustomer.lp.portfolio || {};
-  const coupleContractsForCharts = [...allContractsForCharts, ...spouseContracts];
-  const couplePortfolioInputs = sumPortfolioInputs(portfolioInputsFor(portfolio), portfolioInputsFor(spousePortfolioInputs));
+  // 【不具合修正】子ども（連携済みの実在顧客のみ）の既契約・金融資産（lp.portfolio）を、
+  // 配偶者と同じ扱いで集計に合算する。子自身の顧客レコードに保存された実データのみを使い、
+  // 推測で補わない。被保険者・契約者はそれぞれの契約オブジェクト自身が持つ情報のままで、
+  // 「誰のcontracts配列から取得したか」を変えるだけ（契約者・被保険者・受取人の値は書き換えない）。
+  const childrenContractsByKid = linkedChildCustomers.map(({ kid, childCustomer }) => ({
+    kidId: kid.id,
+    customerId: childCustomer.id,
+    name: nexusChildDisplayName(kid, customers) || childCustomer.name || 'お子様',
+    age: nexusResolveMemberAge(kid, customers),
+    contracts: childCustomer.contracts || [],
+    portfolioInputs: (childCustomer.lp && childCustomer.lp.portfolio) || {}
+  }));
+  const childrenContractsFlat = childrenContractsByKid.flatMap(c => c.contracts);
+  const coupleContractsForCharts = [...allContractsForCharts, ...spouseContracts, ...childrenContractsFlat];
+  const couplePortfolioInputs = childrenContractsByKid.reduce(
+    (acc, c) => sumPortfolioInputs(acc, portfolioInputsFor(c.portfolioInputs)),
+    sumPortfolioInputs(portfolioInputsFor(portfolio), portfolioInputsFor(spousePortfolioInputs))
+  );
   const couplePortfolio = linkedSpouseCustomer ? nexusComputePortfolio(coupleContractsForCharts, couplePortfolioInputs) : null;
   const isCoupleScope = printScope === 'couple' && !!linkedSpouseCustomer;
-  // 契約者（そのcontracts配列を持つ本人・法人・配偶者）ごとの保険料合計。
+  // 契約者（そのcontracts配列を持つ本人・法人・配偶者・子）ごとの保険料合計。
   // 被保険者が別人でも、保険料を払っているのは契約者本人なのでここでは除外しない。
   const premiumByContractor = [{
     label: customer.name,
@@ -40902,8 +40925,11 @@ function NexusPlanningSection({
   }, linkedSpouseCustomer && {
     label: linkedSpouseCustomer.name,
     ...nexusPremiumTotals(spouseContracts)
-  }].filter(Boolean);
-  // 被保険者ごとの保障集計（本人・法人・配偶者の契約をまとめて、実際に保障がかかっている人単位で
+  }, ...childrenContractsByKid.map(c => ({
+    label: c.name,
+    ...nexusPremiumTotals(c.contracts)
+  }))].filter(Boolean);
+  // 被保険者ごとの保障集計（本人・法人・配偶者・子の契約をまとめて、実際に保障がかかっている人単位で
   // 目的別に集計し直す。生命保険の管理表でよくある「被保険者ごとに保障額が一目でわかる」表）。
   const insuredGroups = nexusGroupContractsByInsured([{
     contracts,
@@ -40914,7 +40940,10 @@ function NexusPlanningSection({
   }, linkedSpouseCustomer && {
     contracts: spouseContracts,
     defaultName: linkedSpouseCustomer.name
-  }].filter(Boolean));
+  }, ...childrenContractsByKid.map(c => ({
+    contracts: c.contracts,
+    defaultName: c.name
+  }))].filter(Boolean));
   const scopedPortfolio = isCoupleScope ? couplePortfolio : {
     assetClassChart,
     currencyChart,
@@ -40939,11 +40968,25 @@ function NexusPlanningSection({
   const docContracts = docSectionOn('insurance') ? nexusFilterContractsForOutput(contracts, customer.id, docIncludedMap) : [];
   const docCorpContracts = linkedCorp && docSectionOn('insurance') ? nexusFilterContractsForOutput(corpContracts, linkedCorp.id, docIncludedMap) : [];
   const docSpouseContracts = linkedSpouseCustomer && docSectionOn('insurance') && docSectionOn('family') ? nexusFilterContractsForOutput(spouseContracts, linkedSpouseCustomer.id, docIncludedMap) : [];
+  // 【不具合修正】子ども（連携済みの実在顧客のみ）の既契約・金融資産も、配偶者と同じ
+  // 「資料出力範囲（docSelection）」の絞り込みを適用したうえで資料に含める。
+  const docChildrenContractsByKid = docSectionOn('family') ? childrenContractsByKid.map(c => ({
+    ...c,
+    contracts: docSectionOn('insurance') ? nexusFilterContractsForOutput(c.contracts, c.customerId, docIncludedMap) : [],
+    portfolioInputs: nexusDocPortfolioForOwner(c.portfolioInputs, c.customerId, docIncludedMap, docSectionOn('assets'))
+  })) : [];
+  const docChildrenContractsFlat = docChildrenContractsByKid.flatMap(c => c.contracts);
+  // 一覧表（保有株式一覧・保有投資信託一覧等）で、配偶者分と同じやり方で子の銘柄別明細を
+  // 合算するためのヘルパー（カテゴリキー単位で、連携済みの子全員分の該当カテゴリをまとめて返す）。
+  const docChildrenPortfolioItemsFor = cat => docChildrenContractsByKid.flatMap(c => (c.portfolioInputs || {})[cat] || []);
   const docPortfolio = nexusDocPortfolioForOwner(portfolio, customer.id, docIncludedMap, docSectionOn('assets'));
   const docSpousePortfolioInputs = linkedSpouseCustomer && docSectionOn('family') ? nexusDocPortfolioForOwner(spousePortfolioInputs, linkedSpouseCustomer.id, docIncludedMap, docSectionOn('assets')) : {};
   const docAllContractsForCharts = [...docContracts, ...docCorpContracts];
-  const docCoupleContractsForCharts = [...docAllContractsForCharts, ...docSpouseContracts];
-  const docCouplePortfolioInputs = sumPortfolioInputs(portfolioInputsFor(docPortfolio), portfolioInputsFor(docSpousePortfolioInputs));
+  const docCoupleContractsForCharts = [...docAllContractsForCharts, ...docSpouseContracts, ...docChildrenContractsFlat];
+  const docCouplePortfolioInputs = docChildrenContractsByKid.reduce(
+    (acc, c) => sumPortfolioInputs(acc, portfolioInputsFor(c.portfolioInputs)),
+    sumPortfolioInputs(portfolioInputsFor(docPortfolio), portfolioInputsFor(docSpousePortfolioInputs))
+  );
   const docCouplePortfolio = linkedSpouseCustomer ? nexusComputePortfolio(docCoupleContractsForCharts, docCouplePortfolioInputs) : null;
   const docSelfPortfolio = nexusComputePortfolio(docAllContractsForCharts, portfolioInputsFor(docPortfolio));
   const docScopedPortfolio = docIsCoupleScope ? docCouplePortfolio : docSelfPortfolio;
@@ -40956,7 +40999,10 @@ function NexusPlanningSection({
   }, linkedSpouseCustomer && docSectionOn('family') && {
     label: linkedSpouseCustomer.name,
     ...nexusPremiumTotals(docSpouseContracts)
-  }].filter(Boolean);
+  }, ...docChildrenContractsByKid.map(c => ({
+    label: c.name,
+    ...nexusPremiumTotals(c.contracts)
+  }))].filter(Boolean);
   const docInsuredGroups = nexusGroupContractsByInsured([{
     contracts: docContracts,
     defaultName: customer.name
@@ -40966,7 +41012,10 @@ function NexusPlanningSection({
   }, linkedSpouseCustomer && docSectionOn('family') && {
     contracts: docSpouseContracts,
     defaultName: linkedSpouseCustomer.name
-  }].filter(Boolean));
+  }, ...docChildrenContractsByKid.map(c => ({
+    contracts: c.contracts,
+    defaultName: c.name
+  }))].filter(Boolean));
   const docLoans = docSectionOn('loans') ? loans : [];
   const docTotalLoanBalance = docLoans.reduce((s, l) => s + (parseFloat(l.balance) || 0), 0);
   const docIncomeItems = docSectionOn('incomeExpense') ? incomeItems : [];
@@ -41251,9 +41300,13 @@ function NexusPlanningSection({
         <table><tr><th>保障項目</th><th>必要保障額</th><th>現在保障額</th><th>過不足</th><th>評価</th></tr>${diagnosisRowsHtml}</table>
       </div>`;
       })()}
-      ${docInsuredGroups.map(g => buildPurposeRowsForPrint(`被保険者別 保障集計：${g.name}`, g.contracts, null, g.name === customer.name ? ageSelf : linkedSpouseCustomer && g.name === linkedSpouseCustomer.name ? docAgeSpouse : null)).join('')}
+      ${docInsuredGroups.map(g => {
+        const matchedKid = docChildrenContractsByKid.find(c => c.name === g.name);
+        const insuredAgeForGroup = g.name === customer.name ? ageSelf : linkedSpouseCustomer && g.name === linkedSpouseCustomer.name ? docAgeSpouse : matchedKid ? matchedKid.age : null;
+        return buildPurposeRowsForPrint(`被保険者別 保障集計：${g.name}`, g.contracts, null, insuredAgeForGroup);
+      }).join('')}
       ${docIsCoupleScope ? `
-        ${buildPurposeRowsFromSummary('保障集計（世帯合算）', nexusMergePurposeSummaries(nexusPurposeSummary(nexusOwnCoverageContracts(docContracts, customer.name), ageSelf), nexusPurposeSummary(nexusOwnCoverageContracts(docSpouseContracts, linkedSpouseCustomer.name), docAgeSpouse)))}
+        ${buildPurposeRowsFromSummary('保障集計（世帯合算）', docChildrenContractsByKid.reduce((acc, c) => nexusMergePurposeSummaries(acc, nexusPurposeSummary(nexusOwnCoverageContracts(c.contracts, c.name), c.age)), nexusMergePurposeSummaries(nexusPurposeSummary(nexusOwnCoverageContracts(docContracts, customer.name), ageSelf), nexusPurposeSummary(nexusOwnCoverageContracts(docSpouseContracts, linkedSpouseCustomer.name), docAgeSpouse))))}
       ` : ''}
       <div class="print-section">
         <h3>契約者別 保険料合計</h3>
@@ -41277,8 +41330,8 @@ function NexusPlanningSection({
         <p style="font-size:11px;color:#999;">※本グラフはMEDiLIFE NEXUSに登録されている資産のみを集計しています。預貯金・株式・投資信託・不動産等が未入力の場合、実際の資産配分とは異なります。</p>
       </div>
       ${(() => {
-      const stocksAll = docIsCoupleScope ? [...(docPortfolio.stocks || []), ...(docSpousePortfolioInputs.stocks || [])] : docPortfolio.stocks || [];
-      const fundsAll = docIsCoupleScope ? [...(docPortfolio.funds || []), ...(docSpousePortfolioInputs.funds || [])] : docPortfolio.funds || [];
+      const stocksAll = docIsCoupleScope ? [...(docPortfolio.stocks || []), ...(docSpousePortfolioInputs.stocks || []), ...docChildrenPortfolioItemsFor('stocks')] : docPortfolio.stocks || [];
+      const fundsAll = docIsCoupleScope ? [...(docPortfolio.funds || []), ...(docSpousePortfolioInputs.funds || []), ...docChildrenPortfolioItemsFor('funds')] : docPortfolio.funds || [];
       if (stocksAll.length === 0 && fundsAll.length === 0) return '';
       const stockRows = stocksAll.map(st => {
         const ev = nexusStockEval(st);
@@ -41304,7 +41357,7 @@ function NexusPlanningSection({
       </div>`;
     })()}
       ${(() => {
-      const dcAll = docIsCoupleScope ? [...(docPortfolio.corporateDc || []), ...(docSpousePortfolioInputs.corporateDc || [])] : docPortfolio.corporateDc || [];
+      const dcAll = docIsCoupleScope ? [...(docPortfolio.corporateDc || []), ...(docSpousePortfolioInputs.corporateDc || []), ...docChildrenPortfolioItemsFor('corporateDc')] : docPortfolio.corporateDc || [];
       if (dcAll.length === 0) return '';
       const dcRows = dcAll.map(dc => {
         const principal = parseFloat(dc.principal) || 0;
@@ -41320,7 +41373,7 @@ function NexusPlanningSection({
       </div>`;
     })()}
       ${(() => {
-      const idecoAll = docIsCoupleScope ? [...(docPortfolio.ideco || []), ...(docSpousePortfolioInputs.ideco || [])] : docPortfolio.ideco || [];
+      const idecoAll = docIsCoupleScope ? [...(docPortfolio.ideco || []), ...(docSpousePortfolioInputs.ideco || []), ...docChildrenPortfolioItemsFor('ideco')] : docPortfolio.ideco || [];
       if (idecoAll.length === 0) return '';
       const idecoRows = idecoAll.map(dc => {
         const principal = parseFloat(dc.principal) || 0;
@@ -41336,7 +41389,7 @@ function NexusPlanningSection({
       </div>`;
     })()}
       ${(() => {
-      const mpAll = docIsCoupleScope ? [...(docPortfolio.mutualPension || []), ...(docSpousePortfolioInputs.mutualPension || [])] : docPortfolio.mutualPension || [];
+      const mpAll = docIsCoupleScope ? [...(docPortfolio.mutualPension || []), ...(docSpousePortfolioInputs.mutualPension || []), ...docChildrenPortfolioItemsFor('mutualPension')] : docPortfolio.mutualPension || [];
       if (mpAll.length === 0) return '';
       const mpRows = mpAll.map(dc => {
         return `<tr><td>${escapeHtmlForPrint(dc.name)}</td><td>${escapeHtmlForPrint(dc.owner || '—')}</td><td>${nexusHasValue(dc.principal) ? Number(dc.principal).toLocaleString() + '円' : '未入力'}</td><td>${nexusHasValue(dc.currentValue) ? Number(dc.currentValue).toLocaleString() + '円' : '未入力'}</td><td>${nexusHasValue(dc.monthlyContribution) ? Number(dc.monthlyContribution).toLocaleString() + '円' : '未入力'}</td></tr>`;
@@ -41348,7 +41401,7 @@ function NexusPlanningSection({
       </div>`;
     })()}
       ${(() => {
-      const reAll = docIsCoupleScope ? [...(docPortfolio.realEstate || []), ...(docSpousePortfolioInputs.realEstate || [])] : docPortfolio.realEstate || [];
+      const reAll = docIsCoupleScope ? [...(docPortfolio.realEstate || []), ...(docSpousePortfolioInputs.realEstate || []), ...docChildrenPortfolioItemsFor('realEstate')] : docPortfolio.realEstate || [];
       if (reAll.length === 0) return '';
       const reRows = reAll.map(re => {
         // 「分からない」（marketValueUnknown）や単なる未入力の物件は、価格・ローン残高・純資産の
@@ -41372,10 +41425,10 @@ function NexusPlanningSection({
       </div>`;
     })()}
       ${(() => {
-      const catList = [['預貯金', docPortfolio.deposits, docSpousePortfolioInputs.deposits], ['債券', docPortfolio.bonds, docSpousePortfolioInputs.bonds], ['FX', docPortfolio.fx, docSpousePortfolioInputs.fx], ['仮想通貨', docPortfolio.crypto, docSpousePortfolioInputs.crypto], ['その他資産', docPortfolio.others, docSpousePortfolioInputs.others]];
+      const catList = [['預貯金', docPortfolio.deposits, docSpousePortfolioInputs.deposits, 'deposits'], ['債券', docPortfolio.bonds, docSpousePortfolioInputs.bonds, 'bonds'], ['FX', docPortfolio.fx, docSpousePortfolioInputs.fx, 'fx'], ['仮想通貨', docPortfolio.crypto, docSpousePortfolioInputs.crypto, 'crypto'], ['その他資産', docPortfolio.others, docSpousePortfolioInputs.others, 'others']];
       const allRows = [];
-      catList.forEach(([label, own, sp]) => {
-        const items = docIsCoupleScope ? [...(own || []), ...(sp || [])] : own || [];
+      catList.forEach(([label, own, sp, catKey]) => {
+        const items = docIsCoupleScope ? [...(own || []), ...(sp || []), ...docChildrenPortfolioItemsFor(catKey)] : own || [];
         items.forEach(it => {
           if (!it.name && !it.value) return;
           allRows.push(`<tr><td>${escapeHtmlForPrint(label)}</td><td>${escapeHtmlForPrint(it.name || '')}</td><td>${escapeHtmlForPrint(it.owner || '—')}</td><td>${nexusHasValue(it.value) ? Number(it.value).toLocaleString() + '円' : '未入力'}</td></tr>`);
@@ -41425,6 +41478,13 @@ function NexusPlanningSection({
         ${notesHtml(docSpouseContracts)}
       </div>
       ` : ''}
+      ${docIsCoupleScope ? docChildrenContractsByKid.map(c => `
+      <div class="print-section">
+        <h3>既契約一覧（子：${escapeHtmlForPrint(c.name)}）</h3>
+        <table class="contract-table"><colgroup><col style="width:3%"><col style="width:12%"><col style="width:12%"><col style="width:10%"><col style="width:10%"><col style="width:8%"><col style="width:9%"><col style="width:9%"><col style="width:10%"><col style="width:9%"><col style="width:8%"></colgroup><tr><th>No</th><th>目的</th><th>保険種類</th><th>保険会社</th><th>証券番号</th><th>契約日</th><th>保険期間</th><th>払込期間</th><th>保険金額（加入当初）</th><th>現在の解約返戻金</th><th>保険料</th></tr>${rowsHtml(c.contracts)}</table>
+        ${notesHtml(c.contracts)}
+      </div>
+      `).join('') : ''}
       <div class="print-section">
         <h3>家族構成</h3>
         <table><tr><th>お名前</th><th>続柄</th><th>年齢</th><th>既契約</th><th>メモ</th></tr>${famRows}</table>
@@ -41843,15 +41903,18 @@ function NexusPlanningSection({
     if (linkedCorp) addContractBlock(`既契約一覧・保障集計（関連法人：${linkedCorp.corporateName}）`, docCorpContracts);
     if (docIsCoupleScope) {
       addContractBlock(`既契約一覧・保障集計（配偶者：${linkedSpouseCustomer.name}）`, docSpouseContracts, linkedSpouseCustomer.name, docAgeSpouse);
+      docChildrenContractsByKid.forEach(c => {
+        addContractBlock(`既契約一覧・保障集計（子：${c.name}）`, c.contracts, c.name, c.age);
+      });
       row = nexusXlsxSubTitle(ws, row, '保障集計（世帯合算）', 2);
-      addPurposeSummaryFromSummary(nexusMergePurposeSummaries(nexusPurposeSummary(nexusOwnCoverageContracts(docContracts, customer.name), ageSelf), nexusPurposeSummary(nexusOwnCoverageContracts(docSpouseContracts, linkedSpouseCustomer.name), docAgeSpouse)));
+      addPurposeSummaryFromSummary(docChildrenContractsByKid.reduce((acc, c) => nexusMergePurposeSummaries(acc, nexusPurposeSummary(nexusOwnCoverageContracts(c.contracts, c.name), c.age)), nexusMergePurposeSummaries(nexusPurposeSummary(nexusOwnCoverageContracts(docContracts, customer.name), ageSelf), nexusPurposeSummary(nexusOwnCoverageContracts(docSpouseContracts, linkedSpouseCustomer.name), docAgeSpouse))));
       row += 2;
     }
 
     // ポートフォリオ
     {
-      const stocksAll = docIsCoupleScope ? [...(docPortfolio.stocks || []), ...(docSpousePortfolioInputs.stocks || [])] : docPortfolio.stocks || [];
-      const fundsAll = docIsCoupleScope ? [...(docPortfolio.funds || []), ...(docSpousePortfolioInputs.funds || [])] : docPortfolio.funds || [];
+      const stocksAll = docIsCoupleScope ? [...(docPortfolio.stocks || []), ...(docSpousePortfolioInputs.stocks || []), ...docChildrenPortfolioItemsFor('stocks')] : docPortfolio.stocks || [];
+      const fundsAll = docIsCoupleScope ? [...(docPortfolio.funds || []), ...(docSpousePortfolioInputs.funds || []), ...docChildrenPortfolioItemsFor('funds')] : docPortfolio.funds || [];
       if (stocksAll.length > 0) {
         row = nexusXlsxSubTitle(ws, row, `保有株式一覧${scopeNote}`, 7);
         row = nexusXlsxHeaderRow(ws, row, ['銘柄名', '名義', '保有数量', '取得単価', '現在価格', '評価額', '評価損益']);
@@ -41875,7 +41938,7 @@ function NexusPlanningSection({
         }), [5, 6, 7, 8, 9, 11]);
         row += 1;
       }
-      const dcAll = docIsCoupleScope ? [...(docPortfolio.corporateDc || []), ...(docSpousePortfolioInputs.corporateDc || [])] : docPortfolio.corporateDc || [];
+      const dcAll = docIsCoupleScope ? [...(docPortfolio.corporateDc || []), ...(docSpousePortfolioInputs.corporateDc || []), ...docChildrenPortfolioItemsFor('corporateDc')] : docPortfolio.corporateDc || [];
       if (dcAll.length > 0) {
         row = nexusXlsxSubTitle(ws, row, `企業型DC（確定拠出年金）一覧${scopeNote}`, 8);
         row = nexusXlsxHeaderRow(ws, row, ['制度名・勤務先', '名義', '原資', '現評価額', '評価損益', '月の積立金額', 'うち本人負担額', '保有ファンド']);
@@ -41887,7 +41950,7 @@ function NexusPlanningSection({
         }), [3, 4, 5, 6, 7]);
         row += 1;
       }
-      const idecoAll = docIsCoupleScope ? [...(docPortfolio.ideco || []), ...(docSpousePortfolioInputs.ideco || [])] : docPortfolio.ideco || [];
+      const idecoAll = docIsCoupleScope ? [...(docPortfolio.ideco || []), ...(docSpousePortfolioInputs.ideco || []), ...docChildrenPortfolioItemsFor('ideco')] : docPortfolio.ideco || [];
       if (idecoAll.length > 0) {
         row = nexusXlsxSubTitle(ws, row, `iDeCo（個人型確定拠出年金）一覧${scopeNote}`, 7);
         row = nexusXlsxHeaderRow(ws, row, ['制度名・運営管理機関', '名義', '原資', '現評価額', '評価損益', '掛金月額', '保有ファンド']);
@@ -41899,7 +41962,7 @@ function NexusPlanningSection({
         }), [3, 4, 5, 6]);
         row += 1;
       }
-      const mpAll = docIsCoupleScope ? [...(docPortfolio.mutualPension || []), ...(docSpousePortfolioInputs.mutualPension || [])] : docPortfolio.mutualPension || [];
+      const mpAll = docIsCoupleScope ? [...(docPortfolio.mutualPension || []), ...(docSpousePortfolioInputs.mutualPension || []), ...docChildrenPortfolioItemsFor('mutualPension')] : docPortfolio.mutualPension || [];
       if (mpAll.length > 0) {
         row = nexusXlsxSubTitle(ws, row, `小規模企業共済・国民年金基金一覧${scopeNote}`, 5);
         row = nexusXlsxHeaderRow(ws, row, ['制度名', '名義', '掛金累計額', '現在の評価額（任意）', '掛金月額']);
@@ -41925,10 +41988,10 @@ function NexusPlanningSection({
         }), [5, 6, 7, 8]);
         row += 1;
       }
-      const catList = [['預貯金', docPortfolio.deposits, docSpousePortfolioInputs.deposits], ['債券', docPortfolio.bonds, docSpousePortfolioInputs.bonds], ['FX', docPortfolio.fx, docSpousePortfolioInputs.fx], ['仮想通貨', docPortfolio.crypto, docSpousePortfolioInputs.crypto], ['その他資産', docPortfolio.others, docSpousePortfolioInputs.others]];
+      const catList = [['預貯金', docPortfolio.deposits, docSpousePortfolioInputs.deposits, 'deposits'], ['債券', docPortfolio.bonds, docSpousePortfolioInputs.bonds, 'bonds'], ['FX', docPortfolio.fx, docSpousePortfolioInputs.fx, 'fx'], ['仮想通貨', docPortfolio.crypto, docSpousePortfolioInputs.crypto, 'crypto'], ['その他資産', docPortfolio.others, docSpousePortfolioInputs.others, 'others']];
       const simpleAssetRows = [];
-      catList.forEach(([label, own, sp]) => {
-        const items = docIsCoupleScope ? [...(own || []), ...(sp || [])] : own || [];
+      catList.forEach(([label, own, sp, catKey]) => {
+        const items = docIsCoupleScope ? [...(own || []), ...(sp || []), ...docChildrenPortfolioItemsFor(catKey)] : own || [];
         items.forEach(it => {
           if (!it.name && !it.value) return;
           simpleAssetRows.push([label, it.name || '', it.owner || '', nexusHasValue(it.value) ? Number(it.value) : '未入力']);
@@ -45612,6 +45675,7 @@ function NexusPlanningSection({
     contracts: contracts,
     corpContracts: corpContracts,
     spouseContracts: spouseContracts,
+    childrenContracts: childrenContractsByKid,
     portfolio: portfolio,
     spousePortfolioInputs: spousePortfolioInputs,
     mode: docScopeFor,
@@ -45652,6 +45716,9 @@ function NexusDocumentScopeScreen({
   contracts,
   corpContracts,
   spouseContracts,
+  // 【不具合修正】子ども（連携済みの実在顧客のみ）の既契約・金融資産も、配偶者と同じく
+  // 資料出力範囲の選択画面で1件ずつ含める／除外できるようにする。
+  childrenContracts,
   portfolio,
   spousePortfolioInputs,
   mode,
@@ -45674,6 +45741,9 @@ function NexusDocumentScopeScreen({
     if (linkedSpouseCustomer) (spouseContracts || []).forEach(ct => {
       map[nexusDocContractItemKey(linkedSpouseCustomer.id, ct.id)] = nexusDocDefaultIncluded(ct);
     });
+    (childrenContracts || []).forEach(c => (c.contracts || []).forEach(ct => {
+      map[nexusDocContractItemKey(c.customerId, ct.id)] = nexusDocDefaultIncluded(ct);
+    }));
     NEXUS_DOC_ASSET_CATEGORIES.forEach(cat => {
       ((portfolio || {})[cat] || []).forEach(it => {
         map[nexusDocAssetItemKey(customer.id, cat, it.id)] = nexusDocDefaultIncluded(it);
@@ -45681,6 +45751,9 @@ function NexusDocumentScopeScreen({
       if (linkedSpouseCustomer) ((spousePortfolioInputs || {})[cat] || []).forEach(it => {
         map[nexusDocAssetItemKey(linkedSpouseCustomer.id, cat, it.id)] = nexusDocDefaultIncluded(it);
       });
+      (childrenContracts || []).forEach(c => ((c.portfolioInputs || {})[cat] || []).forEach(it => {
+        map[nexusDocAssetItemKey(c.customerId, cat, it.id)] = nexusDocDefaultIncluded(it);
+      }));
     });
     return map;
   };
@@ -45702,6 +45775,9 @@ function NexusDocumentScopeScreen({
     if (linkedSpouseCustomer) (spouseContracts || []).forEach(ct => {
       next[nexusDocContractItemKey(linkedSpouseCustomer.id, ct.id)] = nexusDocDefaultIncluded(ct);
     });
+    (childrenContracts || []).forEach(c => (c.contracts || []).forEach(ct => {
+      next[nexusDocContractItemKey(c.customerId, ct.id)] = nexusDocDefaultIncluded(ct);
+    }));
     return next;
   });
   const selectAllAssets = () => setIncluded(m => {
@@ -45713,6 +45789,9 @@ function NexusDocumentScopeScreen({
       if (linkedSpouseCustomer) ((spousePortfolioInputs || {})[cat] || []).forEach(it => {
         next[nexusDocAssetItemKey(linkedSpouseCustomer.id, cat, it.id)] = nexusDocDefaultIncluded(it);
       });
+      (childrenContracts || []).forEach(c => ((c.portfolioInputs || {})[cat] || []).forEach(it => {
+        next[nexusDocAssetItemKey(c.customerId, cat, it.id)] = nexusDocDefaultIncluded(it);
+      }));
     });
     return next;
   });
@@ -45753,7 +45832,7 @@ function NexusDocumentScopeScreen({
   });
   const insuranceDetail = sections.insurance && showDetail && React.createElement("div", {
     style: { marginTop: 8, borderTop: '1px solid var(--border)', paddingTop: 8 }
-  }, [{ id: customer.id, label: `本人：${customer.name}`, list: contracts }, linkedCorp && { id: linkedCorp.id, label: `関連法人：${linkedCorp.corporateName}`, list: corpContracts }, isCoupleScope && linkedSpouseCustomer && { id: linkedSpouseCustomer.id, label: `配偶者：${linkedSpouseCustomer.name}`, list: spouseContracts }].filter(Boolean).map(owner => (owner.list || []).length > 0 && React.createElement("div", {
+  }, [{ id: customer.id, label: `本人：${customer.name}`, list: contracts }, linkedCorp && { id: linkedCorp.id, label: `関連法人：${linkedCorp.corporateName}`, list: corpContracts }, isCoupleScope && linkedSpouseCustomer && { id: linkedSpouseCustomer.id, label: `配偶者：${linkedSpouseCustomer.name}`, list: spouseContracts }, ...(isCoupleScope ? (childrenContracts || []).map(c => ({ id: c.customerId, label: `お子様：${c.name}`, list: c.contracts })) : [])].filter(Boolean).map(owner => (owner.list || []).length > 0 && React.createElement("div", {
     key: owner.id
   }, React.createElement("div", {
     style: { fontSize: 12.5, fontWeight: 700, margin: '6px 0 2px', color: 'var(--text-sub)' }
@@ -45763,7 +45842,8 @@ function NexusDocumentScopeScreen({
   }, NEXUS_DOC_ASSET_CATEGORIES.map(cat => {
     const ownItems = (portfolio || {})[cat] || [];
     const spItems = isCoupleScope && linkedSpouseCustomer ? (spousePortfolioInputs || {})[cat] || [] : [];
-    if (ownItems.length === 0 && spItems.length === 0) return null;
+    const kidItemGroups = isCoupleScope ? (childrenContracts || []).map(c => ({ c, items: (c.portfolioInputs || {})[cat] || [] })) : [];
+    if (ownItems.length === 0 && spItems.length === 0 && kidItemGroups.every(g => g.items.length === 0)) return null;
     return React.createElement("div", {
       key: cat
     }, React.createElement("div", {
@@ -45774,7 +45854,10 @@ function NexusDocumentScopeScreen({
     }), spItems.map(it => {
       const key = nexusDocAssetItemKey(linkedSpouseCustomer.id, cat, it.id);
       return itemRow(key, `（配偶者）${it.name || '（名称未入力）'}`, included[key] !== false, !!it.excludeFromSharedDocs, () => toggleItem(key), () => toggleAssetDefaultExclude(linkedSpouseCustomer.id, cat, it));
-    }));
+    }), kidItemGroups.map(({ c, items }) => items.map(it => {
+      const key = nexusDocAssetItemKey(c.customerId, cat, it.id);
+      return itemRow(key, `（${c.name}）${it.name || '（名称未入力）'}`, included[key] !== false, !!it.excludeFromSharedDocs, () => toggleItem(key), () => toggleAssetDefaultExclude(c.customerId, cat, it));
+    })));
   }));
   const sectionCard = React.createElement("div", {
     className: "card",
