@@ -12856,7 +12856,12 @@ function NexusFanFollowRecordList({
   const [bulkSheetOpen, setBulkSheetOpen] = useState(false);
   let scoped = nexusFanActiveFollows(follows).filter(f => !campaignId || f.campaignId === campaignId);
   if (filterRecordIds) scoped = scoped.filter(f => filterRecordIds.includes(f.id));
-  scoped = scoped.sort((a, b) => (b.sentDate || '').localeCompare(a.sentDate || ''));
+  // 【不具合修正】並び順も、旧sentDateだけでなく実際の最新接触日（nexusFanRecordDisplayDate）を
+  // 基準にする。sentDateのみで並べると、新しい記録画面だけで会話を記録した記録（sentDateが
+  // 常に空）が、実際には直近にやり取りしていても一覧の最後尾に固定されてしまっていた。
+  // 接触が1件も無い記録は、記録自体が作られた日時（createdAt。推測ではなく実データ）で
+  // 並べる（それも無ければ空のまま、原理上あり得る最後尾に留まる）。
+  scoped = scoped.sort((a, b) => (nexusFanRecordDisplayDate(b) || b.createdAt || '').localeCompare(nexusFanRecordDisplayDate(a) || a.createdAt || ''));
   const list = limit ? scoped.slice(0, limit) : scoped;
   const findCustomer = id => (customers || []).find(x => x.id === id);
   const customerName = id => {
@@ -12881,6 +12886,10 @@ function NexusFanFollowRecordList({
     // 一覧カードには「直近の接触」だけを表示する（複数履歴がある場合も最新の1件のみ）。
     // 全履歴はこのカードをタップした先の詳細（編集画面）で確認する。
     const latest = nexusFanLatestContact(f, campaignType);
+    // 【不具合修正】カード右上の日付は、旧sentDateではなく実際に記録されている最新の接触日
+    // （latest.occurredAt）をそのまま表示する。該当する接触が1件も無い記録（会話を一度も
+    // 記録していない）だけ「未記録」と表示し、今日の日付等では決して補完しない。
+    const displayDate = latest && latest.occurredAt;
     const latestLine = latest && `${NEXUS_FAN_CONTACT_METHOD_ICONS[latest.method] || ''} ${latest.method}${latest.legacy ? '' : '（' + (NEXUS_FAN_CONTACT_DIRECTION_LABELS[latest.direction] || '') + '）'}`;
     const latestResultLine = latest && latest.result;
     const nextLine = f.nextFollowDate && `次回：${f.nextFollowDate}${f.nextFollowMethod ? ' ' + f.nextFollowMethod : ''}`;
@@ -12917,7 +12926,7 @@ function NexusFanFollowRecordList({
       }
     }, "登録"), React.createElement("div", {
       style: { fontSize: 11.5, color: 'var(--text-sub)', flexShrink: 0 }
-    }, f.sentDate)), f.articleTitle && React.createElement("div", {
+    }, displayDate || '未記録')), f.articleTitle && React.createElement("div", {
       style: { fontSize: 12.5, color: 'var(--text-sub)', marginTop: 2 }
     }, "📄 ", f.articleTitle), latestLine && React.createElement("div", {
       style: { marginTop: 4 }
@@ -21708,6 +21717,26 @@ function nexusFanContactTimeline(record, campaignType) {
 function nexusFanLatestContact(record, campaignType) {
   return nexusFanContactTimeline(record, campaignType)[0] || null;
 }
+// 【不具合修正】記録一覧・顧客詳細「フォロー状況」等で表示する「代表日付」。
+// 【根本原因】これらの画面は従来、record.sentDate（旧「記事送信専用」設計時代の、初回送信を
+// 表す単一のスカラー項目）をそのまま日付として表示していた。しかし①の改修で、新しい記録は
+// すべてcontacts配列（1 contact=1回の接触、それぞれ自前のoccurredAtを持つ）で記録するように
+// なり、sentDateは「記事タイトル・URLを使う記事送信」等、専用項目を使うキャンペーンでのみ
+// 入力される任意項目に変わった（意図的な変更。sentDateを毎回自動で埋めると、何も送っていない
+// のに「送信済み」の仮想接触が生成されてしまう不具合を防ぐため）。そのため、新しい記録画面
+// だけで記録した会話（contacts実データのみ）はsentDateが常に空となり、sentDateだけを見る
+// 一覧表示では日付が表示されなくなっていた。
+// 【修正方針】旧データ（sentDate／readAt／repliedAt／phoneFollowStatus）・新データ（contacts）を
+// 既存のnexusFanContactTimelineで正規化・マージした結果の中から、実際に記録されている最新の
+// 日付をそのまま返す（推測や本日の日付での補完はしない）。該当する接触が1件も無い場合は
+// nullを返し、呼び出し側が「未記録」等、事実に即した表示に落とす。
+function nexusFanRecordDisplayDate(record) {
+  // occurredAtはnexusFanInitialSendVirtualContact／nexusFanLegacyFollowupVirtualContacts／
+  // contacts実データのいずれも、campaignType（表示ラベルの出し分けにのみ使う）に関係なく
+  // 同じ値になるため、ここではcampaignTypeを渡さなくてよい（日付の値自体には影響しない）。
+  const latest = nexusFanLatestContact(record);
+  return (latest && latest.occurredAt) || null;
+}
 // ── ④同じお客様との過去のやり取りを、キャンペーンを問わず日付順で振り返れるようにする ──
 // 1人の顧客が複数キャンペーンの対象になっていることがあるため（例：note記事送信キャンペーンと
 // 生命保険料控除案内キャンペーンの両方の対象になっている等）、現在開いている記録（1キャンペーン分）
@@ -21905,7 +21934,13 @@ function nexusFanCampaignDashboard(campaignId, follows, activityLogs, customers,
 function nexusFanFollowCustomerDashboard(customerId, follows, activityLogs, customers) {
   const scoped = nexusFanBuildRecordsWithStage(follows, activityLogs, customers, []).filter(r => r.record.customerId === customerId);
   const metrics = nexusFanFollowMetricsGroup(scoped);
-  const lastSentDate = scoped.reduce((max, r) => r.record.sentDate && (!max || r.record.sentDate > max) ? r.record.sentDate : max, null);
+  // 【不具合修正】旧sentDateだけでなく、contacts実データ等も含めた実際の最新接触日
+  // （nexusFanRecordDisplayDate）を見る。新しい記録画面だけで会話を記録している顧客は
+  // sentDateが常に空のため、従来の実装では「最後にフォロー」が表示されなくなっていた。
+  const lastSentDate = scoped.reduce((max, r) => {
+    const d = nexusFanRecordDisplayDate(r.record);
+    return d && (!max || d > max) ? d : max;
+  }, null);
   return { ...metrics, lastSentDate, referralCount: nexusReferralCount({ id: customerId }, customers) };
 }
 function nexusFanArticleBreakdown(follows, activityLogs, customers, tasks) {
