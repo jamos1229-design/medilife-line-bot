@@ -46057,9 +46057,770 @@ function nexusPieChartBlockHtml(items) {
 }
 
 // ── 人脈ネクサス タブ本体（顧客一覧・提案候補・つながり・サービス・理念）──
+// ══════════════════════════════════════════════════════════════
+// ── サスペクトツリー ───────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+// 自分 → 顧客 → 紹介でつながった顧客・候補者・家族（サスペクト）を、1枚の折りたたみツリーで見る画面。
+// 【二重入力を作らないための方針】新しい保存先は作らない。既に登録されている次のデータを読むだけ：
+//   ・顧客（customers_v1）…… 紹介元（referredBy）で枝をつなぐ
+//   ・顧客ごとのサスペクト（customer.suspects）…… その顧客の下に「家族・知人」として表示
+//   ・サスペクトリスト（ml_suspects_v1、タスク画面と共通）…… まだ顧客ではない「候補者」
+//   ・ファン化フォローの接触記録 …… 最終接触日の判定に使う
+// この画面から書き込むのは次の2項目だけ（どちらも任意・既存項目は変更しない）：
+//   ・networkCategory（人脈5分類の手動指定。顧客・候補者の両方）
+//   ・referrerCustomerId（候補者の紹介元として、登録済み顧客を明示的に選んだ場合のみ）
+// 【線でつなぐ条件】確認できた関係だけをつなぐ。顧客はreferredByが登録済み顧客を指す場合のみ、
+// 候補者はreferrerCustomerIdを明示的に選んだ場合のみ。紹介者名の文字列（referredByName／
+// サスペクトのreferrer欄）が顧客名と一致していても、自動ではつながない（候補として提示するだけ）。
+const NEXUS_NETWORK_CATEGORIES = ['既契約者', '仕事関係', '友人・知人', '地域関係', 'SNS・交流会'];
+const NEXUS_NETWORK_CATEGORY_UNSET = '未分類';
+const NEXUS_NETWORK_CATEGORY_ICON = {
+  '既契約者': '🤝',
+  '仕事関係': '💼',
+  '友人・知人': '🙂',
+  '地域関係': '🏠',
+  'SNS・交流会': '📱',
+  '未分類': '❔'
+};
+// 流入元（NEXUS_ACQUISITION_SOURCES）のうち、SNS・交流会に分類してよいもの。
+const NEXUS_SUSPECT_TREE_SNS_SOURCES = ['SNS', 'note', 'YouTube', 'LinkedIn', '交流会', 'Web'];
+// サスペクトリストの「関係性」（RELATIONSHIPS）から5分類への対応。
+// 「家族・親族」「その他」「未設定」は5分類のどれとも言い切れないため、未分類のままにする。
+const NEXUS_SUSPECT_TREE_RELATIONSHIP_CATEGORY = {
+  '職場': '仕事関係',
+  '友人': '友人・知人',
+  '地域': '地域関係',
+  'SNS': 'SNS・交流会'
+};
+const NEXUS_SUSPECT_TREE_STATE_COLOR = {
+  '既契約': '#059669',
+  '相談中': '#2563EB',
+  '未接触': '#9CA3AF',
+  '候補者': '#D97706',
+  '家族・知人': '#7C3AED'
+};
+const NEXUS_SUSPECT_TREE_STALE_DAY_OPTIONS = [90, 180];
+
+// 有効な契約が1件でもあるか（解約・失効は除く。nexusContractCoverageRollupと同じ基準）。
+function nexusSuspectTreeIsContracted(customer) {
+  return ((customer && customer.contracts) || []).some(ct => ct && ct.contractStatus !== '解約' && ct.contractStatus !== '失効');
+}
+// 顧客の表示上の状態。既契約＝有効契約あり／相談中＝契約は無いが接触ステータスが
+// アポ済・面談済・フォロー中／未接触＝それ以外。
+function nexusSuspectTreeCustomerState(customer) {
+  if (nexusSuspectTreeIsContracted(customer)) return '既契約';
+  if (customer && customer.status && customer.status !== '未接触') return '相談中';
+  return '未接触';
+}
+function nexusSuspectTreeValidCategory(value) {
+  return NEXUS_NETWORK_CATEGORIES.includes(value) ? value : '';
+}
+// 顧客の人脈分類。手動指定（networkCategory）が最優先。無ければ登録済みの事実だけで判定し、
+// 判定できないものは「未分類」のままにする（推測で振り分けない）。
+function nexusSuspectTreeCustomerCategory(customer) {
+  const manual = nexusSuspectTreeValidCategory(customer && customer.networkCategory);
+  if (manual) return manual;
+  if (nexusSuspectTreeIsContracted(customer)) return '既契約者';
+  if (customer && NEXUS_SUSPECT_TREE_SNS_SOURCES.includes(customer.acquisitionSource)) return 'SNS・交流会';
+  return NEXUS_NETWORK_CATEGORY_UNSET;
+}
+function nexusSuspectTreeCandidateCategory(suspect) {
+  const manual = nexusSuspectTreeValidCategory(suspect && suspect.networkCategory);
+  if (manual) return manual;
+  return NEXUS_SUSPECT_TREE_RELATIONSHIP_CATEGORY[suspect && suspect.relationship] || NEXUS_NETWORK_CATEGORY_UNSET;
+}
+function nexusSuspectTreeDateOnly(value) {
+  if (!value) return '';
+  const s = String(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  return nexusLocalDateStr(s) || (/^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : '');
+}
+// ファン化フォローの接触記録から、顧客ごとの最新接触日（YYYY-MM-DD）を1回の走査で求める。
+function nexusSuspectTreeFanLatestMap(follows) {
+  const map = {};
+  nexusFanActiveFollows(follows).forEach(record => {
+    if (!record.customerId) return;
+    const d = nexusSuspectTreeDateOnly(nexusFanRecordDisplayDate(record));
+    if (d && (!map[record.customerId] || d > map[record.customerId])) map[record.customerId] = d;
+  });
+  return map;
+}
+// 最終接触日＝顧客の「最終接触日」欄とファン化フォローの接触記録のうち新しい方。
+// どちらも無ければ空文字（＝記録なし。「連絡していない」とは断定しない）。
+function nexusSuspectTreeLastContact(customer, fanLatestMap) {
+  const a = nexusSuspectTreeDateOnly(customer && customer.lastContact);
+  const b = fanLatestMap && customer ? fanLatestMap[customer.id] || '' : '';
+  return a > b ? a : b;
+}
+// 紹介元（referredBy）を親としてたどる。存在しない顧客・自分自身・循環になる参照はつながない。
+function nexusSuspectTreeParentMap(customers) {
+  const byId = {};
+  (customers || []).forEach(c => { if (c && c.id) byId[c.id] = c; });
+  const parentOf = {};
+  (customers || []).forEach(c => {
+    if (c && c.id && c.referredBy && c.referredBy !== c.id && byId[c.referredBy]) parentOf[c.id] = c.referredBy;
+  });
+  Object.keys(parentOf).forEach(id => {
+    const seen = new Set([id]);
+    let cur = parentOf[id];
+    while (cur) {
+      if (seen.has(cur)) { delete parentOf[id]; break; }
+      seen.add(cur);
+      cur = parentOf[cur];
+    }
+  });
+  return parentOf;
+}
+// 候補者の「紹介者」欄（自由記述）と完全に同じ表示名の顧客が1名だけいる場合、その顧客idを返す。
+// 自動ではつながず、設定シートで「つなぐ」候補として見せるためだけに使う。
+function nexusSuspectTreeSuggestReferrer(suspect, customers) {
+  const text = ((suspect && suspect.referrer) || '').trim();
+  if (!text) return '';
+  const hits = (customers || []).filter(c => nexusCustomerDisplayName(c) === text || c.name === text);
+  return hits.length === 1 ? hits[0].id : '';
+}
+function nexusBuildSuspectTree(customers, suspects, opts) {
+  const o = opts || {};
+  const today = o.today || todayStr();
+  const staleDays = Number(o.staleDays) || NEXUS_SUSPECT_TREE_STALE_DAY_OPTIONS[0];
+  const list = (customers || []).filter(c => c && c.id);
+  const byId = {};
+  list.forEach(c => { byId[c.id] = c; });
+  const fanLatestMap = nexusSuspectTreeFanLatestMap(o.follows);
+  const parentOf = nexusSuspectTreeParentMap(list);
+  const nodeById = {};
+  list.forEach(c => {
+    const state = nexusSuspectTreeCustomerState(c);
+    const lastContact = nexusSuspectTreeLastContact(c, fanLatestMap);
+    const days = lastContact ? nexusDaysSince(lastContact, today) : null;
+    const followable = state === '既契約' || state === '相談中';
+    nodeById[c.id] = {
+      key: 'c:' + c.id,
+      kind: 'customer',
+      id: c.id,
+      name: nexusCustomerDisplayName(c),
+      state,
+      category: nexusSuspectTreeCustomerCategory(c),
+      manualCategory: nexusSuspectTreeValidCategory(c.networkCategory),
+      lastContact,
+      days,
+      needsFollow: followable && days !== null && days >= staleDays,
+      noContactRecord: followable && !lastContact,
+      // 紹介元が名前だけ登録されている（顧客未登録）場合。線はつながず、注記だけ出す。
+      unregisteredReferrerName: !parentOf[c.id] && c.referredByName ? String(c.referredByName) : '',
+      children: []
+    };
+  });
+  // 顧客ごとのサスペクト（家族・知人）。既存顧客と連携済みのものは「顧客登録済み」の参照として出す。
+  list.forEach(c => {
+    (c.suspects || []).forEach((sp, i) => {
+      if (!sp) return;
+      const linked = sp.linkedCustomerId && byId[sp.linkedCustomerId] ? byId[sp.linkedCustomerId] : null;
+      nodeById[c.id].children.push({
+        key: 'f:' + c.id + ':' + (sp.id || i),
+        kind: linked ? 'familyLink' : 'family',
+        id: sp.id || '',
+        ownerCustomerId: c.id,
+        linkedCustomerId: linked ? linked.id : '',
+        name: linked ? nexusCustomerDisplayName(linked) : sp.name || '(名前未入力)',
+        relation: sp.relation || '',
+        state: '家族・知人',
+        children: []
+      });
+    });
+  });
+  const roots = [];
+  list.forEach(c => {
+    if (parentOf[c.id]) nodeById[parentOf[c.id]].children.push(nodeById[c.id]);
+    else roots.push(nodeById[c.id]);
+  });
+  (suspects || []).forEach(s => {
+    if (!s || !s.id) return;
+    const parentId = s.referrerCustomerId && byId[s.referrerCustomerId] ? s.referrerCustomerId : '';
+    const node = {
+      key: 's:' + s.id,
+      kind: 'candidate',
+      id: s.id,
+      name: s.name || '(名前未入力)',
+      state: '候補者',
+      status: s.status || '未接触',
+      category: nexusSuspectTreeCandidateCategory(s),
+      manualCategory: nexusSuspectTreeValidCategory(s.networkCategory),
+      referrerText: (s.referrer || '').trim(),
+      referrerCustomerId: parentId,
+      suggestReferrerId: parentId ? '' : nexusSuspectTreeSuggestReferrer(s, list),
+      children: []
+    };
+    if (parentId) nodeById[parentId].children.push(node);
+    else roots.push(node);
+  });
+  // 枝ごとの集計。紹介でつながった人（顧客＋候補者）だけを数え、家族・知人は別に数える。
+  const totals = { customers: 0, contracted: 0, consulting: 0, candidates: 0, family: 0, referralLinks: 0, needsFollow: 0, noContactRecord: 0 };
+  const annotate = (node, isRoot) => {
+    const stats = { referred: 0, people: 0, consulting: 0, contracted: 0, family: 0 };
+    if (node.kind === 'customer') {
+      totals.customers += 1;
+      if (node.state === '既契約') totals.contracted += 1;
+      if (node.state === '相談中') totals.consulting += 1;
+      if (node.needsFollow) totals.needsFollow += 1;
+      if (node.noContactRecord) totals.noContactRecord += 1;
+    } else if (node.kind === 'candidate') {
+      totals.candidates += 1;
+    } else if (node.kind === 'family') {
+      totals.family += 1;
+    }
+    if ((node.kind === 'customer' || node.kind === 'candidate') && !isRoot) totals.referralLinks += 1;
+    node.children.forEach(child => {
+      annotate(child, false);
+      if (child.kind === 'customer' || child.kind === 'candidate') {
+        stats.referred += 1;
+        stats.people += 1 + child.stats.people;
+        stats.consulting += (child.state === '相談中' ? 1 : 0) + child.stats.consulting;
+        stats.contracted += (child.state === '既契約' ? 1 : 0) + child.stats.contracted;
+      } else if (child.kind === 'family') {
+        stats.family += 1;
+      }
+    });
+    node.stats = stats;
+    const order = { customer: 0, candidate: 1, family: 2, familyLink: 3 };
+    node.children.sort((a, b) => order[a.kind] - order[b.kind] || (b.stats ? b.stats.people : 0) - (a.stats ? a.stats.people : 0) || String(a.name).localeCompare(String(b.name), 'ja'));
+  };
+  roots.forEach(r => annotate(r, true));
+  const groups = [...NEXUS_NETWORK_CATEGORIES, NEXUS_NETWORK_CATEGORY_UNSET].map(category => {
+    const nodes = roots.filter(r => r.category === category).sort((a, b) => b.stats.people - a.stats.people || String(a.name).localeCompare(String(b.name), 'ja'));
+    return {
+      category,
+      nodes,
+      people: nodes.reduce((sum, n) => sum + 1 + n.stats.people, 0)
+    };
+  });
+  return { groups, totals, staleDays, today };
+}
+// 条件に合う人と、その人までの経路（親）だけを残した木を返す。元の木は変更しない。
+function nexusSuspectTreeFilterNodes(nodes, predicate) {
+  const out = [];
+  (nodes || []).forEach(node => {
+    const kids = nexusSuspectTreeFilterNodes(node.children, predicate);
+    if (predicate(node) || kids.length > 0) out.push({ ...node, children: kids });
+  });
+  return out;
+}
+function nexusSuspectTreeCountNodes(nodes) {
+  return (nodes || []).reduce((sum, n) => sum + (n.kind === 'familyLink' ? 0 : 1) + nexusSuspectTreeCountNodes(n.children), 0);
+}
+
+function NexusSuspectTreeBadge({
+  color,
+  children
+}) {
+  return /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: 'inline-block',
+      padding: '1px 7px',
+      borderRadius: 999,
+      fontSize: 11,
+      fontWeight: 700,
+      color: color,
+      border: `1px solid ${color}`,
+      marginRight: 5,
+      marginTop: 3,
+      whiteSpace: 'nowrap'
+    }
+  }, children);
+}
+function NexusSuspectTreeNodeRow({
+  node,
+  depth,
+  expanded,
+  forceOpen,
+  onToggle,
+  onOpen,
+  onSettings
+}) {
+  const hasChildren = node.children.length > 0;
+  const isOpen = forceOpen || expanded.has(node.key);
+  const color = NEXUS_SUSPECT_TREE_STATE_COLOR[node.state] || '#9CA3AF';
+  const isLeafRef = node.kind === 'familyLink';
+  return /*#__PURE__*/React.createElement("div", {
+    style: depth > 0 ? {
+      marginLeft: 10,
+      paddingLeft: 10,
+      borderLeft: '2px solid var(--border)'
+    } : null
+  }, /*#__PURE__*/React.createElement("div", {
+    "data-suspect-tree-node": node.key,
+    style: {
+      display: 'flex',
+      alignItems: 'flex-start',
+      gap: 6,
+      padding: '8px 6px',
+      marginBottom: 4,
+      borderRadius: 10,
+      background: node.needsFollow ? '#FEF2F2' : 'var(--surface)',
+      border: node.needsFollow ? '1px solid #FCA5A5' : '1px solid var(--border)'
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    "aria-label": isOpen ? '閉じる' : '開く',
+    disabled: !hasChildren,
+    onClick: () => onToggle(node.key),
+    style: {
+      width: 26,
+      minWidth: 26,
+      height: 26,
+      border: 'none',
+      background: 'transparent',
+      fontSize: 13,
+      color: hasChildren ? 'var(--text-sub)' : 'transparent',
+      cursor: hasChildren ? 'pointer' : 'default',
+      padding: 0
+    }
+  }, hasChildren ? isOpen ? '▼' : '▶' : '・'), /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: 10,
+      minWidth: 10,
+      height: 10,
+      borderRadius: '50%',
+      background: color,
+      marginTop: 8
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0,
+      cursor: 'pointer'
+    },
+    onClick: () => onOpen(node)
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 15,
+      fontWeight: 700,
+      wordBreak: 'break-all'
+    }
+  }, isLeafRef ? '🔗 ' : '', node.name, node.relation ? /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      fontWeight: 500,
+      color: 'var(--text-sub)'
+    }
+  }, "（", node.relation, "）") : null), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(NexusSuspectTreeBadge, {
+    color: color
+  }, isLeafRef ? '顧客登録済み' : node.kind === 'candidate' ? `候補者・${node.status}` : node.state), node.needsFollow && /*#__PURE__*/React.createElement(NexusSuspectTreeBadge, {
+    color: "#DC2626"
+  }, "要フォロー ", node.days, "日"), node.kind === 'customer' && !node.needsFollow && node.days !== null && /*#__PURE__*/React.createElement(NexusSuspectTreeBadge, {
+    color: "#6B7280"
+  }, "最終接触 ", node.days, "日前"), node.noContactRecord && /*#__PURE__*/React.createElement(NexusSuspectTreeBadge, {
+    color: "#6B7280"
+  }, "接触記録なし"), node.stats && node.stats.referred > 0 && /*#__PURE__*/React.createElement(NexusSuspectTreeBadge, {
+    color: "#B45309"
+  }, "紹介", node.stats.referred, "人"), node.stats && node.stats.family > 0 && /*#__PURE__*/React.createElement(NexusSuspectTreeBadge, {
+    color: "#7C3AED"
+  }, "家族・知人", node.stats.family, "人")), node.stats && node.stats.people > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      marginTop: 3
+    }
+  }, "この枝の合計：", node.stats.people, "人／相談中", node.stats.consulting, "／成約", node.stats.contracted), node.unregisteredReferrerName ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      marginTop: 3
+    }
+  }, "紹介元：", node.unregisteredReferrerName, "（顧客未登録のため未接続）") : null, node.kind === 'candidate' && !node.referrerCustomerId && node.referrerText ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      marginTop: 3
+    }
+  }, "紹介者欄：", node.referrerText, "（未接続）") : null), (node.kind === 'customer' || node.kind === 'candidate') && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    "aria-label": "ツリー設定",
+    onClick: () => onSettings(node),
+    style: {
+      width: 30,
+      minWidth: 30,
+      height: 30,
+      border: 'none',
+      background: 'transparent',
+      fontSize: 18,
+      color: 'var(--text-sub)',
+      cursor: 'pointer',
+      padding: 0
+    }
+  }, "⋯")), hasChildren && isOpen && node.children.map(child => /*#__PURE__*/React.createElement(NexusSuspectTreeNodeRow, {
+    key: child.key,
+    node: child,
+    depth: depth + 1,
+    expanded: expanded,
+    forceOpen: forceOpen,
+    onToggle: onToggle,
+    onOpen: onOpen,
+    onSettings: onSettings
+  })));
+}
+// ツリー設定シート：人脈分類の手動指定と、候補者の紹介元（登録済み顧客）の接続。
+function NexusSuspectTreeSettingSheet({
+  node,
+  customers,
+  onSetCategory,
+  onSetReferrer,
+  onEditCandidate,
+  onOpenCustomer,
+  onClose
+}) {
+  const [pickerQuery, setPickerQuery] = useState('');
+  const isCandidate = node.kind === 'candidate';
+  const referrer = isCandidate && node.referrerCustomerId ? customers.find(c => c.id === node.referrerCustomerId) : null;
+  const suggest = isCandidate && node.suggestReferrerId ? customers.find(c => c.id === node.suggestReferrerId) : null;
+  const q = (pickerQuery || '').trim();
+  const matches = q ? customers.filter(c => nexusCustomerDisplayName(c).includes(q)).slice(0, 8) : [];
+  return /*#__PURE__*/React.createElement("div", {
+    className: "overlay",
+    onClick: e => e.target === e.currentTarget && onClose()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "drawer"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "drawer-handle"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "drawer-title"
+  }, node.name), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "人脈の分類（現在：", node.category, node.manualCategory ? '・手動' : '・自動', "）"), /*#__PURE__*/React.createElement("div", {
+    className: "toggle-group"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: `toggle-btn ${!node.manualCategory ? 'sel' : ''}`,
+    onClick: () => onSetCategory(node, '')
+  }, "自動"), NEXUS_NETWORK_CATEGORIES.map(cat => /*#__PURE__*/React.createElement("button", {
+    key: cat,
+    type: "button",
+    className: `toggle-btn ${node.manualCategory === cat ? 'sel' : ''}`,
+    onClick: () => onSetCategory(node, cat)
+  }, cat))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text-sub)',
+      marginTop: 6
+    }
+  }, "分類は「自分」の直下にいる人の並び先に使います。")), isCandidate && /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "紹介元の顧客"), referrer ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      fontSize: 15,
+      fontWeight: 700
+    }
+  }, "👤 ", nexusCustomerDisplayName(referrer)), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-sm",
+    onClick: () => onSetReferrer(node, '')
+  }, "接続を外す")) : /*#__PURE__*/React.createElement("div", null, suggest && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      marginBottom: 8
+    }
+  }, "紹介者欄「", node.referrerText, "」と同じ名前の顧客が1名います。", /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-sm",
+    style: {
+      marginLeft: 8
+    },
+    onClick: () => onSetReferrer(node, suggest.id)
+  }, "この顧客につなぐ")), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    placeholder: "顧客名で検索してつなぐ",
+    value: pickerQuery || '',
+    onChange: e => setPickerQuery(e.target.value)
+  }), matches.map(c => /*#__PURE__*/React.createElement("button", {
+    key: c.id,
+    type: "button",
+    className: "btn btn-outline btn-full",
+    style: {
+      marginTop: 6,
+      justifyContent: 'flex-start'
+    },
+    onClick: () => onSetReferrer(node, c.id)
+  }, "👤 ", nexusCustomerDisplayName(c))), q && matches.length === 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text-sub)',
+      marginTop: 6
+    }
+  }, "該当する顧客がいません"))), isCandidate ? /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    onClick: () => onEditCandidate(node)
+  }, "候補者の内容を編集") : /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-outline btn-full",
+    onClick: () => onOpenCustomer(node)
+  }, "顧客の詳細を開く"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-full",
+    style: {
+      marginTop: 8
+    },
+    onClick: onClose
+  }, "閉じる")));
+}
+function NexusSuspectTreeSection({
+  customers,
+  setCustomers,
+  suspects,
+  setSuspects,
+  fanFollows,
+  fanCampaigns,
+  onSelect
+}) {
+  const [expandedKeys, setExpandedKeys] = useState([]);
+  const [query, setQuery] = useState('');
+  const [onlyNeedsFollow, setOnlyNeedsFollow] = useState(false);
+  const [staleDays, setStaleDays] = useState(NEXUS_SUSPECT_TREE_STALE_DAY_OPTIONS[0]);
+  const [settingsKey, setSettingsKey] = useState(null);
+  const [candidateForm, setCandidateForm] = useState(null); // null＝閉じている／{editing}＝開いている
+  const suspectList = suspects || [];
+  const tree = useMemo(() => nexusBuildSuspectTree(customers, suspectList, {
+    follows: fanFollows,
+    campaigns: fanCampaigns,
+    staleDays
+  }), [customers, suspectList, fanFollows, fanCampaigns, staleDays]);
+  const expanded = useMemo(() => new Set(expandedKeys), [expandedKeys]);
+  const q = (query || '').trim();
+  const filtering = !!q || onlyNeedsFollow;
+  const visibleGroups = useMemo(() => {
+    if (!filtering) return tree.groups;
+    const predicate = node => (!q || String(node.name).includes(q)) && (!onlyNeedsFollow || !!node.needsFollow);
+    return tree.groups.map(g => {
+      const nodes = nexusSuspectTreeFilterNodes(g.nodes, predicate);
+      return { ...g, nodes, people: nexusSuspectTreeCountNodes(nodes) };
+    });
+  }, [tree, filtering, q, onlyNeedsFollow]);
+  const toggle = key => setExpandedKeys(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
+  const allKeys = useMemo(() => {
+    const keys = [];
+    const walk = n => { if (n.children.length > 0) { keys.push(n.key); n.children.forEach(walk); } };
+    tree.groups.forEach(g => { keys.push('g:' + g.category); g.nodes.forEach(walk); });
+    return keys;
+  }, [tree]);
+  const findNode = key => {
+    let found = null;
+    const walk = n => { if (found) return; if (n.key === key) { found = n; return; } n.children.forEach(walk); };
+    tree.groups.forEach(g => g.nodes.forEach(walk));
+    return found;
+  };
+  const settingsNode = settingsKey ? findNode(settingsKey) : null;
+  const openNode = node => {
+    if (node.kind === 'customer') onSelect(node.id);else if (node.kind === 'familyLink') onSelect(node.linkedCustomerId);else if (node.kind === 'family') onSelect(node.ownerCustomerId);else if (node.kind === 'candidate') setSettingsKey(node.key);
+  };
+  const setCategory = (node, category) => {
+    if (node.kind === 'customer') setCustomers(prev => prev.map(c => c.id === node.id ? { ...c, networkCategory: category } : c));else if (node.kind === 'candidate') setSuspects(prev => (prev || []).map(s => s.id === node.id ? { ...s, networkCategory: category } : s));
+  };
+  const setReferrer = (node, customerId) => {
+    if (node.kind !== 'candidate') return;
+    setSuspects(prev => (prev || []).map(s => s.id === node.id ? { ...s, referrerCustomerId: customerId } : s));
+  };
+  const saveCandidate = sp => setSuspects(prev => {
+    const list = prev || [];
+    const idx = list.findIndex(x => x.id === sp.id);
+    return idx >= 0 ? list.map((x, i) => i === idx ? sp : x) : [...list, sp];
+  });
+  const t = tree.totals;
+  const statCell = (label, value, color) => /*#__PURE__*/React.createElement("div", {
+    key: label,
+    style: {
+      flex: '1 1 30%',
+      minWidth: 90,
+      textAlign: 'center',
+      padding: '8px 4px'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 20,
+      fontWeight: 800,
+      color: color || 'var(--text)'
+    }
+  }, value), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)'
+    }
+  }, label));
+  const isEmpty = t.customers === 0 && t.candidates === 0;
+  return /*#__PURE__*/React.createElement("div", {
+    "data-suspect-tree": "root"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      padding: 10,
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap'
+    }
+  }, statCell('既契約', t.contracted, NEXUS_SUSPECT_TREE_STATE_COLOR['既契約']), statCell('相談中', t.consulting, NEXUS_SUSPECT_TREE_STATE_COLOR['相談中']), statCell('候補者', t.candidates, NEXUS_SUSPECT_TREE_STATE_COLOR['候補者']), statCell('家族・知人', t.family, NEXUS_SUSPECT_TREE_STATE_COLOR['家族・知人']), statCell('紹介でつながった人', t.referralLinks, '#B45309'), statCell(`要フォロー（${staleDays}日以上）`, t.needsFollow, '#DC2626')), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-sub)',
+      marginTop: 4,
+      lineHeight: 1.6
+    }
+  }, "線でつなぐのは、登録済みの紹介元だけです。名前だけの紹介元は自動ではつなぎません。", t.noContactRecord > 0 ? `接触記録が無い既契約・相談中の方が${t.noContactRecord}名います（要フォローには含めていません）。` : '')), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    placeholder: "名前で検索",
+    value: query || '',
+    onChange: e => setQuery(e.target.value),
+    style: {
+      marginBottom: 8
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "filter-chips"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: `chip ${onlyNeedsFollow ? 'active' : ''}`,
+    onClick: () => setOnlyNeedsFollow(v => !v)
+  }, "要フォローだけ"), NEXUS_SUSPECT_TREE_STALE_DAY_OPTIONS.map(d => /*#__PURE__*/React.createElement("button", {
+    key: d,
+    type: "button",
+    className: `chip ${staleDays === d ? 'active' : ''}`,
+    onClick: () => setStaleDays(d)
+  }, d, "日以上")), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "chip",
+    onClick: () => setExpandedKeys(allKeys)
+  }, "すべて開く"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "chip",
+    onClick: () => setExpandedKeys([])
+  }, "すべて閉じる")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      margin: '6px 0 10px'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 16,
+      fontWeight: 800
+    }
+  }, "🌳 自分"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-primary btn-sm",
+    onClick: () => setCandidateForm({ editing: null })
+  }, "＋ 候補者を追加")), isEmpty ? /*#__PURE__*/React.createElement("div", {
+    className: "empty"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "empty-icon"
+  }, "🌳"), /*#__PURE__*/React.createElement("div", null, "顧客か候補者を登録すると、ここにツリーが表示されます")) : visibleGroups.map(g => {
+    const gKey = 'g:' + g.category;
+    const gOpen = filtering || expanded.has(gKey);
+    if (filtering && g.nodes.length === 0) return null;
+    return /*#__PURE__*/React.createElement("div", {
+      key: g.category,
+      "data-suspect-tree-group": g.category,
+      style: {
+        marginBottom: 8
+      }
+    }, /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => toggle(gKey),
+      style: {
+        width: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '10px 12px',
+        borderRadius: 12,
+        border: '1.5px solid var(--border)',
+        background: 'var(--accent-light)',
+        fontSize: 15,
+        fontWeight: 800,
+        color: 'var(--text)',
+        cursor: 'pointer',
+        textAlign: 'left'
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 12,
+        color: 'var(--text-sub)'
+      }
+    }, gOpen ? '▼' : '▶'), /*#__PURE__*/React.createElement("span", null, NEXUS_NETWORK_CATEGORY_ICON[g.category], " ", g.category), /*#__PURE__*/React.createElement("span", {
+      style: {
+        marginLeft: 'auto',
+        fontSize: 13,
+        fontWeight: 600,
+        color: 'var(--text-sub)'
+      }
+    }, g.people, "人")), gOpen && /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: 6,
+        marginLeft: 10,
+        paddingLeft: 10,
+        borderLeft: '2px solid var(--border)'
+      }
+    }, g.nodes.length === 0 ? /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: 'var(--text-sub)',
+        padding: '6px 4px'
+      }
+    }, "まだ誰もいません") : g.nodes.map(node => /*#__PURE__*/React.createElement(NexusSuspectTreeNodeRow, {
+      key: node.key,
+      node: node,
+      depth: 0,
+      expanded: expanded,
+      forceOpen: filtering,
+      onToggle: toggle,
+      onOpen: openNode,
+      onSettings: n => setSettingsKey(n.key)
+    }))));
+  }), filtering && visibleGroups.every(g => g.nodes.length === 0) && !isEmpty && /*#__PURE__*/React.createElement("div", {
+    className: "empty",
+    style: {
+      padding: '24px 16px'
+    }
+  }, "条件に合う人はいません"), settingsNode && /*#__PURE__*/React.createElement(NexusSuspectTreeSettingSheet, {
+    node: settingsNode,
+    customers: customers,
+    onSetCategory: setCategory,
+    onSetReferrer: setReferrer,
+    onEditCandidate: node => {
+      const target = suspectList.find(s => s.id === node.id);
+      setSettingsKey(null);
+      if (target) setCandidateForm({ editing: target });
+    },
+    onOpenCustomer: node => {
+      setSettingsKey(null);
+      onSelect(node.id);
+    },
+    onClose: () => setSettingsKey(null)
+  }), candidateForm && /*#__PURE__*/React.createElement(SuspectDrawer, {
+    editing: candidateForm.editing,
+    onSave: saveCandidate,
+    onClose: () => setCandidateForm(null)
+  }));
+}
+
 function NexusTab({
   customers,
   setCustomers,
+  suspects,
+  setSuspects,
+  fanFollows,
+  fanCampaigns,
   services,
   setServices,
   serviceLinks,
@@ -46111,6 +46872,9 @@ function NexusTab({
   }, {
     key: 'network',
     label: 'つながり'
+  }, {
+    key: 'suspectTree',
+    label: 'サスペクトツリー'
   }, {
     key: 'services',
     label: 'サービス'
@@ -46180,6 +46944,14 @@ function NexusTab({
     setFocusId: setFocusId,
     focusDepth: focusDepth,
     setFocusDepth: setFocusDepth
+  }), subTab === 'suspectTree' && /*#__PURE__*/React.createElement(NexusSuspectTreeSection, {
+    customers: customers,
+    setCustomers: setCustomers,
+    suspects: suspects,
+    setSuspects: setSuspects,
+    fanFollows: fanFollows,
+    fanCampaigns: fanCampaigns,
+    onSelect: setDetailId
   }), subTab === 'services' && /*#__PURE__*/React.createElement(NexusServicesSection, {
     services: services,
     setServices: setServices,
@@ -54178,6 +54950,10 @@ function App() {
   }), tab === 'nexus' && /*#__PURE__*/React.createElement(NexusTab, {
     customers: customers,
     setCustomers: setCustomers,
+    suspects: suspects,
+    setSuspects: setSuspects,
+    fanFollows: nexusFanFollows,
+    fanCampaigns: nexusFanCampaigns,
     services: nexusServices,
     setServices: setNexusServices,
     serviceLinks: nexusServiceLinks,
