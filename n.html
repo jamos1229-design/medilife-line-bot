@@ -2916,6 +2916,31 @@ function nexusComputeUnifiedMonthlyRevenueDashboard(customers, opportunities, ye
     pipelineAcTaxBasisLabel: NEXUS_PIPELINE_AC_TAX_LABEL
   };
 }
+// 【不具合修正】「まちがって日付を入れてしまったら消せるようにしてほしい」との要望に対応。
+// type="date"の入力欄は、特にスマートフォン（iOS等）では一度日付を選択すると、入力欄自体の
+// 操作だけでは空に戻せないことが多い。本画面には既に満期日・更新日（expiryDate）等で、
+// 値がある時だけ入力欄に重ねて表示される丸い「×」ボタンの実装例があったため、見た目を
+// 統一するためその既存パターンをそのまま共通関数として切り出し、申込日・契約日・契約成立日
+// にも同じ操作性を追加する（新しい見た目のボタンは増やさない）。
+function nexusDateInputWithClear(value, onChangeValue) {
+  return /*#__PURE__*/React.createElement("div", { style: { position: 'relative' } },
+    /*#__PURE__*/React.createElement("input", {
+      className: "form-input", type: "date", value: value || '',
+      onChange: e => onChangeValue(e.target.value),
+      style: { paddingRight: value ? 44 : 14 }
+    }),
+    value && /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => onChangeValue(''),
+      style: {
+        position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)',
+        background: '#C7C7CC', border: 'none', borderRadius: '50%', width: 22, height: 22,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+        color: '#fff', fontSize: 13, fontWeight: 700, lineHeight: 1
+      }
+    }, "×")
+  );
+}
 function ContractBlock({
   contract,
   onChange,
@@ -4034,12 +4059,7 @@ function ContractBlock({
     }
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "契約日"), /*#__PURE__*/React.createElement("input", {
-    className: "form-input",
-    type: "date",
-    value: contract.date || '',
-    onChange: s('date')
-  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+  }, "契約日"), nexusDateInputWithClear(contract.date, v => onChange({ ...contract, date: v }))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
   }, "満期日・更新日 🔔"), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -4338,12 +4358,7 @@ function ContractBlock({
     placeholder: "例：150"
   })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "契約日"), /*#__PURE__*/React.createElement("input", {
-    className: "form-input",
-    type: "date",
-    value: contract.date || '',
-    onChange: s('date')
-  })))) : /*#__PURE__*/React.createElement("div", {
+  }, "契約日"), nexusDateInputWithClear(contract.date, v => onChange({ ...contract, date: v }))))) : /*#__PURE__*/React.createElement("div", {
     className: "form-row"
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
@@ -4354,12 +4369,7 @@ function ContractBlock({
     placeholder: "例：15000"
   })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "契約日"), /*#__PURE__*/React.createElement("input", {
-    className: "form-input",
-    type: "date",
-    value: contract.date || '',
-    onChange: s('date')
-  }))), /*#__PURE__*/React.createElement("div", {
+  }, "契約日"), nexusDateInputWithClear(contract.date, v => onChange({ ...contract, date: v })))), /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 10,
       background: '#F0FDF4',
@@ -4497,9 +4507,14 @@ function ContractProductDetailsBlock({ contract, onChange, customers, currentCon
     ...contract,
     productCharacteristics: characteristics.includes(v) ? characteristics.filter(x => x !== v) : [...characteristics, v]
   });
+  // 【不具合修正】ネイティブのtype="date"入力は、スマートフォン（特にiOS）では一度日付を
+  // 選択すると、入力欄自体の操作だけでは空に戻せない（「未入力に戻す」手段が無い）。
+  // 間違えて日付を入れてしまった場合に消せるのは標準的に必要な操作のため、既存の満期日・
+  // 更新日（expiryDate）等と同じ「値がある時だけ表示される×ボタン」をここにも追加する
+  // （nexusDateInputWithClear。未入力のまま今日の日付等を自動で補完することはしない）。
   const dateField = (label, key) => /*#__PURE__*/React.createElement("div", null,
     /*#__PURE__*/React.createElement("label", { className: "form-label" }, label),
-    /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", value: contract[key] || '', onChange: s(key) })
+    nexusDateInputWithClear(contract[key], v => onChange({ ...contract, [key]: v }))
   );
   const textField = (label, key, placeholder) => /*#__PURE__*/React.createElement("div", null,
     /*#__PURE__*/React.createElement("label", { className: "form-label" }, label),
@@ -5067,6 +5082,10 @@ function NexusNewContractIntakeForm({ customers, onCreateContract, onClose, onSa
   const [delivery, setDelivery] = useState(() => nexusDefaultDelivery());
   const [errorMsg, setErrorMsg] = useState('');
   const set = k => e => setFields(f => ({ ...f, [k]: e.target.value }));
+  // 【不具合修正】契約詳細画面（ContractProductDetailsBlock）と同じ理由で、この登録フォームの
+  // 日付欄にも同じ×クリアボタン（nexusDateInputWithClear）を追加する（間違えて日付を入力した
+  // 場合に消せるようにする）。
+  const dateFieldEl = k => nexusDateInputWithClear(fields[k], v => setFields(f => ({ ...f, [k]: v })));
   const toggleCharacteristic = v => setFields(f => ({
     ...f,
     productCharacteristics: f.productCharacteristics.includes(v) ? f.productCharacteristics.filter(x => x !== v) : [...f.productCharacteristics, v]
@@ -5161,15 +5180,15 @@ function NexusNewContractIntakeForm({ customers, onCreateContract, onClose, onSa
       ),
       /*#__PURE__*/React.createElement("div", { className: "card", style: { marginBottom: 10, padding: 10 } },
         /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, fontSize: 13, marginBottom: 8 } }, "② 契約の基本情報"),
-        field('申込日（営業実績・申込ACの基準日）', /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", value: fields.applicationDate, onChange: set('applicationDate') })),
+        field('申込日（営業実績・申込ACの基準日）', dateFieldEl('applicationDate')),
         field('申込状況', /*#__PURE__*/React.createElement("div", { className: "toggle-group" },
           NEXUS_APPLICATION_STATUS_OPTIONS.map(st => /*#__PURE__*/React.createElement("button", {
             key: st, type: "button", className: `toggle-btn ${fields.applicationStatus === st ? 'sel' : ''}`,
             onClick: () => setFields(f => ({ ...f, applicationStatus: st }))
           }, st))
         )),
-        field('契約日', /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", value: fields.date, onChange: set('date') })),
-        field('契約成立日', /*#__PURE__*/React.createElement("input", { className: "form-input", type: "date", value: fields.policyIssuedDate, onChange: set('policyIssuedDate') })),
+        field('契約日', dateFieldEl('date')),
+        field('契約成立日', dateFieldEl('policyIssuedDate')),
         field('保険会社', /*#__PURE__*/React.createElement("input", { className: "form-input", value: fields.company, onChange: set('company') })),
         field('商品名', /*#__PURE__*/React.createElement("input", { className: "form-input", value: fields.productName, onChange: set('productName') })),
         field('商品種類', /*#__PURE__*/React.createElement("select", { className: "form-select", value: fields.productCategory, onChange: set('productCategory') },
