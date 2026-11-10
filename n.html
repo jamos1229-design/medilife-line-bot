@@ -13804,7 +13804,30 @@ function NexusActivityHistoryList({
       textOverflow: 'ellipsis',
       whiteSpace: 'nowrap'
     }
-  }, a.customerId ? customerName(a.customerId) : a.customerNameText), !a.customerId && a.customerNameText && onRegisterActivityCustomer && /*#__PURE__*/React.createElement("button", {
+  }, a.customerId && onOpenCustomer && (customers || []).some(x => x.id === a.customerId) ? /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    // 行タップ（編集）と区別するため伝播を止め、顧客詳細へ直接移動する
+    onClick: e => {
+      e.stopPropagation();
+      const c = (customers || []).find(x => x.id === a.customerId);
+      if (c) onOpenCustomer(c);
+    },
+    style: {
+      background: 'none',
+      border: 'none',
+      padding: '2px 0',
+      margin: 0,
+      font: 'inherit',
+      color: 'var(--accent)',
+      textDecoration: 'underline',
+      textUnderlineOffset: 2,
+      cursor: 'pointer',
+      maxWidth: '100%',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
+    }
+  }, customerName(a.customerId), " ›") : a.customerId ? customerName(a.customerId) : a.customerNameText), !a.customerId && a.customerNameText && onRegisterActivityCustomer && /*#__PURE__*/React.createElement("button", {
     type: "button",
     onClick: e => {
       e.stopPropagation();
@@ -13855,7 +13878,8 @@ function NexusActivityHistoryScreen({
   opportunities,
   setOpportunities,
   setTasks,
-  onRegisterActivityCustomer
+  onRegisterActivityCustomer,
+  onOpenCustomer
 }) {
   const active = nexusActiveLogs(activityLogs).sort((a, b) => (b.occurredAt || '').localeCompare(a.occurredAt || ''));
   const byDate = {};
@@ -13886,7 +13910,8 @@ function NexusActivityHistoryScreen({
     opportunities: opportunities,
     setOpportunities: setOpportunities,
     setTasks: setTasks,
-    onRegisterActivityCustomer: onRegisterActivityCustomer
+    onRegisterActivityCustomer: onRegisterActivityCustomer,
+    onOpenCustomer: onOpenCustomer
   }))));
   return /*#__PURE__*/React.createElement("div", {
     className: "full-screen"
@@ -13930,7 +13955,8 @@ function NexusFlaggedVoicesScreen({
   opportunities,
   setOpportunities,
   setTasks,
-  onRegisterActivityCustomer
+  onRegisterActivityCustomer,
+  onOpenCustomer
 }) {
   const flagged = nexusActiveLogs(activityLogs).filter(a => a.type === 'customer_voice' && a.inappropriateFlag).sort((a, b) => (b.occurredAt || '').localeCompare(a.occurredAt || ''));
   return /*#__PURE__*/React.createElement("div", {
@@ -13971,7 +13997,8 @@ function NexusFlaggedVoicesScreen({
     opportunities: opportunities,
     setOpportunities: setOpportunities,
     setTasks: setTasks,
-    onRegisterActivityCustomer: onRegisterActivityCustomer
+    onRegisterActivityCustomer: onRegisterActivityCustomer,
+    onOpenCustomer: onOpenCustomer
   }))));
 }
 // クイック登録ボタン1回分の活動時間ウィンドウ（この時間内の同種連打はブロックする）
@@ -13987,7 +14014,8 @@ function NexusQuickActivityPanel({
   setTasks,
   opportunities,
   setOpportunities,
-  onRegisterActivityCustomer
+  onRegisterActivityCustomer,
+  onOpenCustomer
 }) {
   const [busy, setBusy] = useState(false);
   const [justAdded, setJustAdded] = useState(null); // {id, label}
@@ -14367,7 +14395,8 @@ function NexusQuickActivityPanel({
     opportunities: opportunities,
     setOpportunities: setOpportunities,
     setTasks: setTasks,
-    onRegisterActivityCustomer: onRegisterActivityCustomer
+    onRegisterActivityCustomer: onRegisterActivityCustomer,
+    onOpenCustomer: onOpenCustomer
   });
   const [showHistory, setShowHistory] = useState(false);
   const editDrawer = editingLog && /*#__PURE__*/React.createElement("div", {
@@ -14399,7 +14428,11 @@ function NexusQuickActivityPanel({
     opportunities: opportunities,
     setOpportunities: setOpportunities,
     setTasks: setTasks,
-    onRegisterActivityCustomer: onRegisterActivityCustomer
+    onRegisterActivityCustomer: onRegisterActivityCustomer,
+    onOpenCustomer: onOpenCustomer ? c => {
+      setShowHistory(false);
+      onOpenCustomer(c);
+    } : null
   });
   const salesCardTitle = /*#__PURE__*/React.createElement("div", {
     style: {
@@ -14479,7 +14512,11 @@ function NexusQuickActivityPanel({
     opportunities: opportunities,
     setOpportunities: setOpportunities,
     setTasks: setTasks,
-    onRegisterActivityCustomer: onRegisterActivityCustomer
+    onRegisterActivityCustomer: onRegisterActivityCustomer,
+    onOpenCustomer: onOpenCustomer ? c => {
+      setShowFlaggedVoices(false);
+      onOpenCustomer(c);
+    } : null
   });
   const recentCard = /*#__PURE__*/React.createElement("div", {
     className: "card",
@@ -15542,7 +15579,8 @@ function DashboardTab({
     setTasks: setTasks,
     opportunities: opportunities,
     setOpportunities: setOpportunities,
-    onRegisterActivityCustomer: onRegisterActivityCustomer
+    onRegisterActivityCustomer: onRegisterActivityCustomer,
+    onOpenCustomer: onNavigate ? c => onNavigate('customers', c) : null
   }), /*#__PURE__*/React.createElement(NexusSalesKpiCard, {
     activityLogs: activityLogs,
     tasks: tasks,
