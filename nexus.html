@@ -39249,6 +39249,20 @@ const nexusDocPortfolioForOwner = (portfolioObj, ownerId, includedMap, assetsSec
 // customer.lp.lifePlan（schemaVersion1）の確認済み入力だけを保存する。既存のlpフィールド・
 // 既存の老後/教育/住宅プランニング・既存の画面は一切変更しない（このセクションの追加のみ）。
 
+// 【不具合修正】saveCustomer（P0b複数タブ競合検知）の競合判定は、updatedAtの一致だけに
+// 頼っていた。しかしupdatedAtを持たない顧客データでは判定自体が対象外になり、別の画面
+// （新契約管理の契約詳細等）で既に保存された最新データがあっても検知されず、この画面を
+// 開いた時点の古いデータがそのまま書き戻されて他画面での追加・編集内容（例：契約の申込日）
+// が気づかれずに消えてしまう事故が実際に発生した。この判定を、オブジェクトの内容そのものの
+// 比較でも行えるようにするための正規化JSON文字列化（キーの並び順の違いだけで誤って
+// 「内容が違う」と判定しないよう、すべての階層でキーをソートしてから文字列化する）。
+function nexusCanonicalJson(value) {
+  if (Array.isArray(value)) return '[' + value.map(nexusCanonicalJson).join(',') + ']';
+  if (value && typeof value === 'object') {
+    return '{' + Object.keys(value).sort().map(k => JSON.stringify(k) + ':' + nexusCanonicalJson(value[k])).join(',') + '}';
+  }
+  return JSON.stringify(value);
+}
 // customers_v1への書き込みを、useLSの非検証setItemに頼らず読み戻しで確認する
 // （保存失敗を成功表示しないための、このライフプラン保存専用の検証付き書き込み）。
 function nexusLifePlanWriteCustomersVerified(nextCustomers) {
@@ -54285,6 +54299,17 @@ function App() {
   // localStorageから最新のcustomers_v1を読み直し、そこへ今回の変更だけをマージする
   // （ライフプラン保存:nexusLifePlanWriteCustomersVerifiedと同じ安全策）。
   // 戻り値：{ok:true, customer} / {ok:false, reason:'deleted_elsewhere'|'conflict'|'write_failed', latest?}
+  // 【不具合修正・根本原因】顧客情報編集画面を開いたまま、別の画面（新契約管理の契約詳細等）
+  // で先にこの顧客の契約（例：申込日）が保存された場合、従来はupdatedAtの一致だけで競合を
+  // 判定していたため、updatedAtを持たない顧客データではこの判定が対象外になり、競合が
+  // 検知されずに、この画面を開いた時点の古いcontracts等がそのまま書き戻されてしまい、
+  // 別画面で追加・編集された内容が気づかれずに消えてしまう事故が実際に発生した（新契約の
+  // 申込日が、顧客情報編集画面を保存した際に消えてしまった不具合の根本原因）。
+  // 修正：updatedAtの不一致に加えて、実際に保存されている最新の内容そのもの（latest全体）が、
+  // この画面を開いた時点の内容（editingCustomer）と完全に一致するかどうかも必ず確認する
+  // （nexusCanonicalJsonでキーの並び順の違いによる誤判定を防ぐ）。どちらか一方でも不一致なら
+  // 競合として保存を中断する（既存のconflict時の案内文・挙動は変更しない。何も変わって
+  // いない場合は、updatedAt同様に内容比較も一致するため、従来どおり誤って競合と判定しない）。
   // 【不具合修正】顧客が削除されていないのに「別の場所で既に削除されている」と誤判定される
   // バグの修正。原因：registerSuspect/registerReferrer/registerActivityCustomer/
   // registerMemoAsCustomer（サスペクト・紹介者・活動記録・メモから新規顧客を登録する機能）は、
@@ -54315,14 +54340,18 @@ function App() {
       return { ok: false, reason: 'deleted_elsewhere' };
     }
     if (wasEditingExisting && idx >= 0) {
-      const latestUpdatedAt = latestCustomers[idx].updatedAt;
-      // updatedAtを持たない既存形式のデータ（旧データ）は「未記録」として競合チェックの
-      // 対象外とする（古いデータを急に「競合あり」と誤判定しないため）。
-      if (latestUpdatedAt !== undefined && latestUpdatedAt !== null &&
+      const latest = latestCustomers[idx];
+      const latestUpdatedAt = latest.updatedAt;
+      // updatedAtを持たない既存形式のデータ（旧データ）は、updatedAtの一致判定自体は
+      // 「未記録」として対象外にする（古いデータを急に「競合あり」と誤判定しないため）。
+      // ただし、その場合でも下のcontentDiffers（内容そのものの比較）が競合検知を補う。
+      const updatedAtDiffers = latestUpdatedAt !== undefined && latestUpdatedAt !== null &&
           baselineUpdatedAt !== undefined && baselineUpdatedAt !== null &&
-          latestUpdatedAt !== baselineUpdatedAt) {
+          latestUpdatedAt !== baselineUpdatedAt;
+      const contentDiffers = nexusCanonicalJson(editingCustomer) !== nexusCanonicalJson(latest);
+      if (updatedAtDiffers || contentDiffers) {
         // 編集を開始してから、別の場所でこの顧客が既に更新されている。
-        return { ok: false, reason: 'conflict', latest: latestCustomers[idx] };
+        return { ok: false, reason: 'conflict', latest };
       }
     }
     const nextC = { ...c, updatedAt: new Date().toISOString() };
