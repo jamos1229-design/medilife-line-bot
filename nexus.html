@@ -12693,7 +12693,18 @@ function NexusFanFollowRecordForm({
     className: "drawer-handle"
   }), React.createElement("div", {
     className: "drawer-title"
-  }, editing ? "フォロー記録を編集" : "フォロー記録を追加"), React.createElement(CustomerSelect, {
+  }, editing ? "フォロー記録を編集" : "フォロー記録を追加"),
+  // 【機能追加】Google Keepへの移動ボタン。別タブ（iPhoneでGoogle Keepアプリがユニバーサル
+  // リンクに対応していればアプリ、対応していなければブラウザ版）でkeep.google.comを開くだけの
+  // 単純なリンクとする。別タブで開くため、元のファン化フォロー記録編集画面はそのまま残り、
+  // タブを閉じる／切り替えるだけで戻れる。記録の自動送信・同期は一切行わない。
+  React.createElement("a", {
+    href: "https://keep.google.com/",
+    target: "_blank",
+    rel: "noopener noreferrer",
+    className: "btn btn-outline btn-full",
+    style: { marginBottom: 10, textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }
+  }, "📝 Google Keepを開く"), React.createElement(CustomerSelect, {
     label: "顧客（登録済みの方はこちらから選択）",
     value: form.customerId,
     onChange: v => setForm(f => ({ ...f, customerId: v, customerNameText: v ? '' : f.customerNameText })),
@@ -12960,7 +12971,23 @@ function NexusFanFollowRecordList({
     }, badges.map(b => React.createElement("span", {
       key: b,
       style: badgeStyle
-    }, b))));
+    }, b))),
+    // 【機能追加】記録一覧の各カードにもGoogle Keepへの移動ボタンを設置する。カード自体の
+    // onClick（編集画面を開く）とは独立した操作のため、stopPropagationでカードのクリックが
+    // 同時に発火しないようにする。別タブで開くため、記録一覧はそのまま残る。
+    React.createElement("div", {
+      style: { marginTop: 6, textAlign: 'right' }
+    }, React.createElement("a", {
+      href: "https://keep.google.com/",
+      target: "_blank",
+      rel: "noopener noreferrer",
+      onClick: e => e.stopPropagation(),
+      style: {
+        display: 'inline-block', fontSize: 11, fontWeight: 700, padding: '3px 8px',
+        borderRadius: 6, border: '1px solid var(--border)', color: 'var(--text-sub)',
+        textDecoration: 'none', cursor: 'pointer'
+      }
+    }, "📝 Google Keepを開く")));
   };
   const rows = list.length === 0 ? React.createElement(EmptyState, {
     icon: "📋",
