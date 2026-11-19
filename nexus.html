@@ -9538,23 +9538,29 @@ function CustomerDetail({
           annualJpyCurrent += annualAmt * burdenMul;
         }
       }
-      // 【不具合修正】特約の保険料（常に円建て）を主契約と同じ払込サイクルで合算する
-      // （nexusPremiumTotalsと同じロジック。従来この合計にだけ特約の保険料が含まれておらず、
-      // 印刷・Excel出力・プランニング画面の「契約者別保険料合計」との間で合計金額が食い違う
-      // 不具合の原因になっていた）。特約ごとの保険料内訳が無い場合はridersPremiumTotal
-      // （特約合算保険料）を優先し、無ければ各特約のpremiumを合算する（二重計上しない）。
-      const ridersPremiumTotal = (ct.riders || []).length > 0 ? parseFloat(ct.ridersPremiumTotal) || 0 : 0;
-      const ridersJpyRaw = ridersPremiumTotal > 0 ? ridersPremiumTotal : (ct.riders || []).reduce((sum, rd) => sum + (parseFloat(rd.premium) || 0), 0);
-      if (ridersJpyRaw > 0) {
-        if (isLumpLike) {
-          lumpJpy += ridersJpyRaw;
-          lumpJpyCurrent += ridersJpyRaw * burdenMul;
-        } else {
-          const ridersAnnual = cyc === '年払' ? ridersJpyRaw : ridersJpyRaw * 12;
-          annualJpy += ridersAnnual;
-          const rt = ct.responsibleType === '当社担当' || ct.responsibleType === '他代理店契約' ? ct.responsibleType : '未設定';
-          annualJpyByType[rt] += ridersAnnual;
-          annualJpyCurrent += ridersAnnual * burdenMul;
+      // 【不具合修正・経緯】特約の保険料を主契約の保険料に無条件で加算していたところ、
+      // 実際の契約データ（証券に記載の「月額保険料」欄＝主契約・特約すべて込みの合計を
+      // そのまま入力し、各特約の保険料は内訳として参考情報で別途記録しているケース）で
+      // 二重計上になることが分かった（例：月額保険料5,578円の契約に、特約6件の保険料
+      // 合計4,308円をさらに加算し、9,886円になっていた）。特約の保険料を別途加算すべきなのは
+      // 主契約の保険料欄が未入力（0円）の場合に限る（「主契約なし（特約の組み合わせのみの
+      // 商品）」の契約。この場合は特約の保険料だけが実際の支払額のため、合算しないと0円に
+      // なってしまう）。主契約の保険料が入力されている契約では、既に特約込みの合計である
+      // 前提とし、特約の保険料を重ねて加算しない（nexusPremiumTotalsと同じロジックに統一）。
+      if (amt === 0) {
+        const ridersPremiumTotal = (ct.riders || []).length > 0 ? parseFloat(ct.ridersPremiumTotal) || 0 : 0;
+        const ridersJpyRaw = ridersPremiumTotal > 0 ? ridersPremiumTotal : (ct.riders || []).reduce((sum, rd) => sum + (parseFloat(rd.premium) || 0), 0);
+        if (ridersJpyRaw > 0) {
+          if (isLumpLike) {
+            lumpJpy += ridersJpyRaw;
+            lumpJpyCurrent += ridersJpyRaw * burdenMul;
+          } else {
+            const ridersAnnual = cyc === '年払' ? ridersJpyRaw : ridersJpyRaw * 12;
+            annualJpy += ridersAnnual;
+            const rt = ct.responsibleType === '当社担当' || ct.responsibleType === '他代理店契約' ? ct.responsibleType : '未設定';
+            annualJpyByType[rt] += ridersAnnual;
+            annualJpyCurrent += ridersAnnual * burdenMul;
+          }
         }
       }
       // 定期支払金
@@ -34966,13 +34972,22 @@ function nexusContractPremiumJpy(ct) {
 // 保険料合計（月払換算＋一時払等、別枠）。特約の保険料（常に円）も主契約と同じ払込サイクルで合算する。
 // 「この契約者はこの保険をいくらで買っているか」を明確にするため、契約者（＝そのcontracts配列を
 // 持つ本人・法人・配偶者）ごとに個別に計算できるよう、対象契約リストを引数で受け取る。
-// 【不具合修正】顧客詳細の「保険料・受取金合計」カード（解約・失効を除く有効な契約のみを
-// 対象とし、減額中の契約はreducedPremiumを使う）と、この関数を使う印刷・Excel出力・
-// プランニング画面の「契約者別保険料合計」とで、合計保険料の金額が食い違っていた
-// （例：保険料19,909円のはずが片方の画面では7,400円のように見える）。原因は、この関数が
-// 解約・失効した契約の保険料も含めたまま合算し、かつ減額中の契約でも元のpremiumをそのまま
-// 使っていたため（カード側はどちらも正しく除外・置換していた）。カード側の正しい挙動に
-// 合わせ、対象を有効な契約のみに絞り、減額中の契約はreducedPremiumを優先するよう修正する。
+// 【不具合修正・経緯】顧客詳細の「保険料・受取金合計」カードと、この関数を使う印刷・
+// Excel出力・プランニング画面の「契約者別保険料合計」とで、合計保険料の金額が食い違う
+// 不具合が2段階で見つかった。
+// 1回目の修正（解約・失効の除外、減額時reducedPremiumの優先）は正しかったが、その際
+// 「特約の保険料は常に主契約の保険料に追加で合算する」という、この関数に元々あった
+// 挙動をカード側にもそのまま移植してしまった。しかし実際のデータ（平川様ご契約の検証）
+// では、主契約のpremium（画面の「月額保険料」欄）には証券に記載の合計保険料（主契約＋
+// 全特約込み）がそのまま入力されており、各特約のpremiumはその内訳を参考情報として
+// 個別に記録しているだけだった。そのため「主契約の保険料」＋「特約の保険料の合計」という
+// 計算は、特約分を二重に合算してしまっていた（例：月額保険料5,578円の契約に、6件の特約
+// 保険料合計4,308円をさらに加算し、9,886円になっていた）。
+// 特約の保険料を別途加算すべきなのは、主契約の保険料欄が未入力（0円）の場合に限られる
+// （「主契約なし（特約の組み合わせのみの商品）」の契約。この場合は主契約欄に金額が無く、
+// 特約の保険料だけが実際に払っている金額のため、合算しないと0円になってしまう）。
+// 主契約の保険料が入力されている契約では、その金額が既に特約込みの合計である前提とし、
+// 特約の保険料を重ねて加算しない。
 function nexusPremiumTotals(list) {
   let monthly = 0,
     lump = 0,
@@ -34994,28 +35009,31 @@ function nexusPremiumTotals(list) {
       } else {
         monthly += cyc === '年払' ? amount / 12 : amount;
       }
-    }
-    // 証券に特約ごとの保険料内訳が無く、まとめてしか分からない場合は「特約合算保険料」を優先する
-    // （特約ごとの個別保険料と二重計上しないよう、入力されていればそちらだけを使う）。
-    // 特約を全て削除した後も contract.ridersPremiumTotal が古い値のまま残っているケースがあるため、
-    // 現在も特約が1件以上ある契約に限って加算する（無いのに加算すると主契約保険料と二重計上になる）。
-    const ridersTotal = (r.riders || []).length > 0 ? parseFloat(r.ridersPremiumTotal) || 0 : 0;
-    if (ridersTotal > 0) {
-      if (LUMP_LIKE_PAYMENT_CYCLES.includes(cyc)) {
-        lump += ridersTotal;
-      } else {
-        monthly += cyc === '年払' ? ridersTotal / 12 : ridersTotal;
-      }
     } else {
-      (r.riders || []).forEach(rd => {
-        const ramt = parseFloat(rd.premium) || 0;
-        if (!ramt) return;
+      // 主契約の保険料が未入力（0円）の場合のみ、特約の保険料を合算する（「主契約なし」の
+      // 契約で、特約の保険料だけが実際の支払額であるケース）。証券に特約ごとの保険料内訳が
+      // 無く、まとめてしか分からない場合は「特約合算保険料」を優先する（特約ごとの個別保険料
+      // と二重計上しないよう、入力されていればそちらだけを使う）。特約を全て削除した後も
+      // contract.ridersPremiumTotal が古い値のまま残っているケースがあるため、現在も特約が
+      // 1件以上ある契約に限って加算する。
+      const ridersTotal = (r.riders || []).length > 0 ? parseFloat(r.ridersPremiumTotal) || 0 : 0;
+      if (ridersTotal > 0) {
         if (LUMP_LIKE_PAYMENT_CYCLES.includes(cyc)) {
-          lump += ramt;
+          lump += ridersTotal;
         } else {
-          monthly += cyc === '年払' ? ramt / 12 : ramt;
+          monthly += cyc === '年払' ? ridersTotal / 12 : ridersTotal;
         }
-      });
+      } else {
+        (r.riders || []).forEach(rd => {
+          const ramt = parseFloat(rd.premium) || 0;
+          if (!ramt) return;
+          if (LUMP_LIKE_PAYMENT_CYCLES.includes(cyc)) {
+            lump += ramt;
+          } else {
+            monthly += cyc === '年払' ? ramt / 12 : ramt;
+          }
+        });
+      }
     }
   });
   return {
