@@ -9538,6 +9538,25 @@ function CustomerDetail({
           annualJpyCurrent += annualAmt * burdenMul;
         }
       }
+      // 【不具合修正】特約の保険料（常に円建て）を主契約と同じ払込サイクルで合算する
+      // （nexusPremiumTotalsと同じロジック。従来この合計にだけ特約の保険料が含まれておらず、
+      // 印刷・Excel出力・プランニング画面の「契約者別保険料合計」との間で合計金額が食い違う
+      // 不具合の原因になっていた）。特約ごとの保険料内訳が無い場合はridersPremiumTotal
+      // （特約合算保険料）を優先し、無ければ各特約のpremiumを合算する（二重計上しない）。
+      const ridersPremiumTotal = (ct.riders || []).length > 0 ? parseFloat(ct.ridersPremiumTotal) || 0 : 0;
+      const ridersJpyRaw = ridersPremiumTotal > 0 ? ridersPremiumTotal : (ct.riders || []).reduce((sum, rd) => sum + (parseFloat(rd.premium) || 0), 0);
+      if (ridersJpyRaw > 0) {
+        if (isLumpLike) {
+          lumpJpy += ridersJpyRaw;
+          lumpJpyCurrent += ridersJpyRaw * burdenMul;
+        } else {
+          const ridersAnnual = cyc === '年払' ? ridersJpyRaw : ridersJpyRaw * 12;
+          annualJpy += ridersAnnual;
+          const rt = ct.responsibleType === '当社担当' || ct.responsibleType === '他代理店契約' ? ct.responsibleType : '未設定';
+          annualJpyByType[rt] += ridersAnnual;
+          annualJpyCurrent += ridersAnnual * burdenMul;
+        }
+      }
       // 定期支払金
       if (ct.hasPeriodicPay && ct.periodicAmt) {
         const pa = Number(ct.periodicAmt) || 0;
@@ -34947,11 +34966,20 @@ function nexusContractPremiumJpy(ct) {
 // 保険料合計（月払換算＋一時払等、別枠）。特約の保険料（常に円）も主契約と同じ払込サイクルで合算する。
 // 「この契約者はこの保険をいくらで買っているか」を明確にするため、契約者（＝そのcontracts配列を
 // 持つ本人・法人・配偶者）ごとに個別に計算できるよう、対象契約リストを引数で受け取る。
+// 【不具合修正】顧客詳細の「保険料・受取金合計」カード（解約・失効を除く有効な契約のみを
+// 対象とし、減額中の契約はreducedPremiumを使う）と、この関数を使う印刷・Excel出力・
+// プランニング画面の「契約者別保険料合計」とで、合計保険料の金額が食い違っていた
+// （例：保険料19,909円のはずが片方の画面では7,400円のように見える）。原因は、この関数が
+// 解約・失効した契約の保険料も含めたまま合算し、かつ減額中の契約でも元のpremiumをそのまま
+// 使っていたため（カード側はどちらも正しく除外・置換していた）。カード側の正しい挙動に
+// 合わせ、対象を有効な契約のみに絞り、減額中の契約はreducedPremiumを優先するよう修正する。
 function nexusPremiumTotals(list) {
   let monthly = 0,
     lump = 0,
     unconvertibleCount = 0;
-  (list || []).forEach(r => {
+  const activeList = (list || []).filter(ct => !ct.contractStatus || ct.contractStatus === '有効' || ct.contractStatus === '減額');
+  activeList.forEach(r0 => {
+    const r = r0.contractStatus === '減額' && r0.reducedPremium ? { ...r0, premium: r0.reducedPremium } : r0;
     const cyc = r.paymentCycle || '月払';
     const raw = parseFloat(r.premium) || 0;
     if (raw) {
