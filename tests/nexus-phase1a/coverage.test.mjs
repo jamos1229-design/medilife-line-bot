@@ -112,3 +112,19 @@ test('education preparation: missing is unknown, confirmed 0 is zero',()=>{
 test.todo('PDF browser rendering and visual inspection with fictional records');
 test.todo('old local data migration and rollback check');
 test.todo('loan repayment warning in phase 1-B');
+
+
+test('medical rider notes do not invent outpatient-only eligibility',()=>{
+  assert.equal(source.includes('入院を伴わない通院のみの場合'), false);
+  assert.equal(source.includes('通院日額は入院していなくても'), false);
+  assert.equal(source.includes('通常入院には適用されません'), false);
+  assert.match(source, /通院日額：/);
+  assert.match(source, /支払条件は契約時の約款をご確認ください/);
+});
+test('medical one-off payouts are separated by triggering event in PDF, UI and XLSX',()=>{
+  assert.equal(source.includes('医療保険金額合計（一時金）'), false);
+  assert.match(source, /医療一時金：下記の種類別内訳を確認/);
+  assert.match(source, /入院一時金：/);
+  assert.match(source, /手術給付金：/);
+  assert.match(source, /その他の医療一時金（円・条件未確認）/);
+});
