@@ -35634,7 +35634,10 @@ function nexusEducationSummary(rows, plan) {
   const totalRemainingJpy = rows.reduce((s, r) => s + r.remainingCostJpy, 0);
   const uni = rows.find(r => r.key === 'university');
   const universityNeededJpy = uni ? uni.remainingCostJpy : 0;
-  const prepared = parseFloat(plan && plan.preparedJpy) || 0;
+  // 未入力を0円として扱わない。明示的な0円だけ0円として計算する。
+  const preparedInput = plan && plan.preparedJpy;
+  const hasPreparedInput = preparedInput !== undefined && preparedInput !== null && preparedInput !== '' && Number.isFinite(Number(preparedInput));
+  const prepared = hasPreparedInput ? Number(preparedInput) : null;
   const monthsToUniversity = uni ? uni.monthsUntilStart : null;
   const projectionYears = monthsToUniversity !== null ? monthsToUniversity / 12 : 0;
   // 準備資金は、①1つの金額に対して「今のまま」から大学入学までを年率〇%で運用した場合の
@@ -35651,10 +35654,15 @@ function nexusEducationSummary(rows, plan) {
   }, 0));
   const isManual = plan && plan.projectionMode === 'manual';
   const assetReturnRate = plan && plan.assetReturnRate !== undefined && plan.assetReturnRate !== '' ? parseFloat(plan.assetReturnRate) || 0 : 0;
-  const blanketProjectedJpy = isManual ? parseFloat(plan && plan.manualProjectedJpy) || 0 : monthsToUniversity !== null ? Math.round(prepared * Math.pow(1 + assetReturnRate / 100, projectionYears)) : prepared;
+  const manualProjectionInput = plan && plan.manualProjectedJpy;
+  const manualProjectionEntered = manualProjectionInput !== undefined && manualProjectionInput !== null && manualProjectionInput !== '' && Number.isFinite(Number(manualProjectionInput));
+  const blanketProjectedJpy = isManual
+    ? (manualProjectionEntered ? Number(manualProjectionInput) : null)
+    : prepared === null ? null : monthsToUniversity !== null
+      ? Math.round(prepared * Math.pow(1 + assetReturnRate / 100, projectionYears)) : prepared;
   const projectedPreparedJpy = hasAssetProjections ? itemizedProjectedJpy : blanketProjectedJpy;
-  const shortfallJpy = Math.max(0, universityNeededJpy - projectedPreparedJpy);
-  const monthlySavingsNeeded = monthsToUniversity && monthsToUniversity > 0 ? Math.round(shortfallJpy / monthsToUniversity) : null;
+  const shortfallJpy = projectedPreparedJpy === null ? null : Math.max(0, universityNeededJpy - projectedPreparedJpy);
+  const monthlySavingsNeeded = shortfallJpy !== null && monthsToUniversity && monthsToUniversity > 0 ? Math.round(shortfallJpy / monthsToUniversity) : null;
   return {
     totalRemainingJpy,
     universityNeededJpy,
@@ -37188,10 +37196,10 @@ function nexusMonthlyTargetDisplay(categories, categoryKeys, monthlyTarget) {
 }
 function nexusEducationStatusDisplay(kids, kidsWithEducation) {
   if (kids.length === 0) return '対象者なし';
-  const hasInput = kidsWithEducation.some(({
-    plan
-  }) => (parseFloat(plan && plan.preparedJpy) || 0) > 0 || plan && plan.assetProjections && plan.assetProjections.length > 0);
+  const hasInput = kidsWithEducation.some(({ summary }) =>
+    summary.prepared !== null || summary.hasAssetProjections || (summary.isManual && summary.projectedPreparedJpy !== null));
   if (!hasInput) return '未入力';
+  if (kidsWithEducation.some(({ summary }) => summary.shortfallJpy === null)) return '一部未入力';
   const hasShortfall = kidsWithEducation.some(({
     summary
   }) => summary.shortfallJpy > 0);
@@ -41753,7 +41761,7 @@ function NexusPlanningSection({
         <p style="font-size:12px;margin:6px 0 2px;"><b>${escapeHtmlForPrint(nexusChildDisplayName(kid, customers) || '子')}${age !== null ? `（${age}歳）` : ''}</b></p>
         <table><tr><th>費目</th><th>進学先</th><th>年齢</th><th>状況</th><th>費用（残り）</th></tr>${rows.map(r => `<tr><td>${r.label}</td><td>${escapeHtmlForPrint(r.selected)}</td><td>${r.startAge}〜${r.endAge}歳</td><td>${r.status === 'done' ? '終了' : r.status === 'ongoing' ? '進行中' : 'これから'}</td><td>${r.status === 'done' ? '—' : r.remainingCostJpy.toLocaleString() + '円'}</td></tr>`).join('')}</table>
         ${nexusAssetProjectionTableHtml(plan.assetProjections)}
-        <p style="font-size:11px;">大学入学までに必要な準備額：<b>${summary.universityNeededJpy.toLocaleString()}円</b>　／　現在の準備額：<b>${summary.prepared.toLocaleString()}円</b>${summary.hasAssetProjections ? `　／　資産ごとの大学入学時の予想額 合計：<b>${summary.projectedPreparedJpy.toLocaleString()}円</b>` : summary.isManual ? `　／　大学入学時の予想準備額（直接入力）：<b>${summary.projectedPreparedJpy.toLocaleString()}円</b>` : summary.assetReturnRate > 0 ? `　／　大学入学時の予想準備額（年率${summary.assetReturnRate}%で運用）：<b>${summary.projectedPreparedJpy.toLocaleString()}円</b>` : ''}　／　不足額：<b>${summary.shortfallJpy.toLocaleString()}円</b>${summary.monthsToUniversity !== null && summary.monthlySavingsNeeded !== null ? `　／　大学入学（${Math.floor(summary.monthsToUniversity / 12)}年後）までの毎月積立目安：<b>${summary.monthlySavingsNeeded.toLocaleString()}円／月</b>` : ''}</p>`).join('')}
+        <p style="font-size:11px;">大学入学までに必要な準備額：<b>${summary.universityNeededJpy.toLocaleString()}円</b>　／　現在の準備額：<b>${summary.prepared === null ? '未入力' : summary.prepared.toLocaleString() + '円'}</b>${summary.hasAssetProjections ? `　／　資産ごとの大学入学時の予想額 合計：<b>${summary.projectedPreparedJpy === null ? '未算出' : summary.projectedPreparedJpy.toLocaleString() + '円'}</b>` : summary.isManual ? `　／　大学入学時の予想準備額（直接入力）：<b>${summary.projectedPreparedJpy === null ? '未算出' : summary.projectedPreparedJpy.toLocaleString() + '円'}</b>` : summary.assetReturnRate > 0 ? `　／　大学入学時の予想準備額（年率${summary.assetReturnRate}%で運用）：<b>${summary.projectedPreparedJpy === null ? '未算出' : summary.projectedPreparedJpy.toLocaleString() + '円'}</b>` : ''}　／　不足額：<b>${summary.shortfallJpy === null ? '未算出' : summary.shortfallJpy.toLocaleString() + '円'}</b>${summary.monthsToUniversity !== null && summary.monthlySavingsNeeded !== null ? `　／　大学入学（${Math.floor(summary.monthsToUniversity / 12)}年後）までの毎月積立目安：<b>${summary.monthlySavingsNeeded.toLocaleString()}円／月</b>` : ''}</p>`).join('')}
       </div>`}
       ${housingCalc.homePrice > 0 ? `
       <div class="print-section">
@@ -42579,9 +42587,9 @@ function NexusPlanningSection({
         summary
       }) => {
         const kidLabel = nexusChildDisplayName(kid, customers) || '子';
-        const eduSummaryRows = [[`${kidLabel}：大学入学までに必要な準備額`, summary.universityNeededJpy], [`${kidLabel}：現在の準備額`, summary.prepared]];
-        if (summary.hasAssetProjections) eduSummaryRows.push([`${kidLabel}：資産ごとの大学入学時の予想額 合計`, summary.projectedPreparedJpy]);else if (summary.isManual) eduSummaryRows.push([`${kidLabel}：大学入学時の予想準備額（直接入力）`, summary.projectedPreparedJpy]);else if (summary.assetReturnRate > 0) eduSummaryRows.push([`${kidLabel}：大学入学時の予想準備額（年率${summary.assetReturnRate}%で運用）`, summary.projectedPreparedJpy]);
-        eduSummaryRows.push([`${kidLabel}：不足額`, summary.shortfallJpy], [`${kidLabel}：毎月の積立目安`, summary.monthlySavingsNeeded !== null ? summary.monthlySavingsNeeded : '']);
+        const eduSummaryRows = [[`${kidLabel}：大学入学までに必要な準備額`, summary.universityNeededJpy], [`${kidLabel}：現在の準備額`, summary.prepared === null ? '未入力' : summary.prepared]];
+        if (summary.hasAssetProjections) eduSummaryRows.push([`${kidLabel}：資産ごとの大学入学時の予想額 合計`, summary.projectedPreparedJpy === null ? '未算出' : summary.projectedPreparedJpy]);else if (summary.isManual) eduSummaryRows.push([`${kidLabel}：大学入学時の予想準備額（直接入力）`, summary.projectedPreparedJpy === null ? '未算出' : summary.projectedPreparedJpy]);else if (summary.assetReturnRate > 0) eduSummaryRows.push([`${kidLabel}：大学入学時の予想準備額（年率${summary.assetReturnRate}%で運用）`, summary.projectedPreparedJpy === null ? '未算出' : summary.projectedPreparedJpy]);
+        eduSummaryRows.push([`${kidLabel}：不足額`, summary.shortfallJpy === null ? '未算出' : summary.shortfallJpy], [`${kidLabel}：毎月の積立目安`, summary.monthlySavingsNeeded !== null ? summary.monthlySavingsNeeded : '']);
         row = nexusXlsxDataRows(ws, row, eduSummaryRows, [2]);
       });
       row += 2;
@@ -45594,15 +45602,15 @@ function NexusPlanningSection({
     style: {
       color: 'var(--accent)'
     }
-  }, summary.projectedPreparedJpy.toLocaleString(), "円")) : (summary.isManual || summary.assetReturnRate > 0) && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("br", null), summary.isManual ? "大学入学時の予想準備額（直接入力）：" : `大学入学時の予想準備額（年率${summary.assetReturnRate}%で運用）：`, /*#__PURE__*/React.createElement("b", {
+  }, summary.projectedPreparedJpy === null ? "未算出" : summary.projectedPreparedJpy.toLocaleString(), summary.projectedPreparedJpy === null ? "" : "円")) : (summary.isManual || summary.assetReturnRate > 0) && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("br", null), summary.isManual ? "大学入学時の予想準備額（直接入力）：" : `大学入学時の予想準備額（年率${summary.assetReturnRate}%で運用）：`, /*#__PURE__*/React.createElement("b", {
     style: {
       color: 'var(--accent)'
     }
-  }, summary.projectedPreparedJpy.toLocaleString(), "円")), /*#__PURE__*/React.createElement("br", null), "不足額：", /*#__PURE__*/React.createElement("b", {
+  }, summary.projectedPreparedJpy === null ? "未算出" : summary.projectedPreparedJpy.toLocaleString(), summary.projectedPreparedJpy === null ? "" : "円")), /*#__PURE__*/React.createElement("br", null), "不足額：", /*#__PURE__*/React.createElement("b", {
     style: {
       color: 'var(--danger)'
     }
-  }, summary.shortfallJpy.toLocaleString(), "円"), summary.monthsToUniversity !== null && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("br", null), "大学入学まで：", Math.floor(summary.monthsToUniversity / 12), "年", summary.monthlySavingsNeeded !== null && /*#__PURE__*/React.createElement(React.Fragment, null, "　→　毎月の積立目安：", /*#__PURE__*/React.createElement("b", {
+  }, summary.shortfallJpy === null ? "未算出" : summary.shortfallJpy.toLocaleString(), summary.shortfallJpy === null ? "" : "円"), summary.monthsToUniversity !== null && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("br", null), "大学入学まで：", Math.floor(summary.monthsToUniversity / 12), "年", summary.monthlySavingsNeeded !== null && /*#__PURE__*/React.createElement(React.Fragment, null, "　→　毎月の積立目安：", /*#__PURE__*/React.createElement("b", {
     style: {
       color: 'var(--accent)'
     }
