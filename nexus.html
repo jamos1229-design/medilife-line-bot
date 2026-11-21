@@ -2305,11 +2305,13 @@ function NexusMedicalBenefitTypeSelect({ value, onChange }) {
 // 金額から給付の種類を推測しない。名称から明確に読み取れる先進医療と
 // 診断一時金だけを識別し、払込免除は一時金として集計しない。
 function nexusEffectiveBenefitType(item) {
+  const name = [item && item.name, item && item.type, item && item.coverage].filter(Boolean).join(' ');
+  // 保険料の払込免除は給付金ではないので、たとえ誤って種類を選択しても合計しない。
+  if (/払込免除|保険料免除/.test(name)) return '払込免除';
   const explicit = String((item && item.medicalBenefitType) || '').trim();
   if (Object.prototype.hasOwnProperty.call(NEXUS_MEDICAL_BENEFIT_TYPE_UNITS, explicit)) return explicit;
-  const name = [item && item.name, item && item.type, item && item.coverage].filter(Boolean).join(' ');
   if (/先進医療/.test(name)) return '先進医療保障';
-  if (!/払込免除/.test(name) && /(三大疾病|特定疾病|がん|癌)/.test(name) && /(一時金|診断給付金|診断保険金)/.test(name)) return '三大疾病一時金';
+  if (/(三大疾病|[３3]大疾病|特定疾病|がん|癌)/.test(name) && /(一時金|診断給付金|診断保険金)/.test(name)) return '三大疾病一時金';
   return '';
 }
 function nexusBenefitIsDaily(item) {
@@ -2334,12 +2336,13 @@ function NexusProjectedSurrenderFields({ contract, onChange }) {
   ), /*#__PURE__*/React.createElement("div", { className: "form-row" },
     /*#__PURE__*/React.createElement("div", null,
       /*#__PURE__*/React.createElement("label", { className: "form-label" }, "被保険者が何歳のとき？"),
-      /*#__PURE__*/React.createElement("input", {
-        type: "number", min: 0, max: 120, step: 1, className: "form-input",
+      /*#__PURE__*/React.createElement("select", {
+        className: "form-input",
         value: contract.projectedSurrenderAge ?? '',
-        placeholder: "例：65",
         onChange: e => onChange({ ...contract, projectedSurrenderAge: e.target.value })
-      })
+      }, /*#__PURE__*/React.createElement("option", { value: "" }, "年齢を選択"),
+        Array.from({ length: 121 }, (_, i) => /*#__PURE__*/React.createElement("option", { key: i, value: String(i) }, i, "歳"))
+      )
     ),
     /*#__PURE__*/React.createElement("div", null,
       /*#__PURE__*/React.createElement("label", { className: "form-label" }, "その年齢での予定解約返戻金（円）"),
@@ -3623,7 +3626,7 @@ function ContractBlock({
         purpose: undefined
       })
     }, p);
-  }))), (nexusContractPurposes(contract).includes('医療保障') || nexusContractPurposes(contract).includes('特定疾病（ガン）')) && /*#__PURE__*/React.createElement(NexusMedicalBenefitTypeSelect, {
+  }))), (nexusContractPurposes(contract).includes('医療保障') || nexusContractPurposes(contract).includes('特定疾病（ガン）') || nexusContractPurposes(contract).length === 0) && /*#__PURE__*/React.createElement(NexusMedicalBenefitTypeSelect, {
     value: contract.medicalBenefitType || '',
     onChange: v => onChange({ ...contract, medicalBenefitType: v })
   }), /*#__PURE__*/React.createElement("div", {
@@ -3800,7 +3803,7 @@ function ContractBlock({
         purpose: undefined
       })
     }, p);
-  })), (nexusRiderPurposes(r).includes('医療保障') || nexusRiderPurposes(r).includes('特定疾病（ガン）')) && /*#__PURE__*/React.createElement(NexusMedicalBenefitTypeSelect, {
+  })), (nexusRiderPurposes(r).includes('医療保障') || nexusRiderPurposes(r).includes('特定疾病（ガン）') || nexusRiderPurposes(r).length === 0) && /*#__PURE__*/React.createElement(NexusMedicalBenefitTypeSelect, {
     value: r.medicalBenefitType || '',
     onChange: v => updateRider(r.id, { medicalBenefitType: v })
   }), /*#__PURE__*/React.createElement(AmountInput, {
@@ -37000,13 +37003,12 @@ function nexusPurposeSummary(contracts, fallbackInsuredAge) {
   const addItem = (purposes, amt, isDaily, item) => {
     const benefitType = nexusEffectiveBenefitType(item);
     // 先進医療は「限度額」。死亡保障・医療一時金・目的未設定のいずれにも足さない。
-    if (benefitType === '先進医療保障') return;
+    if (benefitType === '先進医療保障' || benefitType === '払込免除') return;
     // 年金・貯蓄型の保険金額は資産額ではない。別管理の予定返戻金のみ表示する。
     let payoutPurposes = purposes.filter(p => p !== '年金・貯蓄型');
     // 医療保険に付帯する三大疾病診断一時金も特定疾病へ振り分ける。
     if (benefitType === '三大疾病一時金') {
-      payoutPurposes = payoutPurposes.filter(p => p !== '医療保障');
-      if (!payoutPurposes.includes('特定疾病（ガン）')) payoutPurposes.push('特定疾病（ガン）');
+      payoutPurposes = ['特定疾病（ガン）'];
     }
     if (isDaily) {
       payoutPurposes.forEach(p => { dailyByPurpose[p] += amt; });
@@ -37035,6 +37037,7 @@ function nexusPurposeSummary(contracts, fallbackInsuredAge) {
   let medicalUnclassifiedDaily = 0;
   const addMedicalBreakdown = (item, purposes, amt, isDaily) => {
     const type = nexusEffectiveBenefitType(item);
+    if (type === '払込免除') return;
     if (!purposes.includes('医療保障') && type !== '先進医療保障' && type !== '三大疾病一時金') return;
     if (type && NEXUS_MEDICAL_BENEFIT_TYPE_UNITS[type] !== undefined) {
       medicalBreakdown[type] += amt;
