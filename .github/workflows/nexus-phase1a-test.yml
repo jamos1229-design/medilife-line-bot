@@ -1,0 +1,21 @@
+name: NEXUS Phase 1-A coverage regression
+on:
+  pull_request:
+    paths:
+      - 'nexus.html'
+      - 'tests/nexus-phase1a/**'
+      - '.github/workflows/nexus-phase1a-test.yml'
+  push:
+    branches:
+      - 'fix/nexus-phase1a-coverage-person-only-20261121'
+jobs:
+  check-coverage:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test tests/nexus-phase1a/coverage.test.mjs
