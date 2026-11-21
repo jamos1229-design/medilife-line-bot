@@ -2265,7 +2265,7 @@ function nexusRiderPurposes(r) {
 // 構造的に無くす）。種類が選ばれていない特約（主に旧データ）は、これまで通りamountUnitに
 // 基づいて「分類未設定の一時金／日額」として別枠に集計し、推測で分類せず、またこれまでの
 // 集計結果（旧データの表示）も変更しない（既存データ保護）。
-const NEXUS_MEDICAL_BENEFIT_TYPES = ['基本入院日額', '女性疾病上乗せ日額', '通院日額', '入院一時金', '三大疾病一時金', '先進医療保障', 'その他'];
+const NEXUS_MEDICAL_BENEFIT_TYPES = ['基本入院日額', '女性疾病上乗せ日額', '通院日額', '入院一時金', '手術給付金', '三大疾病一時金', '先進医療保障', 'その他'];
 // 種類ごとの単位。基本入院日額・女性疾病上乗せ日額・通院日額は日額、入院一時金・三大疾病
 // 一時金・その他は一時金、先進医療保障は実費の限度額（死亡保険金のような一時金や入院日額
 // とは性質が異なるため、どちらの合計にも混ぜない独立枠として扱う）。
@@ -2274,6 +2274,7 @@ const NEXUS_MEDICAL_BENEFIT_TYPE_UNITS = {
   '女性疾病上乗せ日額': '日額',
   '通院日額': '日額',
   '入院一時金': '一時金',
+  '手術給付金': '一時金',
   '三大疾病一時金': '一時金',
   '先進医療保障': '限度額',
   'その他': '一時金'
@@ -2312,6 +2313,9 @@ function nexusEffectiveBenefitType(item) {
   if (Object.prototype.hasOwnProperty.call(NEXUS_MEDICAL_BENEFIT_TYPE_UNITS, explicit)) return explicit;
   if (/先進医療/.test(name)) return '先進医療保障';
   if (/入院.*一時金/.test(name)) return '入院一時金';
+  if (/手術.*(?:保障|給付|一時金|特約)/.test(name) && item.amountUnit !== '日額') return '手術給付金';
+  if (item.amountUnit === '日額' && /女性疾病.*入院|女性.*入院/.test(name)) return '女性疾病上乗せ日額';
+  if (item.amountUnit === '日額' && /通院/.test(name)) return '通院日額';
   if (/(三大疾病|[３3]大疾病|特定疾病|がん|癌)/.test(name) && /(一時金|診断給付金|診断保険金)/.test(name)) return '三大疾病一時金';
   return '';
 }
@@ -37010,7 +37014,7 @@ function nexusPurposeSummary(contracts, fallbackInsuredAge) {
     // 医療保険に付帯する三大疾病診断一時金も特定疾病へ振り分ける。
     if (benefitType === '三大疾病一時金') {
       payoutPurposes = ['特定疾病（ガン）'];
-    } else if (benefitType === '入院一時金' && payoutPurposes.length === 0) {
+    } else if (['入院一時金', '手術給付金', '女性疾病上乗せ日額', '通院日額'].includes(benefitType) && payoutPurposes.length === 0) {
       payoutPurposes = ['医療保障'];
     }
     if (isDaily) {
@@ -37041,7 +37045,7 @@ function nexusPurposeSummary(contracts, fallbackInsuredAge) {
   const addMedicalBreakdown = (item, purposes, amt, isDaily) => {
     const type = nexusEffectiveBenefitType(item);
     if (type === '払込免除') return;
-    if (!purposes.includes('医療保障') && type !== '先進医療保障' && type !== '三大疾病一時金' && type !== '入院一時金') return;
+    if (!purposes.includes('医療保障') && !['先進医療保障', '三大疾病一時金', '入院一時金', '手術給付金', '女性疾病上乗せ日額', '通院日額'].includes(type)) return;
     if (type && NEXUS_MEDICAL_BENEFIT_TYPE_UNITS[type] !== undefined) {
       medicalBreakdown[type] += amt;
     } else if (isDaily) {
@@ -37231,7 +37235,9 @@ function NexusPurposeSummaryTable({
   // のみの合計とする（日額・限度額は単位が異なるため混在させない。要件5）。種類が未設定の
   // 医療保障（旧データ）は、これまで通りmedicalUnclassifiedLumpとして同じ合計に含め、
   // 合計額そのものは変えない（既存データの集計結果を変更しない）。
-  const medicalLumpSumTotal = (medicalBreakdown['入院一時金'] || 0) + (medicalBreakdown['その他'] || 0) + (medicalUnclassifiedLump || 0);
+  const medicalLumpSumTotal = (medicalBreakdown['入院一時金'] || 0) + (medicalBreakdown['手術給付金'] || 0) + (medicalBreakdown['その他'] || 0) + (medicalUnclassifiedLump || 0);
+  const medicalInpatientLumpTotal = medicalBreakdown['入院一時金'] || 0;
+  const medicalSurgeryLumpTotal = medicalBreakdown['手術給付金'] || 0;
   const medicalBaseDailyTotal = medicalBreakdown['基本入院日額'] || 0;
   const medicalFemaleAddonDailyTotal = medicalBreakdown['女性疾病上乗せ日額'] || 0;
   const medicalOutpatientDailyTotal = medicalBreakdown['通院日額'] || 0;
@@ -37367,7 +37373,7 @@ function NexusPurposeSummaryTable({
   // （基本入院日額は常に支払われる／女性疾病上乗せは女性特有の疾病による入院時のみ上乗せ／
   // 通院日額は入院していなくても通院しただけで支払われる／先進医療保障は技術料実費の限度額）、
   // 単純に合算した「入院日額合計」は表示せず、種類ごとに独立して表示する（要件1・2・3・5）。
-  (medicalBaseDailyTotal > 0 || medicalFemaleAddonDailyTotal > 0 || medicalOutpatientDailyTotal > 0 || medicalAdvancedTreatmentTotal > 0 || medicalHasUnclassified) && /*#__PURE__*/React.createElement("div", {
+  (medicalInpatientLumpTotal > 0 || medicalSurgeryLumpTotal > 0 || criticalMedicalRiderTotal > 0 || medicalBaseDailyTotal > 0 || medicalFemaleAddonDailyTotal > 0 || medicalOutpatientDailyTotal > 0 || medicalAdvancedTreatmentTotal > 0 || medicalHasUnclassified) && /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 8,
       background: '#F5F3FF',
@@ -37377,7 +37383,9 @@ function NexusPurposeSummaryTable({
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: { fontWeight: 700, fontSize: 11.5, color: '#6D28D9', marginBottom: 4 }
-  }, "医療保障の内訳（種類ごとに単位が異なるため合算していません）"),
+  }, "医療保障の内訳（支払条件・単位別）"),
+    medicalInpatientLumpTotal > 0 && /*#__PURE__*/React.createElement("div", { style: { fontSize: 11.5, marginTop: 2 } }, "入院一時金：", medicalInpatientLumpTotal.toLocaleString(), "円"),
+    medicalSurgeryLumpTotal > 0 && /*#__PURE__*/React.createElement("div", { style: { fontSize: 11.5, marginTop: 2 } }, "手術給付金：", medicalSurgeryLumpTotal.toLocaleString(), "円（支払条件は契約を確認）"),
     medicalBaseDailyTotal > 0 && /*#__PURE__*/React.createElement("div", { style: { fontSize: 11.5, marginTop: 2 } }, "基本入院日額：", medicalBaseDailyTotal.toLocaleString(), "円／日"),
     medicalFemaleAddonDailyTotal > 0 && /*#__PURE__*/React.createElement("div", { style: { fontSize: 11.5, marginTop: 2 } }, "女性疾病の上乗せ日額：", medicalFemaleAddonDailyTotal.toLocaleString(), "円／日　※女性特有の疾病による入院の場合のみ、基本入院日額に上乗せされます（通常の入院には適用されません）"),
     medicalOutpatientDailyTotal > 0 && /*#__PURE__*/React.createElement("div", { style: { fontSize: 11.5, marginTop: 2 } }, "通院日額：", medicalOutpatientDailyTotal.toLocaleString(), "円／日　※入院を伴わない通院のみの場合に支払われる給付です（入院日額には加算されません）"),
@@ -41554,8 +41562,9 @@ function NexusPlanningSection({
     } = summary;
     // 【不具合修正】画面表示（NexusPurposeSummaryTable）と同じ定義・同じロジックを使う
     // （要件6：顧客詳細・契約一覧・保障集計・帳票に共通の集計ロジックを適用する）。
-    const medicalLumpSumTotal = (medicalBreakdown['入院一時金'] || 0) + (medicalBreakdown['その他'] || 0) + (medicalUnclassifiedLump || 0);
+    const medicalLumpSumTotal = (medicalBreakdown['入院一時金'] || 0) + (medicalBreakdown['手術給付金'] || 0) + (medicalBreakdown['その他'] || 0) + (medicalUnclassifiedLump || 0);
     const medicalInpatientLumpTotal = medicalBreakdown['入院一時金'] || 0;
+    const medicalSurgeryLumpTotal = medicalBreakdown['手術給付金'] || 0;
     const medicalBaseDailyTotal = medicalBreakdown['基本入院日額'] || 0;
     const medicalFemaleAddonDailyTotal = medicalBreakdown['女性疾病上乗せ日額'] || 0;
     const medicalOutpatientDailyTotal = medicalBreakdown['通院日額'] || 0;
@@ -41565,9 +41574,10 @@ function NexusPlanningSection({
     const rows = CONTRACT_PURPOSES.filter(p => byPurpose[p] > 0 && p !== '医療保障').map(p => `<tr><td>${p}</td><td>${byPurpose[p].toLocaleString()}円</td></tr>`).join('');
     const dailyRows = CONTRACT_PURPOSES.filter(p => dailyByPurpose[p] > 0 && p !== '医療保障');
     const otherDailyTotal = dailyTotal - (dailyByPurpose['医療保障'] || 0);
-    const medicalBreakdownHtml = (medicalInpatientLumpTotal > 0 || medicalBaseDailyTotal > 0 || medicalFemaleAddonDailyTotal > 0 || medicalOutpatientDailyTotal > 0 || medicalAdvancedTreatmentTotal > 0 || medicalHasUnclassified) ? `<p style="font-size:11px;color:#444;background:#F5F3FF;border:1px solid #DDD6FE;border-radius:6px;padding:6px 8px;">
+    const medicalBreakdownHtml = (medicalInpatientLumpTotal > 0 || medicalSurgeryLumpTotal > 0 || medicalBaseDailyTotal > 0 || medicalFemaleAddonDailyTotal > 0 || medicalOutpatientDailyTotal > 0 || medicalAdvancedTreatmentTotal > 0 || medicalHasUnclassified) ? `<p style="font-size:11px;color:#444;background:#F5F3FF;border:1px solid #DDD6FE;border-radius:6px;padding:6px 8px;">
         <b>医療保障の内訳（支払条件・単位別）</b><br>
         ${medicalInpatientLumpTotal > 0 ? `入院一時金：${medicalInpatientLumpTotal.toLocaleString()}円<br>` : ''}
+        ${medicalSurgeryLumpTotal > 0 ? `手術給付金：${medicalSurgeryLumpTotal.toLocaleString()}円（支払条件は契約を確認）<br>` : ''}
         ${medicalBaseDailyTotal > 0 ? `基本入院日額：${medicalBaseDailyTotal.toLocaleString()}円／日<br>` : ''}
         ${medicalFemaleAddonDailyTotal > 0 ? `女性疾病の上乗せ日額：${medicalFemaleAddonDailyTotal.toLocaleString()}円／日　※女性特有の疾病による入院の場合のみ、基本入院日額に上乗せされます<br>` : ''}
         ${medicalOutpatientDailyTotal > 0 ? `通院日額：${medicalOutpatientDailyTotal.toLocaleString()}円／日　※入院を伴わない通院のみの場合に支払われます<br>` : ''}
@@ -42357,7 +42367,7 @@ function NexusPlanningSection({
         unclassified = 0
       } = summary;
       // 【不具合修正】画面・印刷と同じ定義・同じロジックを使う（要件6：共通の集計ロジック）。
-      const medicalLumpSumTotal = (medicalBreakdown['入院一時金'] || 0) + (medicalBreakdown['その他'] || 0) + (medicalUnclassifiedLump || 0);
+      const medicalLumpSumTotal = (medicalBreakdown['入院一時金'] || 0) + (medicalBreakdown['手術給付金'] || 0) + (medicalBreakdown['その他'] || 0) + (medicalUnclassifiedLump || 0);
       const otherDailyTotal = dailyTotal - (dailyByPurpose['医療保障'] || 0);
       const purposeRows = CONTRACT_PURPOSES.filter(p => byPurpose[p] > 0 && p !== '医療保障').map(p => [p, byPurpose[p]]);
       row = nexusXlsxHeaderRow(ws, row, ['目的', '保険金額合計']);
@@ -42370,6 +42380,7 @@ function NexusPlanningSection({
       // 種類ごとに独立した行として出力する（要件1・2・3・5）。
       const medicalBreakdownRows = [];
       if ((medicalBreakdown['入院一時金'] || 0) > 0) medicalBreakdownRows.push(['入院一時金（円）', medicalBreakdown['入院一時金']]);
+      if ((medicalBreakdown['手術給付金'] || 0) > 0) medicalBreakdownRows.push(['手術給付金（円・支払条件要確認）', medicalBreakdown['手術給付金']]);
       if ((medicalBreakdown['基本入院日額'] || 0) > 0) medicalBreakdownRows.push(['基本入院日額（円／日）', medicalBreakdown['基本入院日額']]);
       if ((medicalBreakdown['女性疾病上乗せ日額'] || 0) > 0) medicalBreakdownRows.push(['女性疾病の上乗せ日額（円／日・通常入院には適用されません）', medicalBreakdown['女性疾病上乗せ日額']]);
       if ((medicalBreakdown['通院日額'] || 0) > 0) medicalBreakdownRows.push(['通院日額（円／日・入院日額には加算されません）', medicalBreakdown['通院日額']]);
