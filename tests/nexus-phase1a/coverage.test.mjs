@@ -95,6 +95,20 @@ test('bundled client JavaScript parses',()=>{
  assert.ok(code);
  assert.doesNotThrow(()=>new Function(code));
 });
+test('education preparation: missing is unknown, confirmed 0 is zero',()=>{
+ const calc = new Function(between('function nexusEducationSummary(', '// ── 住宅資金プランニング') + 'return nexusEducationSummary;')();
+ const rows=[{key:'university',remainingCostJpy:2500000,monthsUntilStart:168}];
+ const unknown=calc(rows,{});
+ assert.equal(unknown.prepared,null);
+ assert.equal(unknown.projectedPreparedJpy,null);
+ assert.equal(unknown.shortfallJpy,null);
+ assert.equal(unknown.monthlySavingsNeeded,null);
+ const zero=calc(rows,{preparedJpy:0});
+ assert.equal(zero.prepared,0);
+ assert.equal(zero.shortfallJpy,2500000);
+ assert.equal(zero.monthlySavingsNeeded,14881);
+ assert.match(source,/現在の準備額：<b>\$\{summary.prepared === null \? '未入力'/);
+});
 test.todo('PDF browser rendering and visual inspection with fictional records');
 test.todo('old local data migration and rollback check');
 test.todo('loan repayment warning in phase 1-B');
