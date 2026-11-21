@@ -41546,7 +41546,8 @@ function NexusPlanningSection({
       medicalBreakdown,
       medicalUnclassifiedLump,
       medicalUnclassifiedDaily,
-      savingsProjections = []
+      savingsProjections = [],
+      unclassified = 0
     } = summary;
     // 【不具合修正】画面表示（NexusPurposeSummaryTable）と同じ定義・同じロジックを使う
     // （要件6：顧客詳細・契約一覧・保障集計・帳票に共通の集計ロジックを適用する）。
@@ -41574,6 +41575,7 @@ function NexusPlanningSection({
       <table><tr><th>目的</th><th>保険金額合計</th></tr>${rows || '<tr><td colspan="2">データなし</td></tr>'}</table>
       <p style="font-size:12px;"><b>死亡保険金額合計：${deathTotal.toLocaleString()}円</b>　／　<b>医療保険金額合計（一時金）：${medicalLumpSumTotal.toLocaleString()}円</b>${criticalIllnessTotal > 0 ? `　／　<b>特定疾病（ガン等）保険金額合計：${criticalIllnessTotal.toLocaleString()}円</b>` : ''}${disabilityTotal > 0 ? `　／　<b>介護・就労不能保障合計：${disabilityTotal.toLocaleString()}円</b>` : ''}${otherDailyTotal > 0 ? `　／　<b>入院日額合計（医療保障以外）：${otherDailyTotal.toLocaleString()}円／日</b>` : ''}</p>
       ${medicalBreakdownHtml}
+      ${unclassified > 0 ? '<p style="font-size:11px;color:#92400E;background:#FEF3C7;padding:7px;">⚠️ 保障の種類が未分類の契約・特約があります。誤認防止のため合計には含めていません。契約の保障内容を確認して分類してください。</p>' : ''}
       ${savingsProjections.length > 0 ? `<p style="font-size:11px;background:#EFF6FF;padding:7px;"><b>年金・貯蓄型：指定年齢時点の予定解約返戻金（死亡保険金と合算しません）</b><br>${savingsProjections.map(x => `${escapeHtmlForPrint(x.label)}：${x.age !== null && x.amount !== null ? `${x.age}歳時の予定 ${x.amount.toLocaleString()}円` : '年齢・予定返戻金未入力'}`).join('<br>')}<br>※設計書等の入力値であり、将来の金額を保証しません。異なる年齢時点は合算しません。</p>` : ''}
       ${dailyRows.length > 0 ? `<p style="font-size:11px;color:#666;">内訳（日額・医療保障以外）：${dailyRows.map(p => `${p} ${dailyByPurpose[p].toLocaleString()}円／日`).join('、')}　※日額は死亡・医療保険金額合計とは単位が異なるため合算していません</p>` : ''}
       ${incomeProtectionConverted ? '<p style="font-size:11px;color:#666;">※ 死亡時収入保障（収入保障保険）は保険金額が月額のため、保険期間終了年齢までの残り月数×月額で換算した金額で集計しています</p>' : ''}
@@ -42357,7 +42359,8 @@ function NexusPlanningSection({
         medicalBreakdown,
         medicalUnclassifiedLump,
         medicalUnclassifiedDaily,
-        savingsProjections = []
+        savingsProjections = [],
+        unclassified = 0
       } = summary;
       // 【不具合修正】画面・印刷と同じ定義・同じロジックを使う（要件6：共通の集計ロジック）。
       const medicalLumpSumTotal = (medicalBreakdown['入院一時金'] || 0) + (medicalBreakdown['その他'] || 0) + (medicalUnclassifiedLump || 0);
@@ -42389,6 +42392,9 @@ function NexusPlanningSection({
         row = nexusXlsxHeaderRow(ws, row, ['目的（日額・医療保障以外）', '日額合計']);
         row = nexusXlsxDataRows(ws, row, dailyRows.length ? dailyRows : [['データなし', '']], [2]);
         row = nexusXlsxDataRows(ws, row, [['入院日額合計・医療保障以外（円／日）', otherDailyTotal]], [2]);
+      }
+      if (unclassified > 0) {
+        row = nexusXlsxDataRows(ws, row, [['⚠️ 保障の種類が未分類の契約・特約あり。誤認防止のため合計に含めず。登録内容の確認が必要', '']], []);
       }
       if (savingsProjections.length > 0) {
         row = nexusXlsxHeaderRow(ws, row, ['年金・貯蓄型：指定年齢時点の予定解約返戻金（死亡保険金と別）', '円']);
