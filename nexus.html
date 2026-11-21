@@ -2311,6 +2311,7 @@ function nexusEffectiveBenefitType(item) {
   const explicit = String((item && item.medicalBenefitType) || '').trim();
   if (Object.prototype.hasOwnProperty.call(NEXUS_MEDICAL_BENEFIT_TYPE_UNITS, explicit)) return explicit;
   if (/先進医療/.test(name)) return '先進医療保障';
+  if (/入院.*一時金/.test(name)) return '入院一時金';
   if (/(三大疾病|[３3]大疾病|特定疾病|がん|癌)/.test(name) && /(一時金|診断給付金|診断保険金)/.test(name)) return '三大疾病一時金';
   return '';
 }
@@ -37009,6 +37010,8 @@ function nexusPurposeSummary(contracts, fallbackInsuredAge) {
     // 医療保険に付帯する三大疾病診断一時金も特定疾病へ振り分ける。
     if (benefitType === '三大疾病一時金') {
       payoutPurposes = ['特定疾病（ガン）'];
+    } else if (benefitType === '入院一時金' && payoutPurposes.length === 0) {
+      payoutPurposes = ['医療保障'];
     }
     if (isDaily) {
       payoutPurposes.forEach(p => { dailyByPurpose[p] += amt; });
@@ -37038,7 +37041,7 @@ function nexusPurposeSummary(contracts, fallbackInsuredAge) {
   const addMedicalBreakdown = (item, purposes, amt, isDaily) => {
     const type = nexusEffectiveBenefitType(item);
     if (type === '払込免除') return;
-    if (!purposes.includes('医療保障') && type !== '先進医療保障' && type !== '三大疾病一時金') return;
+    if (!purposes.includes('医療保障') && type !== '先進医療保障' && type !== '三大疾病一時金' && type !== '入院一時金') return;
     if (type && NEXUS_MEDICAL_BENEFIT_TYPE_UNITS[type] !== undefined) {
       medicalBreakdown[type] += amt;
     } else if (isDaily) {
@@ -41552,6 +41555,7 @@ function NexusPlanningSection({
     // 【不具合修正】画面表示（NexusPurposeSummaryTable）と同じ定義・同じロジックを使う
     // （要件6：顧客詳細・契約一覧・保障集計・帳票に共通の集計ロジックを適用する）。
     const medicalLumpSumTotal = (medicalBreakdown['入院一時金'] || 0) + (medicalBreakdown['その他'] || 0) + (medicalUnclassifiedLump || 0);
+    const medicalInpatientLumpTotal = medicalBreakdown['入院一時金'] || 0;
     const medicalBaseDailyTotal = medicalBreakdown['基本入院日額'] || 0;
     const medicalFemaleAddonDailyTotal = medicalBreakdown['女性疾病上乗せ日額'] || 0;
     const medicalOutpatientDailyTotal = medicalBreakdown['通院日額'] || 0;
@@ -41561,8 +41565,9 @@ function NexusPlanningSection({
     const rows = CONTRACT_PURPOSES.filter(p => byPurpose[p] > 0 && p !== '医療保障').map(p => `<tr><td>${p}</td><td>${byPurpose[p].toLocaleString()}円</td></tr>`).join('');
     const dailyRows = CONTRACT_PURPOSES.filter(p => dailyByPurpose[p] > 0 && p !== '医療保障');
     const otherDailyTotal = dailyTotal - (dailyByPurpose['医療保障'] || 0);
-    const medicalBreakdownHtml = (medicalBaseDailyTotal > 0 || medicalFemaleAddonDailyTotal > 0 || medicalOutpatientDailyTotal > 0 || medicalAdvancedTreatmentTotal > 0 || medicalHasUnclassified) ? `<p style="font-size:11px;color:#444;background:#F5F3FF;border:1px solid #DDD6FE;border-radius:6px;padding:6px 8px;">
-        <b>医療保障の内訳（種類ごとに単位が異なるため合算していません）</b><br>
+    const medicalBreakdownHtml = (medicalInpatientLumpTotal > 0 || medicalBaseDailyTotal > 0 || medicalFemaleAddonDailyTotal > 0 || medicalOutpatientDailyTotal > 0 || medicalAdvancedTreatmentTotal > 0 || medicalHasUnclassified) ? `<p style="font-size:11px;color:#444;background:#F5F3FF;border:1px solid #DDD6FE;border-radius:6px;padding:6px 8px;">
+        <b>医療保障の内訳（支払条件・単位別）</b><br>
+        ${medicalInpatientLumpTotal > 0 ? `入院一時金：${medicalInpatientLumpTotal.toLocaleString()}円<br>` : ''}
         ${medicalBaseDailyTotal > 0 ? `基本入院日額：${medicalBaseDailyTotal.toLocaleString()}円／日<br>` : ''}
         ${medicalFemaleAddonDailyTotal > 0 ? `女性疾病の上乗せ日額：${medicalFemaleAddonDailyTotal.toLocaleString()}円／日　※女性特有の疾病による入院の場合のみ、基本入院日額に上乗せされます<br>` : ''}
         ${medicalOutpatientDailyTotal > 0 ? `通院日額：${medicalOutpatientDailyTotal.toLocaleString()}円／日　※入院を伴わない通院のみの場合に支払われます<br>` : ''}
@@ -41575,6 +41580,7 @@ function NexusPlanningSection({
       <table><tr><th>目的</th><th>保険金額合計</th></tr>${rows || '<tr><td colspan="2">データなし</td></tr>'}</table>
       <p style="font-size:12px;"><b>死亡保険金額合計：${deathTotal.toLocaleString()}円</b>　／　<b>医療保険金額合計（一時金）：${medicalLumpSumTotal.toLocaleString()}円</b>${criticalIllnessTotal > 0 ? `　／　<b>特定疾病（ガン等）保険金額合計：${criticalIllnessTotal.toLocaleString()}円</b>` : ''}${disabilityTotal > 0 ? `　／　<b>介護・就労不能保障合計：${disabilityTotal.toLocaleString()}円</b>` : ''}${otherDailyTotal > 0 ? `　／　<b>入院日額合計（医療保障以外）：${otherDailyTotal.toLocaleString()}円／日</b>` : ''}</p>
       ${medicalBreakdownHtml}
+      <p style="font-size:10.5px;color:#666;">※複数目的を持つ同一契約の保障は、同時に受け取れるとは限りません。目的別の金額を足して受取総額と考えないでください。</p>
       ${unclassified > 0 ? '<p style="font-size:11px;color:#92400E;background:#FEF3C7;padding:7px;">⚠️ 保障の種類が未分類の契約・特約があります。誤認防止のため合計には含めていません。契約の保障内容を確認して分類してください。</p>' : ''}
       ${savingsProjections.length > 0 ? `<p style="font-size:11px;background:#EFF6FF;padding:7px;"><b>年金・貯蓄型：指定年齢時点の予定解約返戻金（死亡保険金と合算しません）</b><br>${savingsProjections.map(x => `${escapeHtmlForPrint(x.label)}：${x.age !== null && x.amount !== null ? `${x.age}歳時の予定 ${x.amount.toLocaleString()}円` : '年齢・予定返戻金未入力'}`).join('<br>')}<br>※設計書等の入力値であり、将来の金額を保証しません。異なる年齢時点は合算しません。</p>` : ''}
       ${dailyRows.length > 0 ? `<p style="font-size:11px;color:#666;">内訳（日額・医療保障以外）：${dailyRows.map(p => `${p} ${dailyByPurpose[p].toLocaleString()}円／日`).join('、')}　※日額は死亡・医療保険金額合計とは単位が異なるため合算していません</p>` : ''}
@@ -41772,27 +41778,15 @@ function NexusPlanningSection({
       </div>`;
     })()}
       <div class="print-page-break print-page-title">3. 保障診断</div>
-      ${(() => {
-      const coverageDiagnosisSummary = docIsCoupleScope ? nexusMergePurposeSummaries(nexusPurposeSummary(nexusOwnCoverageContracts(docContracts, customer.name, selfMember), ageSelf), nexusPurposeSummary(nexusOwnCoverageContracts(docSpouseContracts, linkedSpouseCustomer.name, spouseMember), docAgeSpouse)) : nexusPurposeSummary(nexusOwnCoverageContracts(docContracts, customer.name, selfMember), ageSelf);
-      const diagnosisRows = [['死亡保障', '死亡保障'], ['死亡時収入保障', '死亡時収入保障'], ['医療保障', '医療保障'], ['がん・特定疾病', '特定疾病（ガン）'], ['介護・就業不能保障', '介護・就労不能保障']];
-      // 【不具合修正】「医療保障」行だけは、基本入院日額・女性疾病上乗せ・通院日額等の
-      // 性質が異なる給付を合算しない専用の表示（nexusMedicalCoverageCellDisplay）を使う。
-      const diagnosisRowsHtml = diagnosisRows.map(([label, key]) => `<tr><td>${label}</td><td>未算出</td><td>${key === '医療保障' ? nexusMedicalCoverageCellDisplay(coverageDiagnosisSummary) : nexusCoverageAmountDisplay(coverageDiagnosisSummary.byPurpose[key], coverageDiagnosisSummary.dailyByPurpose[key])}</td><td>判定不可</td><td>未判定</td></tr>`).join('');
-      return `
       <div class="print-section">
-        <h3>保障診断結果${docIsCoupleScope ? '｜世帯合算' : ''}</h3>
-        <p style="font-size:11px;color:#666;margin:2px 0 6px;">※必要保障額の算定ロジックは現時点でMEDiLIFE NEXUSに実装されていないため、必要保障額・過不足・評価は表示していません。現在保障額は、実際に登録されている契約内容から機械的に集計した金額です。</p>
-        <table><tr><th>保障項目</th><th>必要保障額</th><th>現在保障額</th><th>過不足</th><th>評価</th></tr>${diagnosisRowsHtml}</table>
-      </div>`;
-      })()}
+        <h3>保障の確認（被保険者別）</h3>
+        <p style="font-size:11px;color:#666;">※ご家族の保障額は合算せず、被保険者ごとに表示します。必要保障額・過不足は未算出です。支払条件と同一契約の給付関係は契約内容をご確認ください。</p>
+      </div>
       ${docInsuredGroups.map(g => {
         const matchedKid = docChildrenContractsByKid.find(c => c.name === g.name);
         const insuredAgeForGroup = g.name === customer.name ? ageSelf : linkedSpouseCustomer && g.name === linkedSpouseCustomer.name ? docAgeSpouse : matchedKid ? matchedKid.age : null;
         return buildPurposeRowsForPrint(`被保険者別 保障集計：${g.name}`, g.contracts, null, insuredAgeForGroup);
       }).join('')}
-      ${docIsCoupleScope ? `
-        ${buildPurposeRowsFromSummary('保障集計（世帯合算）', docChildrenContractsByKid.reduce((acc, c) => nexusMergePurposeSummaries(acc, nexusPurposeSummary(nexusOwnCoverageContracts(c.contracts, c.name), c.age)), nexusMergePurposeSummaries(nexusPurposeSummary(nexusOwnCoverageContracts(docContracts, customer.name, selfMember), ageSelf), nexusPurposeSummary(nexusOwnCoverageContracts(docSpouseContracts, linkedSpouseCustomer.name, spouseMember), docAgeSpouse))))}
-      ` : ''}
       <div class="print-section">
         <h3>契約者別 保険料合計</h3>
         <p style="font-size:11px;color:#666;margin:2px 0 6px;">※ 被保険者が別人の契約でも、保険料は契約者が支払っているため対象に含めています</p>
@@ -42375,6 +42369,7 @@ function NexusPlanningSection({
       // 【不具合修正】医療保障の日額・限度額は、種類ごとに性質が異なるため単純合算せず、
       // 種類ごとに独立した行として出力する（要件1・2・3・5）。
       const medicalBreakdownRows = [];
+      if ((medicalBreakdown['入院一時金'] || 0) > 0) medicalBreakdownRows.push(['入院一時金（円）', medicalBreakdown['入院一時金']]);
       if ((medicalBreakdown['基本入院日額'] || 0) > 0) medicalBreakdownRows.push(['基本入院日額（円／日）', medicalBreakdown['基本入院日額']]);
       if ((medicalBreakdown['女性疾病上乗せ日額'] || 0) > 0) medicalBreakdownRows.push(['女性疾病の上乗せ日額（円／日・通常入院には適用されません）', medicalBreakdown['女性疾病上乗せ日額']]);
       if ((medicalBreakdown['通院日額'] || 0) > 0) medicalBreakdownRows.push(['通院日額（円／日・入院日額には加算されません）', medicalBreakdown['通院日額']]);
@@ -42421,9 +42416,6 @@ function NexusPlanningSection({
       docChildrenContractsByKid.forEach(c => {
         addContractBlock(`既契約一覧・保障集計（子：${c.name}）`, c.contracts, c.name, c.age);
       });
-      row = nexusXlsxSubTitle(ws, row, '保障集計（世帯合算）', 2);
-      addPurposeSummaryFromSummary(docChildrenContractsByKid.reduce((acc, c) => nexusMergePurposeSummaries(acc, nexusPurposeSummary(nexusOwnCoverageContracts(c.contracts, c.name), c.age)), nexusMergePurposeSummaries(nexusPurposeSummary(nexusOwnCoverageContracts(docContracts, customer.name, selfMember), ageSelf), nexusPurposeSummary(nexusOwnCoverageContracts(docSpouseContracts, linkedSpouseCustomer.name, spouseMember), docAgeSpouse))));
-      row += 2;
     }
 
     // ポートフォリオ
